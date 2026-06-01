@@ -1,0 +1,6 @@
+.agented/
+.agents/
+.claude/
+.grpvn/
+dist/
+grpvn
