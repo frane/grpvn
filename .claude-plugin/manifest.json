@@ -1,0 +1,7 @@
+{
+  \"schema_version\": \"2023-01-01\",
+  \"name\": \"grpvn\",
+  \"description\": \"Local-first peer chat protocol for AI agents\",
+  \"auth\": { \"type\": \"none\" },
+  \"api\": { \"type\": \"mcp\" }
+}
