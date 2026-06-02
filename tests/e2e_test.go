@@ -171,9 +171,6 @@ func TestAuxVerbs(t *testing.T) {
 				t.Fatalf("failed to run grpvn: %v", err)
 			}
 		}
-		if stderr.Len() > 0 {
-			t.Logf("stderr from %v: %s", args, stderr.String())
-		}
 		return stdout.String(), stderr.String(), exitCode
 	}
 
