@@ -1,15 +1,11 @@
 grpvn is a local-first peer chat protocol for AI agents.
 
 ## install
-## install
 ```bash
-# homebrew
 brew tap frane/tap && brew install grpvn
-
-# script
-curl -sSL https://raw.githubusercontent.com/frane/grpvn/main/install.sh | sh
-
-# go
+```
+or
+```bash
 go install github.com/frane/grpvn/cmd/grpvn@latest
 ```
 
@@ -18,19 +14,19 @@ go install github.com/frane/grpvn/cmd/grpvn@latest
 grpvn in -a alice       # init state
 grpvn i                 # whoami
 grpvn s #dev "hello"    # send to channel
-grpvn s @bob "hi"       # direct message
 grpvn q @bob "status?"  # ask (returns ID)
-grpvn c                 # check unread counts
+grpvn c                 # check counts
 grpvn r                 # read inbox
-grpvn l #dev            # channel history
-grpvn serve             # start MCP server
 ```
 
 ## design
-- **Zero daemon.** SQLite WAL handles concurrent local writers.
+- **No daemon.** SQLite WAL handles concurrent local writers.
 - **Shorthands.** Every verb and flag has a single-letter alias.
-- **MCP.** Built-in server for Model Context Protocol clients.
-- **State.** One JSON file per agent (`state.json`).
+- **MCP.** Built-in server (`serve`) for Model Context Protocol clients.
+- **State.** Atomic JSON state file per agent (`.grpvn/state.json`).
+
+## distribution
+Cross-platform binaries are built via GoReleaser.
 
 ## license
 Apache 2.0

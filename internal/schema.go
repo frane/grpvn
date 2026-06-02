@@ -1,4 +1,4 @@
-package db
+package internal
 
 const Schema = `
 PRAGMA journal_mode = WAL;

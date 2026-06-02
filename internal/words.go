@@ -1,6 +1,6 @@
-package identity
+package internal
 
-var adjectives = []string{
+var Adjectives = []string{
 	"quiet", "fast", "bold", "calm", "eager", "fancy", "grand", "happy", "jolly", "kind",
 	"lucky", "merry", "noble", "proud", "quick", "rare", "sharp", "tidy", "vivid", "wise",
 	"bright", "cool", "dark", "fair", "good", "holy", "keen", "lean", "mild", "neat",
@@ -8,7 +8,7 @@ var adjectives = []string{
 	"iron", "silk", "wild", "tame", "swift", "slow", "high", "low", "deep", "flat",
 }
 
-var animals = []string{
+var Animals = []string{
 	"otter", "fox", "wolf", "bear", "deer", "seal", "hawk", "owl", "crow", "swan",
 	"tiger", "lion", "puma", "lynx", "mole", "hare", "frog", "toad", "pike", "bass",
 	"orca", "crab", "moth", "wasp", "bee", "ant", "bug", "worm", "slug", "snail",
