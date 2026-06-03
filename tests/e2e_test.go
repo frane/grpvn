@@ -6,12 +6,25 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
 
 var binPath string
+
+// repoRootFromCaller anchors the repo root to this source file's location, not
+// to the test process's working directory. CI runners set os.Getwd() to a
+// build cache dir on some configurations, so relative paths like "../cmd/grpvn"
+// and module imports both fail. runtime.Caller is stable across all of them.
+func repoRootFromCaller() string {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		panic("runtime.Caller failed; cannot locate repo root")
+	}
+	return filepath.Dir(filepath.Dir(thisFile))
+}
 
 func TestMain(m *testing.M) {
 	tmpDir, err := os.MkdirTemp("", "grpvn-test-*")
@@ -21,10 +34,12 @@ func TestMain(m *testing.M) {
 	defer os.RemoveAll(tmpDir)
 
 	binPath = filepath.Join(tmpDir, "grpvn")
-	cmd := exec.Command("go", "build", "-o", binPath, "github.com/frane/grpvn/cmd/grpvn")
+	root := repoRootFromCaller()
+	cmd := exec.Command("go", "build", "-o", binPath, "./cmd/grpvn")
+	cmd.Dir = root
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		fmt.Printf("Build failed: %v\n%s\n", err, string(output))
+		fmt.Printf("Build failed in %s: %v\n%s\n", root, err, string(output))
 		panic(err)
 	}
 

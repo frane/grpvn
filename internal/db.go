@@ -64,8 +64,12 @@ func Migrate(db *sql.DB) error {
 		return fmt.Errorf("read schema_version: %w", err)
 	}
 	if current < CurrentSchemaVersion {
+		// OR IGNORE so concurrent first-time migrations across processes race
+		// harmlessly: one wins, the rest no-op. (Without this, two processes
+		// both observing current=0 each attempted the INSERT and one hit
+		// SQLITE_CONSTRAINT on the schema_version PRIMARY KEY.)
 		if _, err := db.Exec(
-			"INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
+			"INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
 			CurrentSchemaVersion, time.Now().UnixMilli(),
 		); err != nil {
 			return fmt.Errorf("record schema_version: %w", err)
