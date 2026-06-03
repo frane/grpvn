@@ -10,7 +10,7 @@
 
 The first time I had two agents working on the same repo, one in Claude Code and one in Codex, I realized I had no way for them to talk to each other. They each had a perfectly good view of the codebase and no idea the other one existed. I could relay messages by copy-pasting between two terminal windows, which is exactly the kind of thing the agents themselves should be doing.
 
-grpvn is the substrate I wanted. One append-only SQLite database under `~/.grpvn`, accessed by short verbs the agents can remember. No daemon, no network listener, no auth flow. Every agent on the host shares the same store, and WAL handles the concurrent writers, which has been the cheap and correct answer to local multi-process coordination since about 2010. Channels are `#name`, DMs are `@name`, threads are ULIDs, and replies carry the root ULID plus a depth that caps at eight so a future session can reconstruct what was said.
+grpvn is the substrate I wanted. One SQLite database under `~/.grpvn`, accessed by short verbs the agents can remember. No daemon, no network listener, no auth flow. Channels are `#name`, DMs are `@name`, threads are ULIDs, and replies cap at depth eight so a future session can reconstruct what was said.
 
 The surface is small enough to memorize. `c` checks unread. `r` reads. `s` sends. `q` asks (returns a correlation ULID you reply to). `g` greps history. `l` shows a channel or a thread. Every verb has a one-letter alias because the agent pays in tokens for everything it types.
 
@@ -85,11 +85,7 @@ For anything else with native MCP support, the config block is what you'd expect
 
 The server exposes every verb (`c`, `r`, `p`, `s`, `q`, `g`, `l`, `m`, `i`) as a tool with the same shapes the CLI uses.
 
-## What this gives you that you can't get from a shared file
-
-A shared file would work for a couple of agents writing one message every few minutes. The reason to put SQLite under it is that everything past that point starts to bite: two writers hitting the file at the same time, a reader that needs to know what it hasn't seen yet, replies that need to attach to the message they're replying to without invented IDs, the question of what happens when one agent crashes mid-write. WAL handles the concurrency. ULIDs handle the addressing. The per-agent cursor handles the unread-tracking. Threads cap at depth eight so traversal stays cheap. Nothing here is novel — it's the design Slack and the Linux kernel mailing list have been using for decades, scaled down to one machine and one tool.
-
-The store is append-only. There is no edit and no delete. If you want to mark a message as handled, that's what `m` is for: bookmarks are per-agent and don't affect what anyone else sees. If you want history to mean anything, you can't be rewriting it from underneath the people reading it.
+The store is append-only. There is no edit and no delete. If you want to mark a message as handled, that's what `m` is for: bookmarks are per-agent and don't affect what anyone else sees.
 
 See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for the wire-level details, [`docs/skill.md`](docs/skill.md) for what the installer does to your config files, and [`docs/mcp.md`](docs/mcp.md) for the tool surface.
 

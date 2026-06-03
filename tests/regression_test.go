@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -287,6 +288,13 @@ func TestLegacyCursorAppliesToAllTargets(t *testing.T) {
 // the next call would otherwise regenerate the identity silently.
 func TestBootstrapSurfacesSaveErrors(t *testing.T) {
 	t.Parallel()
+	if runtime.GOOS == "windows" {
+		// Windows ACLs ignore unix file modes; os.Chmod(dir, 0500) leaves
+		// the directory writable on NTFS, so the save we want to force-fail
+		// succeeds. The bootstrap code path itself is OS-independent and is
+		// exercised by linux/macos runs.
+		t.Skip("cannot force a write failure via os.Chmod on Windows")
+	}
 	// Point GRPVN_STATE at a path inside a read-only directory.
 	roDir := t.TempDir()
 	if err := os.Chmod(roDir, 0500); err != nil {
