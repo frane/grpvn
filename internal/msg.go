@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"crypto/rand"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -10,6 +11,16 @@ import (
 
 	"github.com/oklog/ulid/v2"
 )
+
+// ulidEntropy is a process-local, mutex-guarded monotonic reader backed by
+// crypto/rand. ulid.Make() in oklog/ulid v2 seeds its default entropy with
+// math/rand from time.Now().UnixNano(), which on Windows (where the clock
+// often advances in 100ns ticks) can give two freshly-started processes the
+// same seed and therefore the same ULID sequence. Reading from crypto/rand
+// instead makes a cross-process collision a 2^-80 event.
+var ulidEntropy = &ulid.LockedMonotonicReader{
+	MonotonicReader: ulid.Monotonic(rand.Reader, 0),
+}
 
 type Message struct {
 	ID          string
@@ -24,7 +35,8 @@ type Message struct {
 }
 
 func NewMessage(sender, target string, body []byte) *Message {
-	id := ulid.Make().String()
+	now := time.Now()
+	id := ulid.MustNew(ulid.Timestamp(now), ulidEntropy).String()
 	return &Message{
 		ID:         id,
 		Sender:     sender,
@@ -32,7 +44,7 @@ func NewMessage(sender, target string, body []byte) *Message {
 		Body:       body,
 		ChainRoot:  id,
 		ChainDepth: 0,
-		CreatedAt:  time.Now().UnixMilli(),
+		CreatedAt:  now.UnixMilli(),
 	}
 }
 
