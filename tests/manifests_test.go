@@ -155,7 +155,7 @@ func TestSkillMDHasYAMLFrontmatter(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			s := string(data)
+			s := strings.ReplaceAll(string(data), "\r\n", "\n")
 			if !strings.HasPrefix(s, "---\n") {
 				t.Fatalf("%s must start with --- frontmatter delimiter; first 40 bytes: %q", p, s[:min(40, len(s))])
 			}
