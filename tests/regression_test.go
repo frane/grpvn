@@ -384,3 +384,40 @@ func TestSkillInstallSetsPerAgentStateEnv(t *testing.T) {
 
 // Avoid unused-import warnings when reorganising the suite.
 var _ = fmt.Sprintf
+
+// Regression: an agent's own outbound messages must not show up in its own
+// unread feed. Reported: "01KT6Q green-lynx-7cf5: ... my own message
+// echoing back." Without a sender filter, posting to a channel you also
+// follow makes your own message unread to yourself.
+func TestOwnMessagesAreNotUnreadToSelf(t *testing.T) {
+	t.Parallel()
+	dbDir := t.TempDir()
+	dbPath := filepath.Join(dbDir, "grpvn.db")
+	a := newRunner(t, "alice").withSharedDB(dbPath)
+	a.mustRun("follow", "#mine")
+
+	a.mustRun("s", "#mine", "to myself")
+
+	_, _, code := a.run("c")
+	if code != 2 {
+		t.Fatalf("agent's own send must not count as unread to itself; got exit %d", code)
+	}
+	out, _, code := a.run("r")
+	if code != 2 {
+		t.Fatalf("agent's own send must not appear in r; got exit %d, out=%q", code, out)
+	}
+
+	// A different agent in the same channel still sees the message.
+	b := newRunner(t, "bob").withSharedDB(dbPath)
+	b.mustRun("follow", "#mine")
+	out = b.mustRun("r")
+	if !strings.Contains(out, "to myself") {
+		t.Fatalf("other agent should still see the message; got %q", out)
+	}
+
+	// And `l` continues to show your own messages — history is the truth.
+	out = a.mustRun("l", "#mine")
+	if !strings.Contains(out, "to myself") {
+		t.Fatalf("l should include the agent's own messages; got %q", out)
+	}
+}

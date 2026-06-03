@@ -28,8 +28,8 @@ func Check(w io.Writer, db *sql.DB, st *State) (int, error) {
 	for _, target := range targetsFor(st.Name, st.Follow) {
 		var n int
 		err := db.QueryRow(
-			"SELECT COUNT(*) FROM messages WHERE target = ? AND id > ?",
-			target, st.CursorFor(target),
+			"SELECT COUNT(*) FROM messages WHERE target = ? AND id > ? AND sender != ?",
+			target, st.CursorFor(target), st.Name,
 		).Scan(&n)
 		if err != nil {
 			return 0, err
@@ -66,7 +66,8 @@ func Read(w io.Writer, db *sql.DB, st *State, limit int, advance bool, ts bool, 
 		where.WriteString("(target = ? AND id > ?)")
 		args = append(args, t, st.CursorFor(t))
 	}
-	q := "SELECT id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at FROM messages WHERE " + where.String() + " ORDER BY id ASC"
+	q := "SELECT id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at FROM messages WHERE (" + where.String() + ") AND sender != ? ORDER BY id ASC"
+	args = append(args, st.Name)
 	if limit > 0 {
 		q += " LIMIT ?"
 		args = append(args, limit)
