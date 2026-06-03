@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -55,8 +56,21 @@ func OpenDB() (*sql.DB, error) {
 }
 
 func Migrate(db *sql.DB) error {
-	if _, err := db.Exec(Schema); err != nil {
-		return fmt.Errorf("apply schema: %w", err)
+	// Retry SQLITE_BUSY on the schema apply. The DSN busy_timeout covers
+	// row-level contention but the journal_mode=WAL transition wants an
+	// exclusive lock that Windows file-locking will occasionally bounce
+	// past the timeout when three processes hit a fresh DB at the same time.
+	// A short backoff per attempt is plenty: WAL only gets set once per DB.
+	const attempts = 8
+	for attempt := 0; attempt < attempts; attempt++ {
+		if _, err := db.Exec(Schema); err != nil {
+			if attempt+1 < attempts && strings.Contains(err.Error(), "database is locked") {
+				time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond)
+				continue
+			}
+			return fmt.Errorf("apply schema: %w", err)
+		}
+		break
 	}
 	var current int
 	err := db.QueryRow("SELECT COALESCE(MAX(version), 0) FROM schema_version").Scan(&current)
