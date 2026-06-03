@@ -7,22 +7,32 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   goreleaser:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
           go-version: '1.26'
-      - uses: goreleaser/goreleaser-action@v6
+          cache: true
+      - name: Run tests
+        run: go test ./...
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
-          version: '~> v2'
+          version: 'latest'
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          # Optional. When set, goreleaser pushes the cask to
+          # frane/homebrew-tap. Missing token is fine: homebrew_casks.skip_upload
+          # in .goreleaser.yaml short-circuits the cask step.
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}

@@ -1,4 +1,5 @@
 version: 2
+
 project_name: grpvn
 
 before:
@@ -6,7 +7,10 @@ before:
     - go mod tidy
 
 builds:
-  - env:
+  - id: grpvn
+    main: ./cmd/grpvn
+    binary: grpvn
+    env:
       - CGO_ENABLED=0
     goos:
       - linux
@@ -15,39 +19,108 @@ builds:
     goarch:
       - amd64
       - arm64
-    main: ./cmd/grpvn
+    ignore:
+      - goos: windows
+        goarch: arm64
     ldflags:
-      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
 
 archives:
-  - format: tar.gz
-    # use zip for windows archives
+  - id: grpvn
+    name_template: >-
+      {{- .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+    formats: [tar.gz]
     format_overrides:
       - goos: windows
-        format: zip
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
 
 checksum:
   name_template: 'checksums.txt'
+  algorithm: sha256
 
 snapshot:
-  version_template: "{{ incpatch .Version }}-next"
+  version_template: "{{ incpatch .Version }}-snapshot"
 
 changelog:
   sort: asc
+  use: github
   filters:
     exclude:
       - '^docs:'
       - '^test:'
+      - '^chore:'
+      - 'merge conflict'
+      - Merge pull request
+      - Merge remote-tracking branch
+      - Merge branch
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: 'Bug fixes'
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Others
+      order: 999
 
-brews:
+homebrew_casks:
   - name: grpvn
     repository:
       owner: frane
       name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    directory: Formula
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    # Skip the cask publish entirely when the secret is missing, so cutting
+    # a release does not fail just because the tap is not provisioned yet.
+    skip_upload: '{{ if eq .Env.HOMEBREW_TAP_GITHUB_TOKEN "" }}true{{ else }}auto{{ end }}'
+    directory: Casks
     homepage: "https://github.com/frane/grpvn"
     description: "Local-first peer chat protocol for AI agents."
     license: "Apache-2.0"
-    test: |
-      system "#{bin}/grpvn", "version"
+    url:
+      # Avoid the homebrew-audit warning that download domain (github.com)
+      # differs from the homepage domain. Same repo so this is honest.
+      verified: github.com/frane/grpvn
+    binaries: [grpvn]
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            # Release tarballs are not codesigned. Strip the quarantine xattr
+            # so macOS Sequoia Gatekeeper does not SIGKILL the binary on first
+            # invocation.
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/grpvn"]
+          end
+    commit_author:
+      name: grpvn-release
+      email: release@grpvn.dev
+    caveats: |
+      grpvn is a local-first peer chat substrate for AI agents. After install:
+        grpvn skill install
+      drops SKILL.md into your detected agents' skills directories and wires
+      MCP into each one's config in one shot.
+
+release:
+  github:
+    owner: frane
+    name: grpvn
+  draft: false
+  prerelease: auto
+  mode: keep-existing
+  header: |
+    ## grpvn {{.Tag}}
+
+    Local-first peer chat protocol for AI agents.
+  footer: |
+    **Full Changelog**: https://github.com/frane/grpvn/compare/{{ .PreviousTag }}...{{ .Tag }}
