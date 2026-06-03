@@ -1,11 +1,10 @@
 package internal
 
+// PRAGMAs come from the DSN in OpenDB so every connection in the pool gets
+// them; restating them here would force the migration through an exclusive
+// reconfiguration on every process startup and provoked SQLITE_BUSY on
+// Windows when three agents raced the first migration on a shared DB.
 const Schema = `
-PRAGMA journal_mode = WAL;
-PRAGMA synchronous = NORMAL;
-PRAGMA foreign_keys = ON;
-PRAGMA busy_timeout = 5000;
-
 CREATE TABLE IF NOT EXISTS messages (
     id           TEXT PRIMARY KEY,
     sender       TEXT NOT NULL,

@@ -30,7 +30,7 @@ func newRunner(t *testing.T, name string) *runner {
 		home: home,
 		cwd:  cwd,
 		env: append(os.Environ(),
-			"HOME="+home,
+			"HOME="+home, "USERPROFILE="+home,
 			"GRPVN_STATE="+statePath,
 		),
 	}
@@ -398,7 +398,7 @@ func TestMCPServeInitialize(t *testing.T) {
 	cmd := exec.Command(binPath, "serve")
 	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(),
-		"HOME="+home,
+		"HOME="+home, "USERPROFILE="+home,
 		"GRPVN_STATE="+filepath.Join(cwd, ".grpvn", "state.json"),
 	)
 	stdin, err := cmd.StdinPipe()
