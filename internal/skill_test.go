@@ -9,6 +9,12 @@ import (
 	"testing"
 )
 
+func setHome(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+}
+
 func TestSkillContentEmbedded(t *testing.T) {
 	if len(SkillContent) == 0 {
 		t.Fatal("SKILL.md should be embedded at build time")
@@ -22,7 +28,7 @@ func TestSkillContentEmbedded(t *testing.T) {
 // whose DetectDir exists, and silently skip the rest.
 func TestInstallSkillDetectsAgents(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	// Pretend the user has Claude Code and Cursor installed; nothing else.
 	for _, d := range []string{".claude", ".cursor"} {
 		if err := os.MkdirAll(filepath.Join(home, d), 0755); err != nil {
@@ -64,7 +70,7 @@ func TestInstallSkillDetectsAgents(t *testing.T) {
 // other entries.
 func TestInstallSkillMergesMCPConfig(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	if err := os.MkdirAll(filepath.Join(home, ".cursor"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +118,7 @@ func TestInstallSkillMergesMCPConfig(t *testing.T) {
 // not silently overwrite it.
 func TestInstallSkillRefusesCorruptMCPConfig(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	if err := os.MkdirAll(filepath.Join(home, ".cursor"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +139,7 @@ func TestInstallSkillRefusesCorruptMCPConfig(t *testing.T) {
 // InstallSkillAll bypasses detection and installs into every known target.
 func TestInstallSkillAllForce(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	var buf bytes.Buffer
 	if err := InstallSkillAll(&buf); err != nil {
 		t.Fatalf("install --all: %v", err)
@@ -150,7 +156,7 @@ func TestInstallSkillAllForce(t *testing.T) {
 // (no duplicate server keys).
 func TestInstallSkillIdempotent(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	if err := os.MkdirAll(filepath.Join(home, ".cursor"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +184,7 @@ func TestInstallSkillIdempotent(t *testing.T) {
 // command must be the bare binary so PATH resolution kicks in.
 func TestInstallSkillMCPEntryShape(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	if err := os.MkdirAll(filepath.Join(home, ".cursor"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +231,7 @@ func TestHomeTargetsContainsAllKnownAgents(t *testing.T) {
 // ~/.codex/config.toml when the agent is detected.
 func TestInstallSkillWiresCodexTOML(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +271,7 @@ func TestInstallSkillWiresCodexTOML(t *testing.T) {
 // Re-running install must not duplicate the [mcp_servers.grpvn] block in TOML.
 func TestInstallSkillTOMLIdempotent(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +303,7 @@ func TestInstallSkillTOMLIdempotent(t *testing.T) {
 // installer must leave it alone.
 func TestInstallSkillTOMLLeavesExistingSection(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +325,7 @@ func TestInstallSkillTOMLLeavesExistingSection(t *testing.T) {
 // end of the new section regardless of whether the original ended in a newline.
 func TestInstallSkillTOMLAppendsCleanly(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0755); err != nil {
 		t.Fatal(err)
 	}
