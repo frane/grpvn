@@ -324,10 +324,10 @@ func TestInstallSkillTOMLAppendsCleanly(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases := []string{
-		"",                              // empty file
-		"key = 1\n",                     // ends with newline
-		"key = 1",                       // missing trailing newline
-		"# header\n\n[other]\nx = 1\n",  // multi-section
+		"",                             // empty file
+		"key = 1\n",                    // ends with newline
+		"key = 1",                      // missing trailing newline
+		"# header\n\n[other]\nx = 1\n", // multi-section
 	}
 	for _, pre := range cases {
 		path := filepath.Join(home, ".codex/config.toml")

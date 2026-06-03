@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 )
+
 var binPath string
 
 // repoRootFromCaller anchors the repo root to this source file's location, not
