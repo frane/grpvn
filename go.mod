@@ -1,4 +1,4 @@
-module grpvn
+module github.com/frane/grpvn
 
 go 1.26.2
 

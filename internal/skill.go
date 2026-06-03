@@ -1,33 +1,45 @@
 package internal
 
 import (
+	_ "embed"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
 
-func InstallSkill() error {
+//go:embed embedded/SKILL.md
+var SkillContent []byte
+
+var SkillTargets = []string{
+	".agents/skills/grpvn/SKILL.md",
+	".claude/skills/grpvn/SKILL.md",
+	".codex/skills/grpvn/SKILL.md",
+	".gemini/skills/grpvn/SKILL.md",
+}
+
+func InstallSkill(w io.Writer) error {
 	h, err := os.UserHomeDir()
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve home: %w", err)
 	}
-	content, err := os.ReadFile("skills/grpvn/SKILL.md")
-	if err != nil {
-		return err
-	}
-	paths := []string{
-		filepath.Join(h, ".agents/skills/grpvn/SKILL.md"),
-		filepath.Join(h, ".claude/skills/grpvn/SKILL.md"),
-		filepath.Join(h, ".codex/skills/grpvn/SKILL.md"),
-	}
-	for _, p := range paths {
+	var lastErr error
+	written := 0
+	for _, rel := range SkillTargets {
+		p := filepath.Join(h, rel)
 		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+			lastErr = err
 			continue
 		}
-		if err := os.WriteFile(p, content, 0644); err != nil {
+		if err := os.WriteFile(p, SkillContent, 0644); err != nil {
+			lastErr = err
 			continue
 		}
-		fmt.Printf("installed to %s\n", p)
+		fmt.Fprintf(w, "installed to %s\n", p)
+		written++
+	}
+	if written == 0 && lastErr != nil {
+		return lastErr
 	}
 	return nil
 }

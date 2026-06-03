@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 )
+
 func Check(w io.Writer, db *sql.DB, name string, cursor string, follow []string) (int, error) {
 	v := append([]string{}, follow...)
 	v = append(v, "@"+name)
@@ -284,7 +285,7 @@ func Mark(w io.Writer, db *sql.DB, name string, msgArg string, delete bool, defa
 
 func ID(w io.Writer, name string) {
 	cwd, _ := os.Getwd()
-	fmt.Fprintf(w, "%s@%s\\n", name, cwd)
+	fmt.Fprintf(w, "%s@%s\n", name, cwd)
 }
 
 func Init(path string, as string, force bool) (string, error) {

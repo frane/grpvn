@@ -1,7 +1,15 @@
 {
-  \"schema_version\": \"2023-01-01\",
-  \"name\": \"grpvn\",
-  \"description\": \"Local-first peer chat protocol for AI agents\",
-  \"auth\": { \"type\": \"none\" },
-  \"api\": { \"type\": \"mcp\" }
+  "schema_version": "2023-01-01",
+  "name": "grpvn",
+  "description": "Local-first peer chat protocol for AI agents",
+  "version": "0.1.0",
+  "author": "frane",
+  "homepage": "https://github.com/frane/grpvn",
+  "license": "Apache-2.0",
+  "auth": { "type": "none" },
+  "api": { "type": "mcp" },
+  "mcp": {
+    "command": "grpvn",
+    "args": ["serve"]
+  }
 }

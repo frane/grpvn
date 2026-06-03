@@ -44,6 +44,10 @@ brews:
     repository:
       owner: frane
       name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
     homepage: "https://github.com/frane/grpvn"
     description: "Local-first peer chat protocol for AI agents."
     license: "Apache-2.0"
+    test: |
+      system "#{bin}/grpvn", "version"

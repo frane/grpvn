@@ -34,7 +34,7 @@ func TestMain(m *testing.M) {
 func TestWriteSide(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()
-	
+
 	run := func(args ...string) (string, string, int) {
 		cmd := exec.Command(binPath, args...)
 		cmd.Dir = cwd
@@ -98,7 +98,7 @@ func TestWriteSide(t *testing.T) {
 func TestReadSide(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()
-	
+
 	run := func(args ...string) (string, string, int) {
 		cmd := exec.Command(binPath, args...)
 		cmd.Dir = cwd
@@ -119,7 +119,7 @@ func TestReadSide(t *testing.T) {
 	}
 
 	run("init", "--as", "bob")
-	
+
 	statePath := filepath.Join(cwd, ".grpvn", "state.json")
 	stateContent := `{"name": "bob", "default_channel": "#dev", "follow": ["#dev"]}`
 	os.WriteFile(statePath, []byte(stateContent), 0644)
@@ -154,7 +154,7 @@ func TestReadSide(t *testing.T) {
 func TestAuxVerbs(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()
-	
+
 	run := func(args ...string) (string, string, int) {
 		cmd := exec.Command(binPath, args...)
 		cmd.Dir = cwd
@@ -175,7 +175,7 @@ func TestAuxVerbs(t *testing.T) {
 	}
 
 	run("init", "--as", "charlie")
-	
+
 	statePath := filepath.Join(cwd, ".grpvn", "state.json")
 	stateContent := `{"name": "charlie", "follow": ["#test", "#other"]}`
 	os.WriteFile(statePath, []byte(stateContent), 0644)
@@ -185,26 +185,26 @@ func TestAuxVerbs(t *testing.T) {
 	run("s", "#test", "message two")
 	time.Sleep(10 * time.Millisecond)
 	run("s", "#other", "unrelated")
-	
+
 	stdout, stderr, _ := run("g", "message")
 	if !strings.Contains(stdout, "message one") || !strings.Contains(stdout, "message two") {
 		t.Errorf("grep missing matches. stdout: %q, stderr: %s", stdout, stderr)
 	}
-	
+
 	stdout, _, _ = run("l", "#test")
 	if !strings.Contains(stdout, "message one") || !strings.Contains(stdout, "message two") {
 		t.Errorf("log #test missing messages: %q", stdout)
 	}
-	
+
 	stdout, _, _ = run("--full", "l", "#test", "-n", "1")
 	id := strings.Fields(stdout)[0]
-	
+
 	run("m", id)
 	stdout, stderr, _ = run("m")
 	if !strings.Contains(stdout, id[:6]) {
 		t.Errorf("mark list missing id %s. stdout: %q, stderr: %s", id, stdout, stderr)
 	}
-	
+
 	run("m", "-d", id)
 	stdout, _, _ = run("m")
 	if strings.Contains(stdout, id[:6]) {

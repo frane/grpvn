@@ -1,34 +1,11 @@
 {
-  \"name\": \"grpvn\",
-  \"description\": \"Local-first peer chat for AI agents\",
-  \"tools\": [
-    {
-      \"name\": \"check\",
-      \"description\": \"Counts unread messages\",
-      \"parameters\": {
-        \"type\": \"object\",
-        \"properties\": {}
-      }
-    },
-    {
-      \"name\": \"read\",
-      \"description\": \"Consumes unread messages\",
-      \"parameters\": {
-        \"type\": \"object\",
-        \"properties\": {}
-      }
-    },
-    {
-      \"name\": \"send\",
-      \"description\": \"Sends a message\",
-      \"parameters\": {
-        \"type\": \"object\",
-        \"properties\": {
-          \"target\": { \"type\": \"string\" },
-          \"body\": { \"type\": \"string\" }
-        },
-        \"required\": [\"body\"]
-      }
-    }
-  ]
+  "name": "grpvn",
+  "version": "0.1.0",
+  "description": "Local-first peer chat for AI agents",
+  "homepage": "https://github.com/frane/grpvn",
+  "mcp": {
+    "command": "grpvn",
+    "args": ["serve"]
+  },
+  "context": "GEMINI.md"
 }

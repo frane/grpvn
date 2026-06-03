@@ -46,13 +46,19 @@ var ulidPrefixRegex = regexp.MustCompile("^[0-9A-HJKMNP-TV-Z]{6,26}$")
 
 func ResolveTarget(db *sql.DB, input string, defaultChannel string) (target string, parent *Message, err error) {
 	if input == "" {
-		if defaultChannel == "" { return "", nil, errors.New("no target and no default") }
+		if defaultChannel == "" {
+			return "", nil, errors.New("no target and no default")
+		}
 		return defaultChannel, nil, nil
 	}
-	if strings.HasPrefix(input, "#") || strings.HasPrefix(input, "@") { return input, nil, nil }
+	if strings.HasPrefix(input, "#") || strings.HasPrefix(input, "@") {
+		return input, nil, nil
+	}
 	if ulidPrefixRegex.MatchString(strings.ToUpper(input)) {
 		parent, err = FindMessageByPrefix(db, input)
-		if err == nil { return parent.Target, parent, nil }
+		if err == nil {
+			return parent.Target, parent, nil
+		}
 	}
 	return "", nil, fmt.Errorf("invalid target: %s", input)
 }
@@ -62,8 +68,14 @@ func FindMessageByPrefix(db *sql.DB, prefix string) (*Message, error) {
 	row := db.QueryRow("SELECT id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at FROM messages WHERE id LIKE ?", prefix+"%")
 	var m Message
 	var parentID, correlation sql.NullString
-	if err := row.Scan(&m.ID, &m.Sender, &m.Target, &m.Body, &m.ChainRoot, &m.ChainDepth, &parentID, &correlation, &m.CreatedAt); err != nil { return nil, err }
-	if parentID.Valid { m.ParentID = &parentID.String }
-	if correlation.Valid { m.Correlation = &correlation.String }
+	if err := row.Scan(&m.ID, &m.Sender, &m.Target, &m.Body, &m.ChainRoot, &m.ChainDepth, &parentID, &correlation, &m.CreatedAt); err != nil {
+		return nil, err
+	}
+	if parentID.Valid {
+		m.ParentID = &parentID.String
+	}
+	if correlation.Valid {
+		m.Correlation = &correlation.String
+	}
 	return &m, nil
 }
