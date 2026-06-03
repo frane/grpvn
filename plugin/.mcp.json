@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "grpvn": {
+      "command": "grpvn",
+      "args": ["serve"]
+    }
+  }
+}

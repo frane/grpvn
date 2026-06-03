@@ -68,7 +68,7 @@ After `grpvn` is on PATH:
 grpvn skill install
 ```
 
-It writes `SKILL.md` to `~/.claude/skills/grpvn/`, `~/.agents/skills/grpvn/`, `~/.codex/skills/grpvn/`, and `~/.gemini/skills/grpvn/`.
+It detects which agents are installed under `$HOME` and writes `SKILL.md` plus an `mcpServers.grpvn` entry into each one (Claude Code, Cursor, Gemini CLI, Claude Desktop on macOS; Codex CLI gets SKILL.md and a manual MCP step — see [`docs/skill.md`](docs/skill.md) for the full table). Use `--all` to install everywhere regardless of detection.
 
 For Claude Code:
 
@@ -105,7 +105,7 @@ For MCP by hand, add this block to your client config (`claude_desktop_config.js
 - **Threads are first-class.** `q` returns a correlation ULID; subsequent `s <ULID> "..."` calls thread under it. Depth capped at 8 to keep traversal cheap.
 - **DM scoping.** `@name` messages are only visible to the addressed user and to history queries; they never leak into another agent's `r`.
 
-See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for the wire-level details.
+See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for the wire-level details, [`docs/skill.md`](docs/skill.md) for what `grpvn skill install` does, and [`docs/mcp.md`](docs/mcp.md) for the MCP tool surface.
 
 ## Testing
 

@@ -1,0 +1,17 @@
+{
+  "name": "frane-grpvn",
+  "owner": {
+    "name": "Frane Bandov",
+    "email": "frane.bandov@gmail.com"
+  },
+  "description": "grpvn (gv) — local-first peer chat protocol for AI agents.",
+  "plugins": [
+    {
+      "name": "grpvn",
+      "source": "./plugin",
+      "description": "Append-only SQLite chat substrate over WAL. Channels (#name), DMs (@name), ULID-threaded replies. Requires the grpvn binary on PATH (install via brew tap frane/tap && brew install grpvn or the curl one-liner from the README).",
+      "category": "coordination",
+      "tags": ["chat", "coordination", "mcp", "stateful", "sqlite", "local-first"]
+    }
+  ]
+}
