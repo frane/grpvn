@@ -10,7 +10,8 @@ import (
 func TestCheckEmptyExits2(t *testing.T) {
 	db := newTestDB(t)
 	var buf bytes.Buffer
-	code, err := Check(&buf, db, "alice", "", []string{"#dev"})
+	st := &State{Name: "alice", Follow: []string{"#dev"}, Cursors: map[string]string{}}
+	code, err := Check(&buf, db, st)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,8 +34,9 @@ func TestCheckCountsByTarget(t *testing.T) {
 	m4 := NewMessage("bob", "#ops", []byte("d")) // not followed, excluded
 	m4.Save(db)
 
+	st := &State{Name: "alice", Follow: []string{"#dev"}, Cursors: map[string]string{}}
 	var buf bytes.Buffer
-	code, err := Check(&buf, db, "alice", "", []string{"#dev"})
+	code, err := Check(&buf, db, st)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,21 +59,22 @@ func TestReadAdvancesCursor(t *testing.T) {
 	m2 := NewMessage("bob", "#dev", []byte("b"))
 	m2.Save(db)
 
+	st := &State{Name: "alice", Follow: []string{"#dev"}, Cursors: map[string]string{}}
 	var buf bytes.Buffer
-	next, code, err := Read(&buf, db, "alice", "", []string{"#dev"}, 0, true, "", false, false, false, "never")
+	code, err := Read(&buf, db, st, 0, true, false, false, false, "never")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if code != 0 {
 		t.Fatalf("expected exit 0, got %d", code)
 	}
-	if next != m2.ID {
-		t.Fatalf("cursor should advance to last id %s, got %s", m2.ID, next)
+	if st.CursorFor("#dev") != m2.ID {
+		t.Fatalf("cursor for #dev should advance to %s, got %s", m2.ID, st.CursorFor("#dev"))
 	}
 
-	// Read again from the new cursor — should be empty.
+	// Read again — should be empty.
 	buf.Reset()
-	_, code, err = Read(&buf, db, "alice", next, []string{"#dev"}, 0, true, "", false, false, false, "never")
+	code, err = Read(&buf, db, st, 0, true, false, false, false, "never")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,16 +87,17 @@ func TestReadWithoutAdvanceKeepsCursor(t *testing.T) {
 	db := newTestDB(t)
 	m := NewMessage("bob", "#dev", []byte("a"))
 	m.Save(db)
+	st := &State{Name: "alice", Follow: []string{"#dev"}, Cursors: map[string]string{}}
 	var buf bytes.Buffer
-	next, code, err := Read(&buf, db, "alice", "", []string{"#dev"}, 0, false, "", false, false, false, "never")
+	code, err := Read(&buf, db, st, 0, false, false, false, false, "never")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if code != 0 {
 		t.Fatalf("expected 0, got %d", code)
 	}
-	if next != "" {
-		t.Fatalf("non-advancing read should return original cursor; got %q", next)
+	if st.CursorFor("#dev") != "" {
+		t.Fatalf("non-advancing read should not modify cursor; got %q", st.CursorFor("#dev"))
 	}
 }
 

@@ -15,7 +15,7 @@ var checkCmd = &cobra.Command{
 	Use:     "check",
 	Aliases: []string{"c"},
 	Run: func(cmd *cobra.Command, args []string) {
-		n, st, err := bootstrap()
+		_, st, err := bootstrap()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -26,7 +26,7 @@ var checkCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		defer db.Close()
-		c, err := internal.Check(os.Stdout, db, n, st.Cursor, st.Follow)
+		c, err := internal.Check(os.Stdout, db, st)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
@@ -39,7 +39,7 @@ var readCmd = &cobra.Command{
 	Use:     "read",
 	Aliases: []string{"r"},
 	Run: func(cmd *cobra.Command, args []string) {
-		n, st, err := bootstrap()
+		_, st, err := bootstrap()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -50,21 +50,14 @@ var readCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		defer db.Close()
-		nx, c, err := internal.Read(os.Stdout, db, n, st.Cursor, st.Follow, countFlag, true, st.DefaultChannel, tsFlag, fullFlag, humanFlag, colorFlag)
+		c, err := internal.Read(os.Stdout, db, st, countFlag, true, tsFlag, fullFlag, humanFlag, colorFlag)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
-		if nx != st.Cursor {
-			st.Cursor = nx
-			p := statePathFlag
-			if p == "" {
-				p = ".grpvn/state.json"
-			}
-			if err := st.Save(p); err != nil {
-				fmt.Fprintln(os.Stderr, "error:", err)
-				os.Exit(1)
-			}
+		if err := st.Save(internal.ResolveStatePath(statePathFlag)); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
 		}
 		os.Exit(c)
 	},
@@ -74,7 +67,7 @@ var peekCmd = &cobra.Command{
 	Use:     "peek",
 	Aliases: []string{"p"},
 	Run: func(cmd *cobra.Command, args []string) {
-		n, st, err := bootstrap()
+		_, st, err := bootstrap()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -85,7 +78,7 @@ var peekCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		defer db.Close()
-		_, c, err := internal.Read(os.Stdout, db, n, st.Cursor, st.Follow, countFlag, false, st.DefaultChannel, tsFlag, fullFlag, humanFlag, colorFlag)
+		c, err := internal.Read(os.Stdout, db, st, countFlag, false, tsFlag, fullFlag, humanFlag, colorFlag)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
@@ -299,7 +292,7 @@ var followCmd = &cobra.Command{
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		p := resolveStatePath()
+		p := internal.ResolveStatePath(statePathFlag)
 		switch {
 		case len(args) == 0:
 			for _, f := range st.Follow {
@@ -355,22 +348,11 @@ var defaultCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		st.DefaultChannel = ch
-		if err := st.Save(resolveStatePath()); err != nil {
+		if err := st.Save(internal.ResolveStatePath(statePathFlag)); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
 	},
-}
-
-func resolveStatePath() string {
-	p := statePathFlag
-	if p == "" {
-		p = os.Getenv("GRPVN_STATE")
-	}
-	if p == "" {
-		p = ".grpvn/state.json"
-	}
-	return p
 }
 
 func removeString(xs []string, v string) []string {

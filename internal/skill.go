@@ -24,6 +24,7 @@ var SkillContent []byte
 // the user hasn't installed.
 type Target struct {
 	Name      string // human label printed on install
+	Slug      string // short, filesystem-safe id used for the per-agent state file (e.g. "claude-code")
 	DetectDir string // path under HOME that, when present, signals the agent is installed
 	Skill     string // path under HOME where SKILL.md is written
 	MCP       string // path under HOME of the JSON config that holds mcpServers (empty = skip)
@@ -36,30 +37,35 @@ func HomeTargets() []Target {
 	base := []Target{
 		{
 			Name:      "Claude Code",
+			Slug:      "claude-code",
 			DetectDir: ".claude",
 			Skill:     ".claude/skills/grpvn/SKILL.md",
 			MCP:       ".claude.json",
 		},
 		{
 			Name:      "Cursor",
+			Slug:      "cursor",
 			DetectDir: ".cursor",
 			Skill:     ".cursor/skills/grpvn/SKILL.md",
 			MCP:       ".cursor/mcp.json",
 		},
 		{
 			Name:      "Codex CLI",
+			Slug:      "codex",
 			DetectDir: ".codex",
 			Skill:     ".codex/skills/grpvn/SKILL.md",
 			MCPTOML:   ".codex/config.toml",
 		},
 		{
 			Name:      "Gemini CLI",
+			Slug:      "gemini",
 			DetectDir: ".gemini",
 			Skill:     ".gemini/skills/grpvn/SKILL.md",
 			MCP:       ".gemini/settings.json",
 		},
 		{
 			Name:      "agents (generic)",
+			Slug:      "agents",
 			DetectDir: ".agents",
 			Skill:     ".agents/skills/grpvn/SKILL.md",
 			MCP:       "",
@@ -68,6 +74,7 @@ func HomeTargets() []Target {
 	if runtime.GOOS == "darwin" {
 		base = append(base, Target{
 			Name:      "Claude Desktop",
+			Slug:      "claude-desktop",
 			DetectDir: "Library/Application Support/Claude",
 			Skill:     "Library/Application Support/Claude/skills/grpvn/SKILL.md",
 			MCP:       "Library/Application Support/Claude/claude_desktop_config.json",
@@ -124,9 +131,14 @@ func installSkillFromHome(w io.Writer, homeOverride string, forceAll bool) error
 			continue
 		}
 		written = append(written, fmt.Sprintf("%s: %s", t.Name, skillPath))
+		// Per-agent state file so the identity stays stable AND distinct
+		// across runtimes. Without this every MCP host shares
+		// $HOME/.grpvn/state.json and inherits the same identity.
+		statePath := filepath.Join(home, ".grpvn", "state-"+t.Slug+".json")
+		env := map[string]string{"GRPVN_STATE": statePath}
 		if t.MCP != "" {
 			mcpPath := filepath.Join(home, t.MCP)
-			if err := mergeMCP(mcpPath, "grpvn", "grpvn", []string{"serve"}); err != nil {
+			if err := mergeMCP(mcpPath, "grpvn", "grpvn", []string{"serve"}, env); err != nil {
 				lastErr = err
 				continue
 			}
@@ -134,7 +146,7 @@ func installSkillFromHome(w io.Writer, homeOverride string, forceAll bool) error
 		}
 		if t.MCPTOML != "" {
 			tomlPath := filepath.Join(home, t.MCPTOML)
-			added, err := mergeMCPTOML(tomlPath, "grpvn", "grpvn", []string{"serve"})
+			added, err := mergeMCPTOML(tomlPath, "grpvn", "grpvn", []string{"serve"}, env)
 			if err != nil {
 				lastErr = err
 				continue
@@ -168,7 +180,7 @@ func installSkillFromHome(w io.Writer, homeOverride string, forceAll bool) error
 // file doesn't exist it's created. Any existing keys other than the named
 // server entry are preserved. Existing non-JSON content is preserved by
 // erroring out rather than overwriting.
-func mergeMCP(path, name, command string, args []string) error {
+func mergeMCP(path, name, command string, args []string, env map[string]string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}
@@ -189,10 +201,18 @@ func mergeMCP(path, name, command string, args []string) error {
 	if servers == nil {
 		servers = map[string]interface{}{}
 	}
-	servers[name] = map[string]interface{}{
+	entry := map[string]interface{}{
 		"command": command,
 		"args":    args,
 	}
+	if len(env) > 0 {
+		envMap := map[string]interface{}{}
+		for k, v := range env {
+			envMap[k] = v
+		}
+		entry["env"] = envMap
+	}
+	servers[name] = entry
 	doc["mcpServers"] = servers
 	encoded, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
@@ -221,7 +241,7 @@ func mergeMCP(path, name, command string, args []string) error {
 // only one canonical shape for an MCP server entry, so blind append-if-absent
 // is safe enough and dodges every "preserve comments / preserve ordering"
 // TOML-parser headache.
-func mergeMCPTOML(path, name, command string, args []string) (bool, error) {
+func mergeMCPTOML(path, name, command string, args []string, env map[string]string) (bool, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return false, fmt.Errorf("create config dir: %w", err)
 	}
@@ -230,8 +250,41 @@ func mergeMCPTOML(path, name, command string, args []string) (bool, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return false, fmt.Errorf("read %s: %w", path, err)
 	}
-	if bytes.Contains(existing, []byte(header)) {
+	envHeader := fmt.Sprintf("[mcp_servers.%s.env]", name)
+	hasSection := bytes.Contains(existing, []byte(header))
+	hasEnv := bytes.Contains(existing, []byte(envHeader))
+	if hasSection && (hasEnv || len(env) == 0) {
 		return false, nil
+	}
+	if hasSection && !hasEnv && len(env) > 0 {
+		// Section exists but is missing the env block — append just the env
+		// sub-table. This is the upgrade path from a previous install that
+		// didn't write an env block.
+		keys := make([]string, 0, len(env))
+		for k := range env {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		var addendum strings.Builder
+		if len(existing) > 0 && !bytes.HasSuffix(existing, []byte("\n")) {
+			addendum.WriteString("\n")
+		}
+		addendum.WriteString("\n")
+		addendum.WriteString(envHeader)
+		addendum.WriteString("\n")
+		for _, k := range keys {
+			fmt.Fprintf(&addendum, "%s = %q\n", k, env[k])
+		}
+		merged := append(existing, []byte(addendum.String())...)
+		tmp := fmt.Sprintf("%s.tmp.%d", path, os.Getpid())
+		if err := os.WriteFile(tmp, merged, 0644); err != nil {
+			return false, fmt.Errorf("write %s: %w", tmp, err)
+		}
+		if err := os.Rename(tmp, path); err != nil {
+			os.Remove(tmp)
+			return false, fmt.Errorf("rename %s: %w", path, err)
+		}
+		return true, nil
 	}
 	quotedArgs := make([]string, len(args))
 	for i, a := range args {
@@ -248,6 +301,20 @@ func mergeMCPTOML(path, name, command string, args []string) (bool, error) {
 	block.WriteString("\n")
 	fmt.Fprintf(&block, "command = %q\n", command)
 	fmt.Fprintf(&block, "args = [%s]\n", strings.Join(quotedArgs, ", "))
+	if len(env) > 0 {
+		// Stable order so the file diff is deterministic across runs.
+		keys := make([]string, 0, len(env))
+		for k := range env {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		block.WriteString("\n[mcp_servers.")
+		block.WriteString(name)
+		block.WriteString(".env]\n")
+		for _, k := range keys {
+			fmt.Fprintf(&block, "%s = %q\n", k, env[k])
+		}
+	}
 	merged := append(existing, []byte(block.String())...)
 	tmp := fmt.Sprintf("%s.tmp.%d", path, os.Getpid())
 	if err := os.WriteFile(tmp, merged, 0644); err != nil {

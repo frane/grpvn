@@ -299,15 +299,15 @@ func TestInstallSkillTOMLIdempotent(t *testing.T) {
 	}
 }
 
-// If a [mcp_servers.grpvn] section already exists (with whatever content), the
-// installer must leave it alone.
+// If a [mcp_servers.grpvn] section already exists with its own env block,
+// the installer leaves the whole thing alone — user customisation wins.
 func TestInstallSkillTOMLLeavesExistingSection(t *testing.T) {
 	home := t.TempDir()
 	setHome(t, home)
 	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	pre := "[mcp_servers.grpvn]\ncommand = \"/usr/local/bin/grpvn\"\nargs = [\"serve\", \"--debug\"]\n"
+	pre := "[mcp_servers.grpvn]\ncommand = \"/usr/local/bin/grpvn\"\nargs = [\"serve\", \"--debug\"]\n\n[mcp_servers.grpvn.env]\nGRPVN_STATE = \"/tmp/custom-state.json\"\n"
 	if err := os.WriteFile(filepath.Join(home, ".codex/config.toml"), []byte(pre), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +317,39 @@ func TestInstallSkillTOMLLeavesExistingSection(t *testing.T) {
 	}
 	got, _ := os.ReadFile(filepath.Join(home, ".codex/config.toml"))
 	if string(got) != pre {
-		t.Fatalf("installer overwrote a user-customised section\nwant: %q\ngot:  %q", pre, got)
+		t.Fatalf("installer overwrote a user-customised section with env\nwant: %q\ngot:  %q", pre, got)
+	}
+}
+
+// If the [mcp_servers.grpvn] section exists but predates the env support
+// (left over from a v0.1.1 install), the installer must append a
+// [mcp_servers.grpvn.env] sub-section without touching the original.
+func TestInstallSkillTOMLUpgradesMissingEnv(t *testing.T) {
+	home := t.TempDir()
+	setHome(t, home)
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := "[mcp_servers.grpvn]\ncommand = \"grpvn\"\nargs = [\"serve\"]\n"
+	if err := os.WriteFile(filepath.Join(home, ".codex/config.toml"), []byte(legacy), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := InstallSkill(&buf); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(home, ".codex/config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(got), legacy) {
+		t.Fatalf("installer must preserve the legacy section verbatim; got %q", got)
+	}
+	if !strings.Contains(string(got), "[mcp_servers.grpvn.env]") {
+		t.Fatalf("expected env subsection to be appended; got %q", got)
+	}
+	if !strings.Contains(string(got), "GRPVN_STATE = ") {
+		t.Fatalf("expected GRPVN_STATE in env block; got %q", got)
 	}
 }
 

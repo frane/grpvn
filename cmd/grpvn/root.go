@@ -28,7 +28,7 @@ var (
 	statePathFlag, asFlag, colorFlag string
 	humanFlag, fullFlag, tsFlag      bool
 	countFlag                        int
-	version                          = "0.1.0"
+	version                          = "0.1.2"
 )
 
 func Execute() {
@@ -49,13 +49,7 @@ func init() {
 }
 
 func bootstrap() (string, *internal.State, error) {
-	p := statePathFlag
-	if p == "" {
-		p = os.Getenv("GRPVN_STATE")
-	}
-	if p == "" {
-		p = ".grpvn/state.json"
-	}
+	p := internal.ResolveStatePath(statePathFlag)
 	s, err := internal.LoadState(p)
 	if err != nil {
 		return "", nil, err
@@ -68,9 +62,25 @@ func bootstrap() (string, *internal.State, error) {
 		n = s.Name
 	}
 	if n == "" {
-		n, _ = internal.GenerateIdentity()
+		n, err = internal.GenerateIdentity()
+		if err != nil {
+			return "", nil, fmt.Errorf("generate identity: %w", err)
+		}
 		s.Name = n
-		_ = s.Save(p)
+		// Surface save failures instead of silently regenerating the
+		// identity on every subsequent call. Claude Desktop launches with
+		// an unwritable cwd; the historic silent-swallow turned that into
+		// an identity-mint loop.
+		if err := s.Save(p); err != nil {
+			return "", nil, fmt.Errorf("save state to %s: %w", p, err)
+		}
+	} else if s.Name == "" {
+		// Identity came from --as or GRPVN_AS; persist it so subsequent
+		// calls without the flag see the same name.
+		s.Name = n
+		if err := s.Save(p); err != nil {
+			return "", nil, fmt.Errorf("save state to %s: %w", p, err)
+		}
 	}
 	return n, s, nil
 }

@@ -10,35 +10,39 @@ import (
 	"time"
 )
 
-func Check(w io.Writer, db *sql.DB, name string, cursor string, follow []string) (int, error) {
-	v := append([]string{}, follow...)
-	v = append(v, "@"+name)
-	p := make([]string, len(v))
-	args := make([]interface{}, len(v)+1)
-	args[0] = cursor
-	for i, x := range v {
-		p[i] = "?"
-		args[i+1] = x
-	}
-	q := fmt.Sprintf("SELECT target, COUNT(*) FROM messages WHERE id > ? AND target IN (%s) GROUP BY target", strings.Join(p, ", "))
-	rows, err := db.Query(q, args...)
-	if err != nil {
-		return 0, err
-	}
-	defer rows.Close()
+// targetsFor returns the channels this agent reads from (followed channels
+// plus its own DM inbox), in the order the caller passed them.
+func targetsFor(name string, follow []string) []string {
+	out := append([]string{}, follow...)
+	out = append(out, "@"+name)
+	return out
+}
+
+// Check counts unread per followed target. Per-target cursor: each target
+// gets queried with WHERE id > cursorFor(target), so a follow added today
+// surfaces every message in that channel even if the agent has a fresh DM
+// cursor that's lexicographically larger than every channel ULID.
+func Check(w io.Writer, db *sql.DB, st *State) (int, error) {
 	counts := []string{}
 	total := 0
-	for rows.Next() {
-		var t string
-		var c int
-		if err := rows.Scan(&t, &c); err != nil {
+	for _, target := range targetsFor(st.Name, st.Follow) {
+		var n int
+		err := db.QueryRow(
+			"SELECT COUNT(*) FROM messages WHERE target = ? AND id > ?",
+			target, st.CursorFor(target),
+		).Scan(&n)
+		if err != nil {
 			return 0, err
 		}
-		if t == "@"+name {
-			t = "@me"
+		if n == 0 {
+			continue
 		}
-		counts = append(counts, fmt.Sprintf("%d %s", c, t))
-		total += c
+		label := target
+		if target == "@"+st.Name {
+			label = "@me"
+		}
+		counts = append(counts, fmt.Sprintf("%d %s", n, label))
+		total += n
 	}
 	if total == 0 {
 		return 2, nil
@@ -47,33 +51,39 @@ func Check(w io.Writer, db *sql.DB, name string, cursor string, follow []string)
 	return 0, nil
 }
 
-func Read(w io.Writer, db *sql.DB, name string, cursor string, follow []string, limit int, advance bool, defaultChannel string, ts bool, full bool, human bool, color string) (string, int, error) {
-	v := append([]string{}, follow...)
-	v = append(v, "@"+name)
-	p := make([]string, len(v))
-	args := make([]interface{}, len(v)+1)
-	args[0] = cursor
-	for i, x := range v {
-		p[i] = "?"
-		args[i+1] = x
+// Read prints unread across all followed targets in ULID order. Cursors are
+// per-target: after a successful advance each target's cursor moves to the
+// last id rendered FOR THAT TARGET. The caller persists the mutated State.
+func Read(w io.Writer, db *sql.DB, st *State, limit int, advance bool, ts bool, full bool, human bool, color string) (int, error) {
+	targets := targetsFor(st.Name, st.Follow)
+
+	var where strings.Builder
+	args := []interface{}{}
+	for i, t := range targets {
+		if i > 0 {
+			where.WriteString(" OR ")
+		}
+		where.WriteString("(target = ? AND id > ?)")
+		args = append(args, t, st.CursorFor(t))
 	}
-	q := "SELECT id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at FROM messages WHERE id > ? AND target IN (" + strings.Join(p, ", ") + ") ORDER BY id ASC"
+	q := "SELECT id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at FROM messages WHERE " + where.String() + " ORDER BY id ASC"
 	if limit > 0 {
 		q += " LIMIT ?"
 		args = append(args, limit)
 	}
 	rows, err := db.Query(q, args...)
 	if err != nil {
-		return cursor, 0, err
+		return 0, err
 	}
 	defer rows.Close()
-	cur := cursor
+
+	newCursors := map[string]string{}
 	count := 0
 	for rows.Next() {
 		var m Message
 		var pID, corr sql.NullString
 		if err := rows.Scan(&m.ID, &m.Sender, &m.Target, &m.Body, &m.ChainRoot, &m.ChainDepth, &pID, &corr, &m.CreatedAt); err != nil {
-			return cursor, 0, err
+			return 0, err
 		}
 		if pID.Valid {
 			m.ParentID = &pID.String
@@ -85,20 +95,22 @@ func Read(w io.Writer, db *sql.DB, name string, cursor string, follow []string, 
 			if count == 0 {
 				HumanHeader(w, ShouldColor(color))
 			}
-			RenderHuman(w, &m, name, ShouldColor(color))
+			RenderHuman(w, &m, st.Name, ShouldColor(color))
 		} else {
-			RenderAI(w, &m, name, defaultChannel, ts, full)
+			RenderAI(w, &m, st.Name, st.DefaultChannel, ts, full)
 		}
-		cur = m.ID
+		newCursors[m.Target] = m.ID
 		count++
 	}
 	if count == 0 {
-		return cursor, 2, nil
+		return 2, nil
 	}
-	if !advance {
-		cur = cursor
+	if advance {
+		for target, id := range newCursors {
+			st.SetCursor(target, id)
+		}
 	}
-	return cur, 0, nil
+	return 0, nil
 }
 
 func Send(db *sql.DB, sender string, targetArg string, bodyArg string, defaultChannel string, isAsk bool) error {

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -14,16 +13,7 @@ import (
 
 type Bootstrap func() (string, *State, error)
 
-func statePath() string {
-	if p := os.Getenv("GRPVN_STATE"); p != "" {
-		return p
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return ".grpvn/state.json"
-	}
-	return filepath.Join(cwd, ".grpvn", "state.json")
-}
+func statePath() string { return ResolveStatePath("") }
 
 type sendArgs struct {
 	Target string `json:"target"`
@@ -52,7 +42,7 @@ func ServeMCP(name, version string, b Bootstrap) error {
 	}
 
 	s.AddTool(tool("c", "Counts unread messages"), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		n, st, err := b()
+		_, st, err := b()
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
@@ -62,7 +52,7 @@ func ServeMCP(name, version string, b Bootstrap) error {
 		}
 		defer db.Close()
 		var buf bytes.Buffer
-		code, err := Check(&buf, db, n, st.Cursor, st.Follow)
+		code, err := Check(&buf, db, st)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
@@ -73,7 +63,7 @@ func ServeMCP(name, version string, b Bootstrap) error {
 	})
 
 	s.AddTool(tool("r", "Reads unread messages and advances the cursor"), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		n, st, err := b()
+		_, st, err := b()
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
@@ -83,22 +73,21 @@ func ServeMCP(name, version string, b Bootstrap) error {
 		}
 		defer db.Close()
 		var buf bytes.Buffer
-		next, code, err := Read(&buf, db, n, st.Cursor, st.Follow, 0, true, st.DefaultChannel, false, false, false, "never")
+		code, err := Read(&buf, db, st, 0, true, false, false, false, "never")
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 		if code == 2 {
 			return mcp.NewToolResultText("no unread messages"), nil
 		}
-		if next != st.Cursor {
-			st.Cursor = next
-			_ = st.Save(statePath())
+		if err := st.Save(statePath()); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("save state: %v", err)), nil
 		}
 		return mcp.NewToolResultText(buf.String()), nil
 	})
 
 	s.AddTool(tool("p", "Peeks at unread messages without advancing"), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		n, st, err := b()
+		_, st, err := b()
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
@@ -108,7 +97,7 @@ func ServeMCP(name, version string, b Bootstrap) error {
 		}
 		defer db.Close()
 		var buf bytes.Buffer
-		_, code, err := Read(&buf, db, n, st.Cursor, st.Follow, 0, false, st.DefaultChannel, false, false, false, "never")
+		code, err := Read(&buf, db, st, 0, false, false, false, false, "never")
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
