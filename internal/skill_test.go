@@ -263,7 +263,7 @@ func TestInstallSkillWiresCodexTOML(t *testing.T) {
 	if !strings.Contains(out, `args = ["serve"]`) {
 		t.Fatalf("expected args = [\"serve\"]: %q", out)
 	}
-	if !strings.Contains(buf.String(), ".codex/config.toml") {
+	if !strings.Contains(buf.String(), filepath.Join(".codex", "config.toml")) {
 		t.Fatalf("install output should mention codex TOML write: %q", buf.String())
 	}
 }
