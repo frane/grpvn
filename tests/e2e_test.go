@@ -21,7 +21,7 @@ func TestMain(m *testing.M) {
 	defer os.RemoveAll(tmpDir)
 
 	binPath = filepath.Join(tmpDir, "grpvn")
-	cmd := exec.Command("go", "build", "-o", binPath, "../cmd/grpvn")
+	cmd := exec.Command("go", "build", "-o", binPath, "github.com/frane/grpvn/cmd/grpvn")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		fmt.Printf("Build failed: %v\n%s\n", err, string(output))
