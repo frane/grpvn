@@ -11,22 +11,31 @@ import (
 	"testing"
 	"time"
 )
-
 var binPath string
 
 // repoRootFromCaller anchors the repo root to this source file's location, not
-// to the test process's working directory. CI runners set os.Getwd() to a
-// build cache dir on some configurations, so relative paths like "../cmd/grpvn"
-// and module imports both fail. runtime.Caller is stable across all of them.
-func repoRootFromCaller() string {
+// to the test process's working directory.
+func repoRootFromCaller() (string, bool) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
-		panic("runtime.Caller failed; cannot locate repo root")
+		return "", false
 	}
-	return filepath.Dir(filepath.Dir(thisFile))
+	return filepath.Dir(filepath.Dir(thisFile)), true
 }
 
 func TestMain(m *testing.M) {
+	// Prefer a binary built by the harness (CI step, Makefile, etc.) so the
+	// tests don't depend on `go build` working from whatever cwd `go test`
+	// happens to use on a given runner.
+	if env := os.Getenv("GRPVN_TEST_BIN"); env != "" {
+		if _, err := os.Stat(env); err != nil {
+			fmt.Printf("GRPVN_TEST_BIN=%s does not exist: %v\n", env, err)
+			os.Exit(1)
+		}
+		binPath = env
+		os.Exit(m.Run())
+	}
+
 	tmpDir, err := os.MkdirTemp("", "grpvn-test-*")
 	if err != nil {
 		panic(err)
@@ -34,7 +43,10 @@ func TestMain(m *testing.M) {
 	defer os.RemoveAll(tmpDir)
 
 	binPath = filepath.Join(tmpDir, "grpvn")
-	root := repoRootFromCaller()
+	root, ok := repoRootFromCaller()
+	if !ok {
+		panic("runtime.Caller failed; cannot locate repo root")
+	}
 	cmd := exec.Command("go", "build", "-o", binPath, "./cmd/grpvn")
 	cmd.Dir = root
 	output, err := cmd.CombinedOutput()

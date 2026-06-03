@@ -22,9 +22,18 @@ jobs:
         run: go build -v ./...
       - name: Vet
         run: go vet ./...
+      - name: Build test binary
+        shell: bash
+        run: |
+          mkdir -p .build
+          ext=""
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then ext=".exe"; fi
+          go build -o ".build/grpvn$ext" ./cmd/grpvn
+          echo "GRPVN_TEST_BIN=$PWD/.build/grpvn$ext" >> "$GITHUB_ENV"
       - name: Test
         run: go test -race -v ./...
       - name: Fmt
+        if: matrix.os == 'ubuntu-latest'
         run: |
           gofmt -l . | tee /tmp/fmt.out
           test ! -s /tmp/fmt.out
