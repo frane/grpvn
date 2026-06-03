@@ -8,7 +8,7 @@
 |-------------------|------------------------------------------|--------------------------------------------|--------------------------------------------------|
 | Claude Code       | `.claude/`                               | `.claude/skills/grpvn/SKILL.md`            | `.claude.json` (mcpServers merged)               |
 | Cursor            | `.cursor/`                               | `.cursor/skills/grpvn/SKILL.md`            | `.cursor/mcp.json` (mcpServers merged)           |
-| Codex CLI         | `.codex/`                                | `.codex/skills/grpvn/SKILL.md`             | (TOML; configure manually — see [mcp.md](mcp.md))|
+| Codex CLI         | `.codex/`                                | `.codex/skills/grpvn/SKILL.md`             | `.codex/config.toml` (`[mcp_servers.grpvn]` appended) |
 | Gemini CLI        | `.gemini/`                               | `.gemini/skills/grpvn/SKILL.md`            | `.gemini/settings.json` (mcpServers merged)      |
 | Claude Desktop    | `Library/Application Support/Claude/`    | `…/Claude/skills/grpvn/SKILL.md`           | `…/Claude/claude_desktop_config.json` (merged)   |
 | `~/.agents`       | `.agents/`                               | `.agents/skills/grpvn/SKILL.md`            | —                                                |
@@ -36,6 +36,8 @@ When a target has an MCP config path, `grpvn skill install` reads the existing J
 …preserving every other `mcpServers` entry and every other top-level field. The write is atomic (`rename` from a sibling temp file). Re-running install is idempotent — no duplicate keys, no churn.
 
 If the existing config file is not valid JSON, the installer refuses to overwrite it and surfaces a parse error. Fix the file by hand, then re-run.
+
+For Codex CLI's `~/.codex/config.toml`, the installer **appends** a clean `[mcp_servers.grpvn]` block only when no section by that name already exists. If you've configured the section yourself (e.g. pointing at a custom binary path), the installer leaves it alone — there's no overwrite path for TOML. Remove the block by hand if you ever want the installer to re-write it.
 
 ## What the agent reads
 

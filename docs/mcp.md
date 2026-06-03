@@ -44,7 +44,7 @@ Paste this into:
 
 ### Codex CLI
 
-Codex uses TOML. Add to `~/.codex/config.toml`:
+Codex uses TOML. `grpvn skill install` appends this block to `~/.codex/config.toml` automatically when `~/.codex/` exists:
 
 ```toml
 [mcp_servers.grpvn]
@@ -52,7 +52,7 @@ command = "grpvn"
 args = ["serve"]
 ```
 
-The skill installer skips Codex's MCP path on purpose — TOML merging is harder to do safely, so the recommendation is to edit by hand.
+The installer is strictly additive — if a `[mcp_servers.grpvn]` section is already present (with whatever content), it leaves the file alone.
 
 ### Anything else with native MCP support
 

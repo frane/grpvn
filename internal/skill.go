@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"bytes"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -9,21 +10,24 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 )
 
 //go:embed embedded/SKILL.md
 var SkillContent []byte
 
 // Target describes one supported agent surface. The skill installer writes
-// SKILL.md into Skill (always) and merges an mcpServers.grpvn entry into MCP
-// (when MCP is non-empty and the host directory exists). A target is "present"
-// when DetectDir exists under HOME — this keeps the installer from littering
-// directories for agents the user hasn't installed.
+// SKILL.md into Skill (always) and registers the grpvn MCP server in either
+// MCP (a JSON config) or MCPTOML (a TOML config that takes a
+// [mcp_servers.<name>] section). A target is "present" when DetectDir exists
+// under HOME — this keeps the installer from littering directories for agents
+// the user hasn't installed.
 type Target struct {
 	Name      string // human label printed on install
 	DetectDir string // path under HOME that, when present, signals the agent is installed
 	Skill     string // path under HOME where SKILL.md is written
 	MCP       string // path under HOME of the JSON config that holds mcpServers (empty = skip)
+	MCPTOML   string // path under HOME of the TOML config that holds [mcp_servers.<name>] (empty = skip)
 }
 
 // HomeTargets enumerates the supported integrations. Paths are relative to the
@@ -46,7 +50,7 @@ func HomeTargets() []Target {
 			Name:      "Codex CLI",
 			DetectDir: ".codex",
 			Skill:     ".codex/skills/grpvn/SKILL.md",
-			MCP:       "", // Codex uses TOML; install --codex handles that separately
+			MCPTOML:   ".codex/config.toml",
 		},
 		{
 			Name:      "Gemini CLI",
@@ -120,15 +124,25 @@ func installSkillFromHome(w io.Writer, homeOverride string, forceAll bool) error
 			continue
 		}
 		written = append(written, fmt.Sprintf("%s: %s", t.Name, skillPath))
-		if t.MCP == "" {
-			continue
+		if t.MCP != "" {
+			mcpPath := filepath.Join(home, t.MCP)
+			if err := mergeMCP(mcpPath, "grpvn", "grpvn", []string{"serve"}); err != nil {
+				lastErr = err
+				continue
+			}
+			mcpAdded = append(mcpAdded, fmt.Sprintf("%s: %s", t.Name, mcpPath))
 		}
-		mcpPath := filepath.Join(home, t.MCP)
-		if err := mergeMCP(mcpPath, "grpvn", "grpvn", []string{"serve"}); err != nil {
-			lastErr = err
-			continue
+		if t.MCPTOML != "" {
+			tomlPath := filepath.Join(home, t.MCPTOML)
+			added, err := mergeMCPTOML(tomlPath, "grpvn", "grpvn", []string{"serve"})
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if added {
+				mcpAdded = append(mcpAdded, fmt.Sprintf("%s: %s", t.Name, tomlPath))
+			}
 		}
-		mcpAdded = append(mcpAdded, fmt.Sprintf("%s: %s", t.Name, mcpPath))
 	}
 	sort.Strings(written)
 	sort.Strings(mcpAdded)
@@ -193,4 +207,55 @@ func mergeMCP(path, name, command string, args []string) error {
 		return fmt.Errorf("rename %s: %w", path, err)
 	}
 	return nil
+}
+
+// mergeMCPTOML appends a [mcp_servers.<name>] block to a TOML config if a
+// section with that exact header isn't already present. It deliberately does
+// not parse the whole TOML document — that would mean shipping a TOML parser
+// for one config write. Instead it's strictly additive: if the section exists
+// (in any form) the file is left untouched and (false, nil) is returned. If
+// the file doesn't exist or doesn't contain the header, the block is appended
+// with a leading blank line and (true, nil) is returned.
+//
+// Codex's config.toml uses `[mcp_servers.<name>]` for MCP servers, and there's
+// only one canonical shape for an MCP server entry, so blind append-if-absent
+// is safe enough and dodges every "preserve comments / preserve ordering"
+// TOML-parser headache.
+func mergeMCPTOML(path, name, command string, args []string) (bool, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return false, fmt.Errorf("create config dir: %w", err)
+	}
+	header := fmt.Sprintf("[mcp_servers.%s]", name)
+	existing, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+	if bytes.Contains(existing, []byte(header)) {
+		return false, nil
+	}
+	quotedArgs := make([]string, len(args))
+	for i, a := range args {
+		quotedArgs[i] = fmt.Sprintf("%q", a)
+	}
+	var block strings.Builder
+	if len(existing) > 0 && !bytes.HasSuffix(existing, []byte("\n")) {
+		block.WriteString("\n")
+	}
+	if len(existing) > 0 {
+		block.WriteString("\n")
+	}
+	block.WriteString(header)
+	block.WriteString("\n")
+	fmt.Fprintf(&block, "command = %q\n", command)
+	fmt.Fprintf(&block, "args = [%s]\n", strings.Join(quotedArgs, ", "))
+	merged := append(existing, []byte(block.String())...)
+	tmp := fmt.Sprintf("%s.tmp.%d", path, os.Getpid())
+	if err := os.WriteFile(tmp, merged, 0644); err != nil {
+		return false, fmt.Errorf("write %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return false, fmt.Errorf("rename %s: %w", path, err)
+	}
+	return true, nil
 }

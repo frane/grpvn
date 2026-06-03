@@ -220,3 +220,130 @@ func TestHomeTargetsContainsAllKnownAgents(t *testing.T) {
 		}
 	}
 }
+
+// Codex CLI installs SKILL.md and appends [mcp_servers.grpvn] to
+// ~/.codex/config.toml when the agent is detected.
+func TestInstallSkillWiresCodexTOML(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	existing := "# user config\n[history]\nsize = 1000\n"
+	if err := os.WriteFile(filepath.Join(home, ".codex/config.toml"), []byte(existing), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := InstallSkill(&buf); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(home, ".codex/config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(got)
+	if !strings.Contains(out, "# user config") {
+		t.Fatalf("existing TOML content lost: %q", out)
+	}
+	if !strings.Contains(out, "[history]") || !strings.Contains(out, "size = 1000") {
+		t.Fatalf("existing TOML section lost: %q", out)
+	}
+	if !strings.Contains(out, "[mcp_servers.grpvn]") {
+		t.Fatalf("expected [mcp_servers.grpvn] section: %q", out)
+	}
+	if !strings.Contains(out, `command = "grpvn"`) {
+		t.Fatalf("expected command = \"grpvn\": %q", out)
+	}
+	if !strings.Contains(out, `args = ["serve"]`) {
+		t.Fatalf("expected args = [\"serve\"]: %q", out)
+	}
+	if !strings.Contains(buf.String(), ".codex/config.toml") {
+		t.Fatalf("install output should mention codex TOML write: %q", buf.String())
+	}
+}
+
+// Re-running install must not duplicate the [mcp_servers.grpvn] block in TOML.
+func TestInstallSkillTOMLIdempotent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := InstallSkill(&buf); err != nil {
+		t.Fatal(err)
+	}
+	first, err := os.ReadFile(filepath.Join(home, ".codex/config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := InstallSkill(&buf); err != nil {
+		t.Fatal(err)
+	}
+	second, err := os.ReadFile(filepath.Join(home, ".codex/config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatalf("TOML install should be idempotent\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+	count := strings.Count(string(second), "[mcp_servers.grpvn]")
+	if count != 1 {
+		t.Fatalf("expected exactly 1 [mcp_servers.grpvn] section, got %d", count)
+	}
+}
+
+// If a [mcp_servers.grpvn] section already exists (with whatever content), the
+// installer must leave it alone.
+func TestInstallSkillTOMLLeavesExistingSection(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	pre := "[mcp_servers.grpvn]\ncommand = \"/usr/local/bin/grpvn\"\nargs = [\"serve\", \"--debug\"]\n"
+	if err := os.WriteFile(filepath.Join(home, ".codex/config.toml"), []byte(pre), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := InstallSkill(&buf); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(filepath.Join(home, ".codex/config.toml"))
+	if string(got) != pre {
+		t.Fatalf("installer overwrote a user-customised section\nwant: %q\ngot:  %q", pre, got)
+	}
+}
+
+// TOML appends should leave the file with exactly one trailing newline at the
+// end of the new section regardless of whether the original ended in a newline.
+func TestInstallSkillTOMLAppendsCleanly(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	cases := []string{
+		"",                              // empty file
+		"key = 1\n",                     // ends with newline
+		"key = 1",                       // missing trailing newline
+		"# header\n\n[other]\nx = 1\n",  // multi-section
+	}
+	for _, pre := range cases {
+		path := filepath.Join(home, ".codex/config.toml")
+		if err := os.WriteFile(path, []byte(pre), 0644); err != nil {
+			t.Fatal(err)
+		}
+		var buf bytes.Buffer
+		if err := InstallSkill(&buf); err != nil {
+			t.Fatalf("with prefix %q: %v", pre, err)
+		}
+		got, _ := os.ReadFile(path)
+		if !bytes.Contains(got, []byte("[mcp_servers.grpvn]")) {
+			t.Fatalf("with prefix %q: section not appended: %q", pre, got)
+		}
+		if !bytes.HasSuffix(got, []byte("\n")) {
+			t.Fatalf("with prefix %q: result should end with newline: %q", pre, got)
+		}
+	}
+}
