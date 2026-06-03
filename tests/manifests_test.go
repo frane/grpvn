@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -135,4 +136,47 @@ func repoRoot(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return filepath.Dir(wd)
+}
+
+// Codex CLI and the generic ~/.agents skill loader both require YAML
+// frontmatter at the top of SKILL.md. They warn loudly when it's missing.
+// Both copies of the canonical SKILL.md (the one shipped in skills/, the one
+// embedded into the binary, and the one bundled with the plugin) must carry
+// it. Reported by Codex: "missing YAML frontmatter delimited by ---".
+func TestSkillMDHasYAMLFrontmatter(t *testing.T) {
+	root := repoRoot(t)
+	for _, p := range []string{
+		"skills/grpvn/SKILL.md",
+		"internal/embedded/SKILL.md",
+		"plugin/skills/grpvn/SKILL.md",
+	} {
+		t.Run(p, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(root, p))
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := string(data)
+			if !strings.HasPrefix(s, "---\n") {
+				t.Fatalf("%s must start with --- frontmatter delimiter; first 40 bytes: %q", p, s[:min(40, len(s))])
+			}
+			// Frontmatter must close.
+			end := strings.Index(s[4:], "\n---\n")
+			if end < 0 {
+				t.Fatalf("%s has opening --- but no closing ---", p)
+			}
+			head := s[4 : 4+end]
+			for _, key := range []string{"name:", "version:", "binary:", "description:"} {
+				if !strings.Contains(head, key) {
+					t.Fatalf("%s frontmatter missing %s\n%s", p, key, head)
+				}
+			}
+		})
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

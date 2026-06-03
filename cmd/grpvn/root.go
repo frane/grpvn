@@ -28,7 +28,7 @@ var (
 	statePathFlag, asFlag, colorFlag string
 	humanFlag, fullFlag, tsFlag      bool
 	countFlag                        int
-	version                          = "0.1.3"
+	version                          = "0.1.4"
 )
 
 func Execute() {
