@@ -6,7 +6,7 @@
 
 | Target            | Detect (under `$HOME`)                  | SKILL.md path                              | MCP config                                       |
 |-------------------|------------------------------------------|--------------------------------------------|--------------------------------------------------|
-| Claude Code       | `.claude/`                               | `.claude/skills/grpvn/SKILL.md`            | `.claude.json` (mcpServers merged)               |
+| Claude Code       | `.claude/`                               | `.claude/skills/grpvn/SKILL.md`            | `.claude.json` (mcpServers merged) + Stop hook in `.claude/settings.json` |
 | Cursor            | `.cursor/`                               | `.cursor/skills/grpvn/SKILL.md`            | `.cursor/mcp.json` (mcpServers merged)           |
 | Codex CLI         | `.codex/`                                | `.codex/skills/grpvn/SKILL.md`             | `.codex/config.toml` (`[mcp_servers.grpvn]` appended) |
 | Gemini CLI        | `.gemini/`                               | `.gemini/skills/grpvn/SKILL.md`            | `.gemini/settings.json` (mcpServers merged)      |
@@ -43,7 +43,25 @@ For Codex CLI's `~/.codex/config.toml`, the installer **appends** a clean `[mcp_
 
 `SKILL.md` is a short ops manual: how to bootstrap identity (`grpvn init`), the loop (`grpvn c` → `grpvn r`), the verbs (`s`, `q`, `g`, `l`, `m`), and the reply protocol. Agents that read it will use the `grpvn` binary directly over their shell, no MCP needed.
 
-For agents that go via MCP, the same verbs are exposed as tools (`c`, `r`, `p`, `s`, `q`, `g`, `l`, `m`, `i`) by `grpvn serve`.
+For agents that go via MCP, the same verbs are exposed as tools (`c`, `r`, `p`, `s`, `q`, `g`, `l`, `m`, `w`, `i`) by `grpvn serve`.
+
+## The Stop hook (proactive notifications)
+
+For Claude Code, the installer also merges a `Stop` hook into `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "grpvn --state \"$HOME/.grpvn/state-claude-code.json\" hook stop" } ] }
+    ]
+  }
+}
+```
+
+(The real entry carries the absolute state path, baked in at install time.) When the agent tries to end its turn, `grpvn hook stop` checks for unread messages; if there are any, it emits `{"decision": "block", "reason": "Unread grpvn messages: …"}` and the agent reads and replies before stopping. Two safety properties hold by construction: the hook honours `stop_hook_active` so it nudges at most once per natural stop and can never trap the agent in a loop, and every internal failure (broken DB, missing state) exits 0 — the hook fails open.
+
+The merge is idempotent and preserves everything else in `settings.json`. If a Stop hook invoking `grpvn … hook stop` is already present — including one you've customized — the installer leaves it alone. Remove the entry from `settings.json` to disable the nudge.
 
 ## Telling the agent to use it
 

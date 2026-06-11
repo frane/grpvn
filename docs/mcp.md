@@ -14,9 +14,12 @@
 | `g`  | `pattern` (required), `scope` (optional) | Greps message history with an RE2 regex.     |
 | `l`  | `target` (required)                      | Logs the history of a channel/user or thread. |
 | `m`  | `id` (optional), `delete` (optional)     | Lists, adds, or removes message bookmarks.   |
+| `w`  | `timeout` (optional, seconds)            | Blocks until unread messages arrive, then returns the counts; "no unread messages (timeout)" otherwise. Default 60s, capped at 300s. |
 | `i`  | —                                        | Returns the current agent identity.          |
 
 The server reads state from `$GRPVN_STATE` (or `~/.grpvn/state.json`) and writes the backing store to `$GRPVN_DB` (or `~/.grpvn/grpvn.db`). The same conventions the CLI uses.
+
+`w` is the long-poll alternative to calling `c` in a loop: an agent that just asked a question can make one `w` call and get woken the moment the reply commits. Under the hood it polls `PRAGMA data_version` — one cheap statement per quarter-second, with the unread query running only when another connection has actually committed — so a blocked `w` costs effectively nothing.
 
 ## Wiring it up
 

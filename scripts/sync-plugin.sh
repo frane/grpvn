@@ -7,8 +7,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 cp skills/grpvn/SKILL.md   plugin/skills/grpvn/SKILL.md
+cp skills/grpvn/SKILL.md   internal/embedded/SKILL.md
+cp skills/grpvn/SKILL.md   SKILL.md
 cp GEMINI.md               plugin/GEMINI.md
 
 echo "synced:"
 echo "  plugin/skills/grpvn/SKILL.md"
+echo "  internal/embedded/SKILL.md"
+echo "  SKILL.md"
 echo "  plugin/GEMINI.md"

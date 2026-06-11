@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -32,6 +33,10 @@ type patternArgs struct {
 type markArgs struct {
 	ID     string `json:"id"`
 	Delete bool   `json:"delete"`
+}
+
+type waitArgs struct {
+	Timeout float64 `json:"timeout"`
 }
 
 func ServeMCP(name, version string, b Bootstrap) error {
@@ -232,6 +237,39 @@ func ServeMCP(name, version string, b Bootstrap) error {
 			}
 			if buf.Len() == 0 {
 				return mcp.NewToolResultText("ok"), nil
+			}
+			return mcp.NewToolResultText(buf.String()), nil
+		})
+
+	s.AddTool(tool("w", "Waits until unread messages arrive, then returns the counts. Long-poll alternative to calling c in a loop",
+		mcp.WithNumber("timeout", mcp.Description("Seconds to wait before giving up (default 60, max 300)"))),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			db, err := OpenDB()
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			defer db.Close()
+			var args waitArgs
+			data, _ := json.Marshal(req.Params.Arguments)
+			_ = json.Unmarshal(data, &args)
+			timeout := time.Duration(args.Timeout * float64(time.Second))
+			if timeout <= 0 {
+				timeout = 60 * time.Second
+			}
+			if timeout > 300*time.Second {
+				timeout = 300 * time.Second
+			}
+			load := func() (*State, error) {
+				_, st, err := b()
+				return st, err
+			}
+			var buf bytes.Buffer
+			code, err := Wait(ctx, &buf, db, load, timeout, 250*time.Millisecond)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if code == 2 {
+				return mcp.NewToolResultText("no unread messages (timeout)"), nil
 			}
 			return mcp.NewToolResultText(buf.String()), nil
 		})

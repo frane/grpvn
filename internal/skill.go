@@ -29,6 +29,7 @@ type Target struct {
 	Skill     string // path under HOME where SKILL.md is written
 	MCP       string // path under HOME of the JSON config that holds mcpServers (empty = skip)
 	MCPTOML   string // path under HOME of the TOML config that holds [mcp_servers.<name>] (empty = skip)
+	Hooks     string // path under HOME of the settings JSON that takes Claude-Code-style hooks (empty = skip)
 }
 
 // HomeTargets enumerates the supported integrations. Paths are relative to the
@@ -41,6 +42,7 @@ func HomeTargets() []Target {
 			DetectDir: ".claude",
 			Skill:     ".claude/skills/grpvn/SKILL.md",
 			MCP:       ".claude.json",
+			Hooks:     ".claude/settings.json",
 		},
 		{
 			Name:      "Cursor",
@@ -108,10 +110,11 @@ func installSkillFromHome(w io.Writer, homeOverride string, forceAll bool) error
 		home = h
 	}
 	var (
-		lastErr  error
-		written  []string
-		skipped  []string
-		mcpAdded []string
+		lastErr    error
+		written    []string
+		skipped    []string
+		mcpAdded   []string
+		hooksAdded []string
 	)
 	for _, t := range HomeTargets() {
 		detect := filepath.Join(home, t.DetectDir)
@@ -155,14 +158,34 @@ func installSkillFromHome(w io.Writer, homeOverride string, forceAll bool) error
 				mcpAdded = append(mcpAdded, fmt.Sprintf("%s: %s", t.Name, tomlPath))
 			}
 		}
+		if t.Hooks != "" {
+			hooksPath := filepath.Join(home, t.Hooks)
+			// The hook command carries the same per-agent state file the MCP
+			// entry gets via env, so the unread check sees the runtime's own
+			// cursors. Hooks run through the shell with the session env, not
+			// the MCP server's, so the path is baked in.
+			command := fmt.Sprintf(`grpvn --state "%s" hook stop`, statePath)
+			added, err := mergeStopHook(hooksPath, command)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if added {
+				hooksAdded = append(hooksAdded, fmt.Sprintf("%s: %s", t.Name, hooksPath))
+			}
+		}
 	}
 	sort.Strings(written)
 	sort.Strings(mcpAdded)
+	sort.Strings(hooksAdded)
 	for _, line := range written {
 		fmt.Fprintf(w, "skill   %s\n", line)
 	}
 	for _, line := range mcpAdded {
 		fmt.Fprintf(w, "mcp     %s\n", line)
+	}
+	for _, line := range hooksAdded {
+		fmt.Fprintf(w, "hook    %s\n", line)
 	}
 	if !forceAll {
 		for _, s := range skipped {
@@ -241,6 +264,68 @@ func mergeMCP(path, name, command string, args []string, env map[string]string) 
 // only one canonical shape for an MCP server entry, so blind append-if-absent
 // is safe enough and dodges every "preserve comments / preserve ordering"
 // TOML-parser headache.
+// mergeStopHook registers a Stop hook in a Claude-Code-style settings JSON
+// (hooks.Stop is a list of matcher groups, each holding a list of command
+// hooks). It is idempotent: if any existing Stop hook command already
+// invokes `grpvn` with `hook stop`, the file is left untouched and
+// (false, nil) is returned — including when the user has customized the
+// command (different --state path, wrapper script). Every other key in the
+// settings document is preserved, and the write is atomic.
+func mergeStopHook(path, command string) (bool, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return false, fmt.Errorf("create config dir: %w", err)
+	}
+	var doc map[string]interface{}
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil && len(data) > 0:
+		if err := json.Unmarshal(data, &doc); err != nil {
+			return false, fmt.Errorf("parse %s: %w", path, err)
+		}
+	case err != nil && !os.IsNotExist(err):
+		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+	if doc == nil {
+		doc = map[string]interface{}{}
+	}
+	hooks, _ := doc["hooks"].(map[string]interface{})
+	if hooks == nil {
+		hooks = map[string]interface{}{}
+	}
+	stops, _ := hooks["Stop"].([]interface{})
+	for _, group := range stops {
+		g, _ := group.(map[string]interface{})
+		entries, _ := g["hooks"].([]interface{})
+		for _, entry := range entries {
+			e, _ := entry.(map[string]interface{})
+			c, _ := e["command"].(string)
+			if strings.Contains(c, "grpvn") && strings.Contains(c, "hook stop") {
+				return false, nil
+			}
+		}
+	}
+	stops = append(stops, map[string]interface{}{
+		"hooks": []interface{}{
+			map[string]interface{}{"type": "command", "command": command},
+		},
+	})
+	hooks["Stop"] = stops
+	doc["hooks"] = hooks
+	encoded, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return false, fmt.Errorf("encode %s: %w", path, err)
+	}
+	tmp := fmt.Sprintf("%s.tmp.%d", path, os.Getpid())
+	if err := os.WriteFile(tmp, encoded, 0644); err != nil {
+		return false, fmt.Errorf("write %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return false, fmt.Errorf("rename %s: %w", path, err)
+	}
+	return true, nil
+}
+
 func mergeMCPTOML(path, name, command string, args []string, env map[string]string) (bool, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return false, fmt.Errorf("create config dir: %w", err)
