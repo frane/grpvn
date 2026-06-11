@@ -295,6 +295,11 @@ func TestBootstrapSurfacesSaveErrors(t *testing.T) {
 		// exercised by linux/macos runs.
 		t.Skip("cannot force a write failure via os.Chmod on Windows")
 	}
+	if os.Geteuid() == 0 {
+		// Root bypasses file-mode checks, so the 0500 directory below
+		// stays writable and the save we want to force-fail succeeds.
+		t.Skip("cannot force a write failure when running as root")
+	}
 	// Point GRPVN_STATE at a path inside a read-only directory.
 	roDir := t.TempDir()
 	if err := os.Chmod(roDir, 0500); err != nil {

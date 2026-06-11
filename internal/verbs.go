@@ -119,13 +119,10 @@ func Send(db *sql.DB, sender string, targetArg string, bodyArg string, defaultCh
 	if err != nil {
 		return err
 	}
-	var body []byte
-	if bodyArg == "-" {
-		body, _ = io.ReadAll(os.Stdin)
-	} else {
-		body = []byte(bodyArg)
-	}
-	m := NewMessage(sender, target, body)
+	// The body arrives literal. Stdin expansion of "-" happens in the CLI
+	// layer only: when this runs inside `grpvn serve`, stdin is the MCP
+	// JSON-RPC transport and reading it here would hang the server.
+	m := NewMessage(sender, target, []byte(bodyArg))
 	if parent != nil {
 		if parent.ChainDepth+1 > 8 {
 			return fmt.Errorf("chain depth limit reached (8)")
@@ -165,7 +162,10 @@ func Grep(w io.Writer, db *sql.DB, name string, follow []string, pattern string,
 		return err
 	}
 	defer rows.Close()
-	re, _ := regexp.Compile(pattern)
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return fmt.Errorf("invalid pattern: %w", err)
+	}
 	count := 0
 	for rows.Next() {
 		var m Message
