@@ -11,7 +11,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const CurrentSchemaVersion = 1
+// CurrentSchemaVersion is 2: messages gained an explicit seq INTEGER
+// PRIMARY KEY AUTOINCREMENT and read cursors moved from state.json into the
+// cursors table. See schema.go for why.
+const CurrentSchemaVersion = 2
 
 func dbPath() (string, error) {
 	if env := os.Getenv("GRPVN_DB"); env != "" {
@@ -63,25 +66,92 @@ func Migrate(db *sql.DB) error {
 	// A short backoff per attempt is plenty: WAL only gets set once per DB.
 	const attempts = 8
 	for attempt := 0; attempt < attempts; attempt++ {
-		if _, err := db.Exec(Schema); err != nil {
-			if attempt+1 < attempts && strings.Contains(err.Error(), "database is locked") {
-				time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond)
-				continue
-			}
-			return fmt.Errorf("apply schema: %w", err)
+		err := migrateOnce(db)
+		if err == nil {
+			return nil
 		}
-		break
+		if attempt+1 < attempts && strings.Contains(err.Error(), "database is locked") {
+			time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond)
+			continue
+		}
+		return err
+	}
+	return nil
+}
+
+func migrateOnce(db *sql.DB) error {
+	// A v1 store predates the seq column, so the v2 CREATE TABLE IF NOT
+	// EXISTS would no-op against the old shape. Detect v1 BEFORE applying
+	// the base schema: the rebuild below replaces the table wholesale.
+	var hasMessages, hasSeq bool
+	if err := db.QueryRow(
+		"SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'messages'",
+	).Scan(&hasMessages); err != nil {
+		return fmt.Errorf("inspect schema: %w", err)
+	}
+	if hasMessages {
+		if err := db.QueryRow(
+			"SELECT COUNT(*) > 0 FROM pragma_table_info('messages') WHERE name = 'seq'",
+		).Scan(&hasSeq); err != nil {
+			return fmt.Errorf("inspect messages shape: %w", err)
+		}
+	}
+
+	if hasMessages && !hasSeq {
+		// v1 -> v2: rebuild messages with the seq column. Foreign keys must
+		// be off for the rebuild — marks rows reference messages(id), and
+		// with enforcement on, DROP TABLE messages performs an implicit
+		// DELETE that the marks FK rejects. The pragma is per-connection and
+		// cannot run inside a transaction; MaxOpenConns(1) guarantees the
+		// transaction below lands on the same connection.
+		if _, err := db.Exec("PRAGMA foreign_keys = OFF"); err != nil {
+			return fmt.Errorf("disable fk for migration: %w", err)
+		}
+		err := func() error {
+			tx, err := db.Begin()
+			if err != nil {
+				return fmt.Errorf("begin v1->v2: %w", err)
+			}
+			defer tx.Rollback()
+			// Re-check inside the transaction: a sibling process may have
+			// completed the rebuild while we waited on the write lock.
+			var stillV1 bool
+			if err := tx.QueryRow(
+				"SELECT COUNT(*) = 0 FROM pragma_table_info('messages') WHERE name = 'seq'",
+			).Scan(&stillV1); err != nil {
+				return fmt.Errorf("recheck v1: %w", err)
+			}
+			if stillV1 {
+				if _, err := tx.Exec(migrateV1toV2); err != nil {
+					return fmt.Errorf("rebuild messages v1->v2: %w", err)
+				}
+				if _, err := tx.Exec(
+					"INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
+					2, time.Now().UnixMilli(),
+				); err != nil {
+					return fmt.Errorf("record schema_version 2: %w", err)
+				}
+			}
+			return tx.Commit()
+		}()
+		if _, fkErr := db.Exec("PRAGMA foreign_keys = ON"); fkErr != nil && err == nil {
+			err = fmt.Errorf("re-enable fk after migration: %w", fkErr)
+		}
+		if err != nil {
+			return err
+		}
+	}
+
+	if _, err := db.Exec(Schema); err != nil {
+		return fmt.Errorf("apply schema: %w", err)
 	}
 	var current int
-	err := db.QueryRow("SELECT COALESCE(MAX(version), 0) FROM schema_version").Scan(&current)
-	if err != nil {
+	if err := db.QueryRow("SELECT COALESCE(MAX(version), 0) FROM schema_version").Scan(&current); err != nil {
 		return fmt.Errorf("read schema_version: %w", err)
 	}
 	if current < CurrentSchemaVersion {
 		// OR IGNORE so concurrent first-time migrations across processes race
-		// harmlessly: one wins, the rest no-op. (Without this, two processes
-		// both observing current=0 each attempted the INSERT and one hit
-		// SQLITE_CONSTRAINT on the schema_version PRIMARY KEY.)
+		// harmlessly: one wins, the rest no-op.
 		if _, err := db.Exec(
 			"INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
 			CurrentSchemaVersion, time.Now().UnixMilli(),

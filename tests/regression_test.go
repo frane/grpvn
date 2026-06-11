@@ -261,7 +261,8 @@ func TestLegacyCursorAppliesToAllTargets(t *testing.T) {
 		t.Fatalf("expected '1 #ops' and '1 @me'; got %q", out)
 	}
 
-	// After a read, the file must have migrated to the cursors map.
+	// Since schema v2 cursors live in the database; touching the store must
+	// migrate the legacy scalar out of state.json entirely.
 	if _, code = runReader("r"); code != 0 {
 		t.Fatalf("r should succeed; got %d", code)
 	}
@@ -277,10 +278,14 @@ func TestLegacyCursorAppliesToAllTargets(t *testing.T) {
 		t.Fatalf("migrated state must be valid JSON: %v\n%s", err, migrated)
 	}
 	if doc.Cursor != "" {
-		t.Fatalf("after read+save, legacy scalar cursor should be cleared; got %q", doc.Cursor)
+		t.Fatalf("after read, legacy scalar cursor should be cleared; got %q", doc.Cursor)
 	}
-	if len(doc.Cursors) == 0 {
-		t.Fatalf("after read+save, cursors map should be populated; got %#v", doc.Cursors)
+	if len(doc.Cursors) != 0 {
+		t.Fatalf("v2 state.json must not carry cursors (they live in the DB); got %#v", doc.Cursors)
+	}
+	// And the read must actually have consumed everything.
+	if _, code = runReader("c"); code != 2 {
+		t.Fatalf("after migrating + reading, c should report nothing unread; got %d", code)
 	}
 }
 

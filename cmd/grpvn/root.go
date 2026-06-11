@@ -11,7 +11,17 @@ import (
 
 var versionCmd = &cobra.Command{
 	Use: "version",
-	Run: func(cmd *cobra.Command, args []string) { fmt.Println(version) },
+	Run: func(cmd *cobra.Command, args []string) {
+		out := version
+		if commit != "" {
+			out += " (" + commit
+			if date != "" {
+				out += ", " + date
+			}
+			out += ")"
+		}
+		fmt.Println(out)
+	},
 }
 
 var rootCmd = &cobra.Command{
@@ -28,7 +38,11 @@ var (
 	statePathFlag, asFlag, colorFlag string
 	humanFlag, fullFlag, tsFlag      bool
 	countFlag                        int
-	version                          = "0.1.4"
+
+	// Overridden by goreleaser via -X main.version / main.commit / main.date.
+	version = "0.2.0-dev"
+	commit  = ""
+	date    = ""
 )
 
 func Execute() {

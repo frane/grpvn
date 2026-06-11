@@ -23,6 +23,7 @@ var ulidEntropy = &ulid.LockedMonotonicReader{
 }
 
 type Message struct {
+	Seq         int64 // commit-ordered sequence; 0 until saved/loaded
 	ID          string
 	Sender      string
 	Target      string
@@ -49,9 +50,15 @@ func NewMessage(sender, target string, body []byte) *Message {
 }
 
 func (m *Message) Save(db *sql.DB) error {
-	_, err := db.Exec("INSERT INTO messages (id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+	res, err := db.Exec("INSERT INTO messages (id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		m.ID, m.Sender, m.Target, m.Body, m.ChainRoot, m.ChainDepth, m.ParentID, m.Correlation, m.CreatedAt)
-	return err
+	if err != nil {
+		return err
+	}
+	if seq, err := res.LastInsertId(); err == nil {
+		m.Seq = seq
+	}
+	return nil
 }
 
 var ulidPrefixRegex = regexp.MustCompile("^[0-9A-HJKMNP-TV-Z]{6,26}$")
