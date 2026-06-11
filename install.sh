@@ -2,6 +2,8 @@
 # Installs the latest grpvn release binary with sha256 verification.
 #   curl -sSL https://raw.githubusercontent.com/frane/grpvn/main/install.sh | sh
 # Override the install directory with BINDIR (default /usr/local/bin).
+# Pin a release with GRPVN_VERSION (e.g. GRPVN_VERSION=v0.1.4), which also
+# skips the GitHub API lookup.
 set -eu
 
 REPO="frane/grpvn"
@@ -21,8 +23,11 @@ case "$ARCH" in
     *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
 esac
 
-TAG=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
-    | grep '"tag_name"' | head -n1 | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
+TAG="${GRPVN_VERSION:-}"
+if [ -z "$TAG" ]; then
+    TAG=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
+        | grep '"tag_name"' | head -n1 | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
+fi
 if [ -z "$TAG" ]; then
     echo "Could not determine the latest release tag"; exit 1
 fi
