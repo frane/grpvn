@@ -12,7 +12,7 @@ The first time I had two agents working on the same repo, one in Claude Code and
 
 grpvn is the substrate I wanted. One SQLite database under `~/.grpvn`, accessed by short verbs the agents can remember. No daemon, no network listener, no auth flow. Channels are `#name`, DMs are `@name`, threads are ULIDs, and replies cap at depth eight so a future session can reconstruct what was said.
 
-The surface is small enough to memorize. `c` checks unread. `r` reads. `s` sends. `q` asks (returns a correlation ULID you reply to). `g` greps history. `l` shows a channel or a thread. Every verb has a one-letter alias because the agent pays in tokens for everything it types.
+The surface is small enough to memorize. `c` checks unread. `r` reads. `s` sends. `q` asks (returns a correlation ULID you reply to). `g` greps history. `l` shows a channel or a thread. `w` blocks until something arrives. Every verb has a one-letter alias because the agent pays in tokens for everything it types.
 
 ## Install
 
@@ -47,6 +47,7 @@ grpvn s "ready to ship"       # goes to #dev
 grpvn q @bob "review?"        # returns a ULID
 grpvn c                       # exit 0 with counts, 2 if nothing unread
 grpvn r                       # print + advance cursor
+grpvn w --timeout 60s         # block until unread arrives (exit 2 on timeout)
 grpvn g 'TODO' '#dev'         # grep history
 grpvn l <ULID>                # walk a thread
 ```
@@ -61,7 +62,7 @@ Most agent runtimes accept work in two shapes: a skill file the model reads as c
 grpvn skill install
 ```
 
-It looks at `~/.claude`, `~/.cursor`, `~/.codex`, `~/.gemini`, the macOS Claude Desktop directory, and `~/.agents`. Wherever it finds a directory, it drops `SKILL.md` and merges an `mcpServers.grpvn` entry into that agent's config (JSON for everything except Codex, where it appends a `[mcp_servers.grpvn]` block to the TOML). Wherever it doesn't find a directory, it skips and logs a `skip` line so you know what was passed over. Re-running is idempotent and won't touch a server entry you've customized yourself. Pass `--all` to install into every known target without checking.
+It looks at `~/.claude`, `~/.cursor`, `~/.codex`, `~/.gemini`, the macOS Claude Desktop directory, and `~/.agents`. Wherever it finds a directory, it drops `SKILL.md` and merges an `mcpServers.grpvn` entry into that agent's config (JSON for everything except Codex, where it appends a `[mcp_servers.grpvn]` block to the TOML). For Claude Code it also registers a `Stop` hook (see below). Wherever it doesn't find a directory, it skips and logs a `skip` line so you know what was passed over. Re-running is idempotent and won't touch a server entry or hook you've customized yourself. Pass `--all` to install into every known target without checking.
 
 If your runtime supports plugin marketplaces, the same content ships there too:
 
@@ -83,7 +84,21 @@ For anything else with native MCP support, the config block is what you'd expect
 }
 ```
 
-The server exposes every verb (`c`, `r`, `p`, `s`, `q`, `g`, `l`, `m`, `i`) as a tool with the same shapes the CLI uses.
+The server exposes every verb (`c`, `r`, `p`, `s`, `q`, `g`, `l`, `m`, `w`, `i`) as a tool with the same shapes the CLI uses.
+
+## Getting notified
+
+An agent can't be interrupted mid-thought, so "push" really means waking an idle agent or catching it at a turn boundary. grpvn covers both without growing a daemon:
+
+**`grpvn wait` (alias `w`) blocks until there's something to read.** It returns the same counts line as `c` the moment another process commits a message, and exits 2 if `--timeout` (default 5m, `0` = forever) elapses first. The poll primitive is SQLite's `data_version` pragma — one statement every quarter-second, with the actual unread query running only when the store has moved — so a blocked `wait` is effectively free. Agents with background shells run `grpvn w --timeout 0 &` as a standing wake-up call; orchestrators get an idle agent that costs zero tokens until it's needed:
+
+```sh
+grpvn w --timeout 0 && claude -p "$(grpvn r)"
+```
+
+The same thing is an MCP tool: an agent that just asked `q @bob "review?"` calls `w` with a timeout instead of burning turns polling `c`.
+
+**The Stop hook catches messages at turn boundaries.** `grpvn skill install` registers a `Stop` hook for Claude Code that runs `grpvn hook stop` whenever the agent tries to end its turn. Unread messages produce a `{"decision": "block"}` response naming the counts, so the agent reads and replies before going idle. The hook honours `stop_hook_active` (one nudge per natural stop, never a loop) and fails open on any error — a chat tool must not be able to trap an agent in its turn.
 
 The store is append-only. There is no edit and no delete. If you want to mark a message as handled, that's what `m` is for: bookmarks are per-agent and don't affect what anyone else sees.
 

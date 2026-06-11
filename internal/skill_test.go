@@ -385,3 +385,84 @@ func TestInstallSkillTOMLAppendsCleanly(t *testing.T) {
 		}
 	}
 }
+
+// The Claude Code target gets a Stop hook that blocks stopping while unread
+// messages exist. The merge must preserve existing settings, bake the
+// per-agent state path into the command, and be idempotent — including when
+// the user has customized the command.
+func TestInstallSkillAddsClaudeStopHook(t *testing.T) {
+	home := t.TempDir()
+	setHome(t, home)
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"model":"opus"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := InstallSkill(&buf); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if !strings.Contains(buf.String(), "hook    Claude Code") {
+		t.Fatalf("expected hook line in output: %q", buf.String())
+	}
+
+	type settings struct {
+		Model string `json:"model"`
+		Hooks map[string][]struct {
+			Hooks []struct {
+				Type    string `json:"type"`
+				Command string `json:"command"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	read := func() settings {
+		t.Helper()
+		data, err := os.ReadFile(settingsPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var s settings
+		if err := json.Unmarshal(data, &s); err != nil {
+			t.Fatalf("settings.json no longer parses: %v\n%s", err, data)
+		}
+		return s
+	}
+
+	s := read()
+	if s.Model != "opus" {
+		t.Fatalf("existing settings key clobbered: %#v", s)
+	}
+	if len(s.Hooks["Stop"]) != 1 || len(s.Hooks["Stop"][0].Hooks) != 1 {
+		t.Fatalf("expected exactly one Stop hook entry: %#v", s.Hooks)
+	}
+	h := s.Hooks["Stop"][0].Hooks[0]
+	if h.Type != "command" {
+		t.Fatalf("hook type should be command, got %q", h.Type)
+	}
+	if !strings.Contains(h.Command, "hook stop") || !strings.Contains(h.Command, "state-claude-code.json") {
+		t.Fatalf("hook command should run grpvn hook stop with the per-agent state file, got %q", h.Command)
+	}
+
+	// Re-running install must not duplicate the hook.
+	if err := InstallSkill(&bytes.Buffer{}); err != nil {
+		t.Fatalf("re-install: %v", err)
+	}
+	if s := read(); len(s.Hooks["Stop"]) != 1 {
+		t.Fatalf("re-install duplicated the Stop hook: %#v", s.Hooks)
+	}
+
+	// A user-customized grpvn hook command is respected as-is.
+	custom := []byte(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/opt/grpvn --state /elsewhere.json hook stop"}]}]}}`)
+	if err := os.WriteFile(settingsPath, custom, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := InstallSkill(&bytes.Buffer{}); err != nil {
+		t.Fatalf("install over custom hook: %v", err)
+	}
+	if s := read(); len(s.Hooks["Stop"]) != 1 || !strings.Contains(s.Hooks["Stop"][0].Hooks[0].Command, "/opt/grpvn") {
+		t.Fatalf("customized hook should be left untouched: %#v", s.Hooks)
+	}
+}

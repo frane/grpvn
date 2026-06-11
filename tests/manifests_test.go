@@ -111,6 +111,8 @@ func TestPluginSkillContentMatchesCanonical(t *testing.T) {
 	root := repoRoot(t)
 	pairs := [][2]string{
 		{"skills/grpvn/SKILL.md", "plugin/skills/grpvn/SKILL.md"},
+		{"skills/grpvn/SKILL.md", "internal/embedded/SKILL.md"},
+		{"skills/grpvn/SKILL.md", "SKILL.md"},
 		{"GEMINI.md", "plugin/GEMINI.md"},
 	}
 	for _, pair := range pairs {
