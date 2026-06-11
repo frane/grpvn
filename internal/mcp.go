@@ -3,7 +3,7 @@ package internal
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"database/sql"
 	"fmt"
 	"os"
 	"time"
@@ -46,12 +46,27 @@ func ServeMCP(name, version string, b Bootstrap) error {
 		return mcp.NewTool(n, append([]mcp.ToolOption{mcp.WithDescription(desc)}, opts...)...)
 	}
 
-	s.AddTool(tool("c", "Counts unread messages"), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		_, st, err := b()
+	// open is the shared preamble: identity, DB, and the one-time move of
+	// pre-v2 cursors from state.json into the cursors table. The caller
+	// owns closing the DB.
+	open := func() (string, *State, *sql.DB, error) {
+		n, st, err := b()
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return "", nil, nil, err
 		}
 		db, err := OpenDB()
+		if err != nil {
+			return "", nil, nil, err
+		}
+		if err := MigrateLegacyCursors(db, st, statePath()); err != nil {
+			db.Close()
+			return "", nil, nil, err
+		}
+		return n, st, db, nil
+	}
+
+	s.AddTool(tool("c", "Counts unread messages"), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		_, st, db, err := open()
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
@@ -68,11 +83,7 @@ func ServeMCP(name, version string, b Bootstrap) error {
 	})
 
 	s.AddTool(tool("r", "Reads unread messages and advances the cursor"), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		_, st, err := b()
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		db, err := OpenDB()
+		_, st, db, err := open()
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
@@ -85,18 +96,11 @@ func ServeMCP(name, version string, b Bootstrap) error {
 		if code == 2 {
 			return mcp.NewToolResultText("no unread messages"), nil
 		}
-		if err := st.Save(statePath()); err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("save state: %v", err)), nil
-		}
 		return mcp.NewToolResultText(buf.String()), nil
 	})
 
 	s.AddTool(tool("p", "Peeks at unread messages without advancing"), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		_, st, err := b()
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		db, err := OpenDB()
+		_, st, db, err := open()
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
@@ -116,19 +120,16 @@ func ServeMCP(name, version string, b Bootstrap) error {
 		mcp.WithString("target", mcp.Description("Channel #name, @user, or parent ULID")),
 		mcp.WithString("body", mcp.Description("Message content"), mcp.Required())),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			n, st, err := b()
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+			var args sendArgs
+			if err := req.BindArguments(&args); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("invalid arguments: %v", err)), nil
 			}
-			db, err := OpenDB()
+			n, st, db, err := open()
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			defer db.Close()
-			var args sendArgs
-			data, _ := json.Marshal(req.Params.Arguments)
-			_ = json.Unmarshal(data, &args)
-			if err := Send(db, n, args.Target, args.Body, st.DefaultChannel, false); err != nil {
+			if _, err := Send(db, n, args.Target, args.Body, st.DefaultChannel, false); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			return mcp.NewToolResultText("sent"), nil
@@ -138,33 +139,17 @@ func ServeMCP(name, version string, b Bootstrap) error {
 		mcp.WithString("target", mcp.Description("Channel #name, @user, or parent ULID"), mcp.Required()),
 		mcp.WithString("body", mcp.Description("Message content"), mcp.Required())),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			n, st, err := b()
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+			var args sendArgs
+			if err := req.BindArguments(&args); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("invalid arguments: %v", err)), nil
 			}
-			db, err := OpenDB()
+			n, st, db, err := open()
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			defer db.Close()
-			var args sendArgs
-			data, _ := json.Marshal(req.Params.Arguments)
-			_ = json.Unmarshal(data, &args)
-			target, parent, err := ResolveTarget(db, args.Target, st.DefaultChannel)
+			m, err := Send(db, n, args.Target, args.Body, st.DefaultChannel, true)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			m := NewMessage(n, target, []byte(args.Body))
-			if parent != nil {
-				if parent.ChainDepth+1 > 8 {
-					return mcp.NewToolResultError("chain depth limit reached (8)"), nil
-				}
-				m.ChainRoot = parent.ChainRoot
-				m.ChainDepth = parent.ChainDepth + 1
-				m.ParentID = &parent.ID
-			}
-			m.Correlation = &m.ID
-			if err := m.Save(db); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			return mcp.NewToolResultText(m.ID), nil
@@ -174,18 +159,15 @@ func ServeMCP(name, version string, b Bootstrap) error {
 		mcp.WithString("pattern", mcp.Description("RE2 pattern"), mcp.Required()),
 		mcp.WithString("scope", mcp.Description("#channel or @user; empty = followed channels and @me"))),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			n, st, err := b()
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+			var args patternArgs
+			if err := req.BindArguments(&args); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("invalid arguments: %v", err)), nil
 			}
-			db, err := OpenDB()
+			n, st, db, err := open()
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			defer db.Close()
-			var args patternArgs
-			data, _ := json.Marshal(req.Params.Arguments)
-			_ = json.Unmarshal(data, &args)
 			var buf bytes.Buffer
 			if err := Grep(&buf, db, n, st.Follow, args.Pattern, args.Scope, 0, st.DefaultChannel, false, false, false, "never"); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -196,18 +178,15 @@ func ServeMCP(name, version string, b Bootstrap) error {
 	s.AddTool(tool("l", "Logs history of a target (#channel/@user) or thread (ULID prefix)",
 		mcp.WithString("target", mcp.Description("#channel, @user, or message ULID prefix"), mcp.Required())),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			n, st, err := b()
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+			var args targetArgs
+			if err := req.BindArguments(&args); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("invalid arguments: %v", err)), nil
 			}
-			db, err := OpenDB()
+			n, st, db, err := open()
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			defer db.Close()
-			var args targetArgs
-			data, _ := json.Marshal(req.Params.Arguments)
-			_ = json.Unmarshal(data, &args)
 			var buf bytes.Buffer
 			if err := Log(&buf, db, n, args.Target, 0, st.DefaultChannel, false, false, false, "never"); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -219,18 +198,15 @@ func ServeMCP(name, version string, b Bootstrap) error {
 		mcp.WithString("id", mcp.Description("Message ULID prefix; empty = list marks")),
 		mcp.WithBoolean("delete", mcp.Description("Remove the mark"))),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			n, st, err := b()
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+			var args markArgs
+			if err := req.BindArguments(&args); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("invalid arguments: %v", err)), nil
 			}
-			db, err := OpenDB()
+			n, st, db, err := open()
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			defer db.Close()
-			var args markArgs
-			data, _ := json.Marshal(req.Params.Arguments)
-			_ = json.Unmarshal(data, &args)
 			var buf bytes.Buffer
 			if err := Mark(&buf, db, n, args.ID, args.Delete, st.DefaultChannel, false, false, false, "never"); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -244,14 +220,15 @@ func ServeMCP(name, version string, b Bootstrap) error {
 	s.AddTool(tool("w", "Waits until unread messages arrive, then returns the counts. Long-poll alternative to calling c in a loop",
 		mcp.WithNumber("timeout", mcp.Description("Seconds to wait before giving up (default 60, max 300)"))),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			db, err := OpenDB()
+			var args waitArgs
+			if err := req.BindArguments(&args); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("invalid arguments: %v", err)), nil
+			}
+			_, _, db, err := open()
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			defer db.Close()
-			var args waitArgs
-			data, _ := json.Marshal(req.Params.Arguments)
-			_ = json.Unmarshal(data, &args)
 			timeout := time.Duration(args.Timeout * float64(time.Second))
 			if timeout <= 0 {
 				timeout = 60 * time.Second

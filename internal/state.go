@@ -7,14 +7,15 @@ import (
 	"path/filepath"
 )
 
-// State is the per-agent identity, follow list, default channel, and
-// per-target read cursors. Persisted as JSON at the path returned by
-// ResolveStatePath — by default $HOME/.grpvn/state.json so the file stays
-// stable across cwds, with $GRPVN_STATE or --state to override per-agent.
+// State is the per-agent identity, follow list, and default channel.
+// Persisted as JSON at the path returned by ResolveStatePath — by default
+// $HOME/.grpvn/state.json so the file stays stable across cwds, with
+// $GRPVN_STATE or --state to override per-agent.
 //
-// Cursor (singular, scalar) is the legacy v0.1.x field; new state files use
-// Cursors. LoadState honours the scalar as a fallback so existing state
-// files keep working through the transition.
+// Read cursors live in the database since schema v2 (see cursors.go).
+// Cursor (the v0.1.x scalar) and Cursors (the v0.1.5 per-target map) are
+// parsed only so MigrateLegacyCursors can move them into the DB; they are
+// cleared on the next save and never written by new code.
 type State struct {
 	Name           string            `json:"name"`
 	Cursor         string            `json:"cursor,omitempty"`
@@ -23,36 +24,11 @@ type State struct {
 	Follow         []string          `json:"follow"`
 }
 
-// CursorFor returns the cursor for a given target (#channel or @user). An
-// absent entry means "never read from this target" which the queries treat
-// as "show me everything".
-func (s *State) CursorFor(target string) string {
-	if s.Cursors != nil {
-		if c, ok := s.Cursors[target]; ok {
-			return c
-		}
-	}
-	// Legacy fallback: a v0.1.x state file has a single scalar applied to
-	// every target. Honour it on first read; SetCursor migrates it across
-	// and clears the scalar on the next save.
-	return s.Cursor
-}
-
-// SetCursor records a per-target cursor. Always migrate via this helper so
-// the legacy scalar field gets cleared once any per-target cursor is set.
-func (s *State) SetCursor(target, id string) {
-	if s.Cursors == nil {
-		s.Cursors = map[string]string{}
-	}
-	s.Cursors[target] = id
-	s.Cursor = ""
-}
-
 func LoadState(path string) (*State, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &State{Follow: []string{}, Cursors: map[string]string{}}, nil
+			return &State{Follow: []string{}}, nil
 		}
 		return nil, fmt.Errorf("read state: %w", err)
 	}
@@ -62,9 +38,6 @@ func LoadState(path string) (*State, error) {
 	}
 	if s.Follow == nil {
 		s.Follow = []string{}
-	}
-	if s.Cursors == nil {
-		s.Cursors = map[string]string{}
 	}
 	return &s, nil
 }

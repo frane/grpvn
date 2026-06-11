@@ -42,12 +42,7 @@ var hookStopCmd = &cobra.Command{
 		if payload.StopHookActive {
 			return
 		}
-		_, st, err := bootstrap()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "grpvn hook stop:", err)
-			return
-		}
-		db, err := internal.OpenDB()
+		_, st, db, err := session()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "grpvn hook stop:", err)
 			return

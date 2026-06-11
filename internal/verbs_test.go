@@ -2,15 +2,28 @@ package internal
 
 import (
 	"bytes"
+	"database/sql"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
+// cursorPos reads an agent's cursor position straight from the cursors
+// table; 0 = no cursor row, everything unread.
+func cursorPos(t *testing.T, db *sql.DB, agent, target string) int64 {
+	t.Helper()
+	var pos int64
+	err := db.QueryRow("SELECT COALESCE(MAX(position), 0) FROM cursors WHERE agent_name = ? AND target = ?", agent, target).Scan(&pos)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pos
+}
+
 func TestCheckEmptyExits2(t *testing.T) {
 	db := newTestDB(t)
 	var buf bytes.Buffer
-	st := &State{Name: "alice", Follow: []string{"#dev"}, Cursors: map[string]string{}}
+	st := &State{Name: "alice", Follow: []string{"#dev"}}
 	code, err := Check(&buf, db, st)
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +47,7 @@ func TestCheckCountsByTarget(t *testing.T) {
 	m4 := NewMessage("bob", "#ops", []byte("d")) // not followed, excluded
 	m4.Save(db)
 
-	st := &State{Name: "alice", Follow: []string{"#dev"}, Cursors: map[string]string{}}
+	st := &State{Name: "alice", Follow: []string{"#dev"}}
 	var buf bytes.Buffer
 	code, err := Check(&buf, db, st)
 	if err != nil {
@@ -59,7 +72,7 @@ func TestReadAdvancesCursor(t *testing.T) {
 	m2 := NewMessage("bob", "#dev", []byte("b"))
 	m2.Save(db)
 
-	st := &State{Name: "alice", Follow: []string{"#dev"}, Cursors: map[string]string{}}
+	st := &State{Name: "alice", Follow: []string{"#dev"}}
 	var buf bytes.Buffer
 	code, err := Read(&buf, db, st, 0, true, false, false, false, "never")
 	if err != nil {
@@ -68,8 +81,8 @@ func TestReadAdvancesCursor(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected exit 0, got %d", code)
 	}
-	if st.CursorFor("#dev") != m2.ID {
-		t.Fatalf("cursor for #dev should advance to %s, got %s", m2.ID, st.CursorFor("#dev"))
+	if pos := cursorPos(t, db, "alice", "#dev"); pos != m2.Seq {
+		t.Fatalf("cursor for #dev should advance to seq %d, got %d", m2.Seq, pos)
 	}
 
 	// Read again — should be empty.
@@ -87,7 +100,7 @@ func TestReadWithoutAdvanceKeepsCursor(t *testing.T) {
 	db := newTestDB(t)
 	m := NewMessage("bob", "#dev", []byte("a"))
 	m.Save(db)
-	st := &State{Name: "alice", Follow: []string{"#dev"}, Cursors: map[string]string{}}
+	st := &State{Name: "alice", Follow: []string{"#dev"}}
 	var buf bytes.Buffer
 	code, err := Read(&buf, db, st, 0, false, false, false, false, "never")
 	if err != nil {
@@ -96,14 +109,14 @@ func TestReadWithoutAdvanceKeepsCursor(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected 0, got %d", code)
 	}
-	if st.CursorFor("#dev") != "" {
-		t.Fatalf("non-advancing read should not modify cursor; got %q", st.CursorFor("#dev"))
+	if pos := cursorPos(t, db, "alice", "#dev"); pos != 0 {
+		t.Fatalf("non-advancing read should not modify cursor; got %d", pos)
 	}
 }
 
 func TestSendToChannel(t *testing.T) {
 	db := newTestDB(t)
-	if err := Send(db, "alice", "#dev", "hello", "", false); err != nil {
+	if _, err := Send(db, "alice", "#dev", "hello", "", false); err != nil {
 		t.Fatal(err)
 	}
 	var count int
@@ -117,7 +130,7 @@ func TestSendReplyChainsToParent(t *testing.T) {
 	db := newTestDB(t)
 	parent := NewMessage("alice", "#dev", []byte("question"))
 	parent.Save(db)
-	if err := Send(db, "bob", parent.ID, "answer", "", false); err != nil {
+	if _, err := Send(db, "bob", parent.ID, "answer", "", false); err != nil {
 		t.Fatal(err)
 	}
 	var depth int
@@ -154,7 +167,7 @@ func TestSendRejectsDepthOverflow(t *testing.T) {
 		current = m
 	}
 	// 9th level should be rejected via Send.
-	err := Send(db, "a", current.ID, "ninth", "", false)
+	_, err := Send(db, "a", current.ID, "ninth", "", false)
 	if err == nil {
 		t.Fatal("expected chain depth error")
 	}

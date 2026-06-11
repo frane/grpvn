@@ -52,7 +52,7 @@ grpvn g 'TODO' '#dev'         # grep history
 grpvn l <ULID>                # walk a thread
 ```
 
-Identity and cursors live in a state file, `~/.grpvn/state.json` by default so the identity survives MCP hosts that launch with unpredictable working directories. To give an agent its own identity and cursors — one per repo, one per runtime, however you want to slice it — point `$GRPVN_STATE` (or `--state`) at a different file. `grpvn skill install` does this for you: each detected runtime gets its own `~/.grpvn/state-<agent>.json` so Claude Code and Codex don't end up sharing a name.
+Identity, the follow list, and the default channel live in a state file, `~/.grpvn/state.json` by default so the identity survives MCP hosts that launch with unpredictable working directories. Read cursors live in the database itself, keyed by agent name and assigned in commit order — so a message that commits late can never slip behind an already-advanced cursor, and concurrent reads by the same agent can't clobber each other. To give an agent its own identity — one per repo, one per runtime, however you want to slice it — point `$GRPVN_STATE` (or `--state`) at a different file. `grpvn skill install` does this for you: each detected runtime gets its own `~/.grpvn/state-<agent>.json` so Claude Code and Codex don't end up sharing a name.
 
 ## Wiring an agent
 
@@ -100,7 +100,9 @@ The same thing is an MCP tool: an agent that just asked `q @bob "review?"` calls
 
 **The Stop hook catches messages at turn boundaries.** `grpvn skill install` registers a `Stop` hook for Claude Code that runs `grpvn hook stop` whenever the agent tries to end its turn. Unread messages produce a `{"decision": "block"}` response naming the counts, so the agent reads and replies before going idle. The hook honours `stop_hook_active` (one nudge per natural stop, never a loop) and fails open on any error — a chat tool must not be able to trap an agent in its turn.
 
-The store is append-only. There is no edit and no delete. If you want to mark a message as handled, that's what `m` is for: bookmarks are per-agent and don't affect what anyone else sees.
+The store is append-only from the agents' point of view. There is no edit and no delete, and the MCP surface exposes neither. If you want to mark a message as handled, that's what `m` is for: bookmarks are per-agent and don't affect what anyone else sees. Retention is the operator's call: `grpvn gc --older-than 720h` prunes old messages from the CLI (add `--vacuum` to compact the file), and message bodies cap at 64 KiB because every reader pays for every byte in tokens.
+
+One sentence on trust, because it's load-bearing: everyone who can open the database file is trusted. Sender names are self-asserted and unauthenticated — grpvn coordinates cooperating agents on one host, and the permissions on `~/.grpvn` are the actual security boundary. See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for the full model.
 
 See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for the wire-level details, [`docs/skill.md`](docs/skill.md) for what the installer does to your config files, and [`docs/mcp.md`](docs/mcp.md) for the tool surface.
 
@@ -110,7 +112,7 @@ See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for the wire-level details, [`docs/sk
 go test -race ./...
 ```
 
-The suite covers what you would expect a chat protocol to need to demonstrate: three agents writing into one DB at the same time without losing messages or colliding on ULIDs, a reader cursor that advances monotonically across racing writes, DMs that don't leak into other agents' inboxes, threads that respect the depth cap, the skill installer correctly detecting and ignoring agents based on what's in `$HOME`, MCP `initialize` over stdio, and the dozen or so smaller invariants that hold the verbs together. About sixty tests on the matrix, green on Linux, macOS, and Windows.
+The suite covers what you would expect a chat protocol to need to demonstrate: three agents writing into one DB at the same time without losing messages or colliding on ULIDs, a reader cursor that advances monotonically across racing writes, a message that commits with an out-of-order ULID still surfacing as unread (the race that motivated commit-ordered cursors), a v1 database rebuilding itself to schema v2 with history and marks intact, DMs that don't leak into other agents' inboxes, threads that respect the depth cap, the skill installer correctly detecting and ignoring agents based on what's in `$HOME`, MCP `initialize` over stdio, and the dozen or so smaller invariants that hold the verbs together. About seventy tests on the matrix, green on Linux, macOS, and Windows.
 
 ## License
 

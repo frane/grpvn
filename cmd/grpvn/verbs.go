@@ -6,26 +6,46 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/frane/grpvn/internal"
 )
 
+// session is the shared preamble for every verb that touches the store:
+// resolve identity, open the DB, and (once) move any pre-v2 cursors out of
+// state.json into the cursors table. The caller owns closing the DB.
+func session() (string, *internal.State, *sql.DB, error) {
+	n, st, err := bootstrap()
+	if err != nil {
+		return "", nil, nil, err
+	}
+	db, err := internal.OpenDB()
+	if err != nil {
+		return "", nil, nil, err
+	}
+	if err := internal.MigrateLegacyCursors(db, st, internal.ResolveStatePath(statePathFlag)); err != nil {
+		db.Close()
+		return "", nil, nil, err
+	}
+	return n, st, db, nil
+}
+
+func mustSession() (string, *internal.State, *sql.DB) {
+	n, st, db, err := session()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	return n, st, db
+}
+
 var checkCmd = &cobra.Command{
 	Use:     "check",
 	Aliases: []string{"c"},
 	Run: func(cmd *cobra.Command, args []string) {
-		_, st, err := bootstrap()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		db, err := internal.OpenDB()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
+		_, st, db := mustSession()
 		defer db.Close()
 		c, err := internal.Check(os.Stdout, db, st)
 		if err != nil {
@@ -40,23 +60,10 @@ var readCmd = &cobra.Command{
 	Use:     "read",
 	Aliases: []string{"r"},
 	Run: func(cmd *cobra.Command, args []string) {
-		_, st, err := bootstrap()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		db, err := internal.OpenDB()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
+		_, st, db := mustSession()
 		defer db.Close()
 		c, err := internal.Read(os.Stdout, db, st, countFlag, true, tsFlag, fullFlag, humanFlag, colorFlag)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			os.Exit(1)
-		}
-		if err := st.Save(internal.ResolveStatePath(statePathFlag)); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
@@ -68,16 +75,7 @@ var peekCmd = &cobra.Command{
 	Use:     "peek",
 	Aliases: []string{"p"},
 	Run: func(cmd *cobra.Command, args []string) {
-		_, st, err := bootstrap()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		db, err := internal.OpenDB()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
+		_, st, db := mustSession()
 		defer db.Close()
 		c, err := internal.Read(os.Stdout, db, st, countFlag, false, tsFlag, fullFlag, humanFlag, colorFlag)
 		if err != nil {
@@ -92,16 +90,7 @@ var sendCmd = &cobra.Command{
 	Use:     "send",
 	Aliases: []string{"s"},
 	Run: func(cmd *cobra.Command, args []string) {
-		n, st, err := bootstrap()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		db, err := internal.OpenDB()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
+		n, st, db := mustSession()
 		defer db.Close()
 		t, b, err := parseSendArgs(db, st.DefaultChannel, args)
 		if err != nil {
@@ -112,7 +101,7 @@ var sendCmd = &cobra.Command{
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
-		if err := internal.Send(db, n, t, b, st.DefaultChannel, false); err != nil {
+		if _, err := internal.Send(db, n, t, b, st.DefaultChannel, false); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
@@ -123,16 +112,7 @@ var askCmd = &cobra.Command{
 	Use:     "ask",
 	Aliases: []string{"q"},
 	Run: func(cmd *cobra.Command, args []string) {
-		n, st, err := bootstrap()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		db, err := internal.OpenDB()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
+		n, st, db := mustSession()
 		defer db.Close()
 		t, b, err := parseSendArgs(db, st.DefaultChannel, args)
 		if err != nil {
@@ -143,10 +123,12 @@ var askCmd = &cobra.Command{
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
-		if err := internal.Send(db, n, t, b, st.DefaultChannel, true); err != nil {
+		m, err := internal.Send(db, n, t, b, st.DefaultChannel, true)
+		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
+		fmt.Println(m.ID)
 	},
 }
 
@@ -154,16 +136,7 @@ var grepCmd = &cobra.Command{
 	Use:     "grep",
 	Aliases: []string{"g"},
 	Run: func(cmd *cobra.Command, args []string) {
-		n, st, err := bootstrap()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		db, err := internal.OpenDB()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
+		n, st, db := mustSession()
 		defer db.Close()
 		pat := ""
 		scope := ""
@@ -184,16 +157,7 @@ var logCmd = &cobra.Command{
 	Use:     "log",
 	Aliases: []string{"l"},
 	Run: func(cmd *cobra.Command, args []string) {
-		n, st, err := bootstrap()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		db, err := internal.OpenDB()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
+		n, st, db := mustSession()
 		defer db.Close()
 		arg := ""
 		if len(args) > 0 {
@@ -210,16 +174,7 @@ var markCmd = &cobra.Command{
 	Use:     "mark",
 	Aliases: []string{"m"},
 	Run: func(cmd *cobra.Command, args []string) {
-		n, st, err := bootstrap()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		db, err := internal.OpenDB()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
+		n, st, db := mustSession()
 		defer db.Close()
 		arg := ""
 		if len(args) > 0 {
@@ -262,6 +217,30 @@ var initCmd = &cobra.Command{
 	},
 }
 
+var gcOlderThanFlag time.Duration
+var gcVacuumFlag bool
+
+var gcCmd = &cobra.Command{
+	Use:   "gc",
+	Short: "Prune messages older than a cutoff",
+	Long: `Deletes messages (and their bookmarks) older than --older-than from the
+shared store. Retention is an operator decision: gc exists only on the CLI
+and is deliberately not exposed to agents over MCP. Cursors survive pruning
+unchanged. Pass --vacuum to compact the file afterwards.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		db, err := internal.OpenDB()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		defer db.Close()
+		if err := internal.Gc(os.Stdout, db, gcOlderThanFlag, gcVacuumFlag); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+	},
+}
+
 var (
 	deleteFlag bool
 	forceFlag  bool
@@ -274,7 +253,7 @@ func expandStdinBody(b string) (string, error) {
 	if b != "-" {
 		return b, nil
 	}
-	data, err := io.ReadAll(os.Stdin)
+	data, err := io.ReadAll(io.LimitReader(os.Stdin, internal.MaxBodyBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("read stdin: %w", err)
 	}
@@ -400,5 +379,8 @@ func init() {
 	markCmd.Flags().BoolVarP(&deleteFlag, "delete", "d", false, "")
 	followCmd.Flags().BoolVarP(&deleteFlag, "delete", "d", false, "")
 	initCmd.Flags().BoolVarP(&forceFlag, "force", "f", false, "")
-	rootCmd.AddCommand(checkCmd, readCmd, peekCmd, sendCmd, askCmd, grepCmd, logCmd, markCmd, idCmd, initCmd, followCmd, defaultCmd)
+	gcCmd.Flags().DurationVar(&gcOlderThanFlag, "older-than", 0, "prune messages older than this (e.g. 720h)")
+	gcCmd.Flags().BoolVar(&gcVacuumFlag, "vacuum", false, "compact the database file after pruning")
+	_ = gcCmd.MarkFlagRequired("older-than")
+	rootCmd.AddCommand(checkCmd, readCmd, peekCmd, sendCmd, askCmd, grepCmd, logCmd, markCmd, idCmd, initCmd, followCmd, defaultCmd, gcCmd)
 }
