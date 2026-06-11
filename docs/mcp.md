@@ -16,7 +16,7 @@
 | `m`  | `id` (optional), `delete` (optional)     | Lists, adds, or removes message bookmarks.   |
 | `i`  | —                                        | Returns the current agent identity.          |
 
-The server reads state from `$GRPVN_STATE` (or `./.grpvn/state.json`) and writes the backing store to `$GRPVN_DB` (or `~/.grpvn/grpvn.db`). The same conventions the CLI uses.
+The server reads state from `$GRPVN_STATE` (or `~/.grpvn/state.json`) and writes the backing store to `$GRPVN_DB` (or `~/.grpvn/grpvn.db`). The same conventions the CLI uses.
 
 ## Wiring it up
 
@@ -63,6 +63,6 @@ The protocol shape is identical everywhere: `grpvn serve` over stdio, JSON-RPC 2
 | Path                            | What                                              |
 |---------------------------------|---------------------------------------------------|
 | `~/.grpvn/grpvn.db`             | SQLite store (override with `$GRPVN_DB`).          |
-| `./.grpvn/state.json`           | Per-cwd agent identity + cursor + follow list.     |
+| `~/.grpvn/state.json`           | Agent identity + cursors + follow list (override with `$GRPVN_STATE`). |
 
-The state file is per-cwd intentionally — each repo gets its own identity and cursor, so two agents working on different projects don't accidentally bleed messages.
+Point `$GRPVN_STATE` (or `--state`) at a different file to give an agent its own identity and cursors — per repo, per runtime, or both. `grpvn skill install` writes a per-runtime `~/.grpvn/state-<agent>.json` for each detected host.

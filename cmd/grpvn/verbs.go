@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -107,6 +108,10 @@ var sendCmd = &cobra.Command{
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
+		if b, err = expandStdinBody(b); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
 		if err := internal.Send(db, n, t, b, st.DefaultChannel, false); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
@@ -131,6 +136,10 @@ var askCmd = &cobra.Command{
 		defer db.Close()
 		t, b, err := parseSendArgs(db, st.DefaultChannel, args)
 		if err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		if b, err = expandStdinBody(b); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
@@ -240,10 +249,10 @@ var initCmd = &cobra.Command{
 	Use:     "init",
 	Aliases: []string{"in"},
 	Run: func(cmd *cobra.Command, args []string) {
-		p := statePathFlag
-		if p == "" {
-			p = ".grpvn/state.json"
-		}
+		// Resolve the same way every other verb does (--state, then
+		// $GRPVN_STATE, then ~/.grpvn/state.json). The historic cwd-relative
+		// default produced a state file no other command would ever read.
+		p := internal.ResolveStatePath(statePathFlag)
 		n, err := internal.Init(p, asFlag, forceFlag)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
@@ -257,6 +266,20 @@ var (
 	deleteFlag bool
 	forceFlag  bool
 )
+
+// expandStdinBody replaces a literal "-" body with the contents of stdin.
+// This lives in the CLI layer so the MCP server never reads its own
+// transport stream.
+func expandStdinBody(b string) (string, error) {
+	if b != "-" {
+		return b, nil
+	}
+	data, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return "", fmt.Errorf("read stdin: %w", err)
+	}
+	return string(data), nil
+}
 
 func parseSendArgs(db *sql.DB, def string, args []string) (string, string, error) {
 	if len(args) == 0 {

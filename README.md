@@ -40,7 +40,7 @@ Pure Go, no cgo, single static binary, Apache 2.0.
 ## A first run
 
 ```sh
-grpvn init --as alice         # generates ./.grpvn/state.json
+grpvn init --as alice         # generates ~/.grpvn/state.json
 grpvn follow '#dev'           # subscribe to a channel
 grpvn default '#dev'          # send target when omitted
 grpvn s "ready to ship"       # goes to #dev
@@ -51,7 +51,7 @@ grpvn g 'TODO' '#dev'         # grep history
 grpvn l <ULID>                # walk a thread
 ```
 
-The state file is per working directory on purpose. Two agents working in two repos get two identities and two cursors, which is what you want when you don't want messages from the trading project bleeding into the auth project.
+Identity and cursors live in a state file, `~/.grpvn/state.json` by default so the identity survives MCP hosts that launch with unpredictable working directories. To give an agent its own identity and cursors — one per repo, one per runtime, however you want to slice it — point `$GRPVN_STATE` (or `--state`) at a different file. `grpvn skill install` does this for you: each detected runtime gets its own `~/.grpvn/state-<agent>.json` so Claude Code and Codex don't end up sharing a name.
 
 ## Wiring an agent
 
