@@ -46,6 +46,19 @@ func ServeMCP(name, version string, b Bootstrap) error {
 		return mcp.NewTool(n, append([]mcp.ToolOption{mcp.WithDescription(desc)}, opts...)...)
 	}
 
+	// notice appends the unread counts to a non-reading tool's result, so
+	// every grpvn touch doubles as a check. Most MCP hosts have no hook
+	// surface, which makes this the one cross-runtime path to proactivity:
+	// an agent that only ever sends still finds out something is waiting.
+	// Errors are swallowed — a broken count must not fail the verb that ran.
+	notice := func(db *sql.DB, st *State, text string) string {
+		line, err := UnreadLine(db, st)
+		if err != nil || line == "" {
+			return text
+		}
+		return text + "\n[grpvn] unread: " + line + " — call the r tool"
+	}
+
 	// open is the shared preamble: identity, DB, and the one-time move of
 	// pre-v2 cursors from state.json into the cursors table. The caller
 	// owns closing the DB.
@@ -132,7 +145,7 @@ func ServeMCP(name, version string, b Bootstrap) error {
 			if _, err := Send(db, n, args.Target, args.Body, st.DefaultChannel, false); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			return mcp.NewToolResultText("sent"), nil
+			return mcp.NewToolResultText(notice(db, st, "sent")), nil
 		})
 
 	s.AddTool(tool("q", "Asks a question and returns a correlation ID",
@@ -152,7 +165,7 @@ func ServeMCP(name, version string, b Bootstrap) error {
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			return mcp.NewToolResultText(m.ID), nil
+			return mcp.NewToolResultText(notice(db, st, m.ID)), nil
 		})
 
 	s.AddTool(tool("g", "Greps message history with a regex pattern",
@@ -172,7 +185,7 @@ func ServeMCP(name, version string, b Bootstrap) error {
 			if err := Grep(&buf, db, n, st.Follow, args.Pattern, args.Scope, 0, st.DefaultChannel, false, false, false, "never"); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			return mcp.NewToolResultText(buf.String()), nil
+			return mcp.NewToolResultText(notice(db, st, buf.String())), nil
 		})
 
 	s.AddTool(tool("l", "Logs history of a target (#channel/@user) or thread (ULID prefix)",
@@ -191,7 +204,7 @@ func ServeMCP(name, version string, b Bootstrap) error {
 			if err := Log(&buf, db, n, args.Target, 0, st.DefaultChannel, false, false, false, "never"); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			return mcp.NewToolResultText(buf.String()), nil
+			return mcp.NewToolResultText(notice(db, st, buf.String())), nil
 		})
 
 	s.AddTool(tool("m", "Lists, adds, or removes message bookmarks",
@@ -212,9 +225,9 @@ func ServeMCP(name, version string, b Bootstrap) error {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			if buf.Len() == 0 {
-				return mcp.NewToolResultText("ok"), nil
+				return mcp.NewToolResultText(notice(db, st, "ok")), nil
 			}
-			return mcp.NewToolResultText(buf.String()), nil
+			return mcp.NewToolResultText(notice(db, st, buf.String())), nil
 		})
 
 	s.AddTool(tool("w", "Waits until unread messages arrive, then returns the counts. Long-poll alternative to calling c in a loop",
@@ -252,12 +265,13 @@ func ServeMCP(name, version string, b Bootstrap) error {
 		})
 
 	s.AddTool(tool("i", "Returns the current agent identity"), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		n, _, err := b()
+		n, st, db, err := open()
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
+		defer db.Close()
 		cwd, _ := os.Getwd()
-		return mcp.NewToolResultText(fmt.Sprintf("%s@%s", n, cwd)), nil
+		return mcp.NewToolResultText(notice(db, st, fmt.Sprintf("%s@%s", n, cwd))), nil
 	})
 
 	return server.ServeStdio(s)

@@ -34,7 +34,7 @@ func TestIdentityIsStableAcrossInvocations(t *testing.T) {
 		// Deliberately point cwd at a tempdir with no .grpvn — verifies that
 		// the state file lives under HOME, not cwd.
 		cmd.Dir = t.TempDir()
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(cleanEnviron(),
 			"HOME="+home,
 			"USERPROFILE="+home,
 			"GRPVN_DB="+dbPath,
@@ -94,7 +94,7 @@ func TestPerAgentStateGivesDistinctIdentities(t *testing.T) {
 	runAs := func(agentStatePath string) string {
 		cmd := exec.Command(binPath, "id")
 		cmd.Dir = t.TempDir()
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(cleanEnviron(),
 			"HOME="+home,
 			"USERPROFILE="+home,
 			"GRPVN_DB="+dbPath,
@@ -221,7 +221,7 @@ func TestLegacyCursorAppliesToAllTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	readerEnv := append(os.Environ(),
+	readerEnv := append(cleanEnviron(),
 		"HOME="+home,
 		"USERPROFILE="+home,
 		"GRPVN_DB="+dbPath,
@@ -317,7 +317,7 @@ func TestBootstrapSurfacesSaveErrors(t *testing.T) {
 
 	cmd := exec.Command(binPath, "id")
 	cmd.Dir = t.TempDir()
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(cleanEnviron(),
 		"HOME="+t.TempDir(),
 		"USERPROFILE="+t.TempDir(),
 		"GRPVN_DB="+dbPath,
@@ -350,7 +350,7 @@ func TestSkillInstallSetsPerAgentStateEnv(t *testing.T) {
 	}
 	cmd := exec.Command(binPath, "skill", "install")
 	cmd.Dir = t.TempDir()
-	cmd.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home)
+	cmd.Env = append(cleanEnviron(), "HOME="+home, "USERPROFILE="+home)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("skill install: %v\n%s", err, out)
 	}

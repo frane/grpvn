@@ -23,6 +23,7 @@ func TestManifestsAreValidJSON(t *testing.T) {
 		{"plugin/.claude-plugin/plugin.json", []string{"name", "version", "license"}},
 		{"plugin/.codex-plugin/plugin.json", []string{"name", "version", "skills", "mcpServers", "interface"}},
 		{"plugin/.mcp.json", []string{"mcpServers"}},
+		{"plugin/hooks/hooks.json", []string{"hooks"}},
 	}
 	for _, c := range cases {
 		t.Run(c.path, func(t *testing.T) {

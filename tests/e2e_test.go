@@ -66,7 +66,7 @@ func TestWriteSide(t *testing.T) {
 	run := func(args ...string) (string, string, int) {
 		cmd := exec.Command(binPath, args...)
 		cmd.Dir = cwd
-		cmd.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home, "GRPVN_STATE="+filepath.Join(cwd, ".grpvn", "state.json"))
+		cmd.Env = append(cleanEnviron(), "HOME="+home, "USERPROFILE="+home, "GRPVN_STATE="+filepath.Join(cwd, ".grpvn", "state.json"))
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
@@ -130,7 +130,7 @@ func TestReadSide(t *testing.T) {
 	run := func(args ...string) (string, string, int) {
 		cmd := exec.Command(binPath, args...)
 		cmd.Dir = cwd
-		cmd.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home, "GRPVN_STATE="+filepath.Join(cwd, ".grpvn", "state.json"))
+		cmd.Env = append(cleanEnviron(), "HOME="+home, "USERPROFILE="+home, "GRPVN_STATE="+filepath.Join(cwd, ".grpvn", "state.json"))
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
@@ -186,7 +186,7 @@ func TestAuxVerbs(t *testing.T) {
 	run := func(args ...string) (string, string, int) {
 		cmd := exec.Command(binPath, args...)
 		cmd.Dir = cwd
-		cmd.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home, "GRPVN_STATE="+filepath.Join(cwd, ".grpvn", "state.json"))
+		cmd.Env = append(cleanEnviron(), "HOME="+home, "USERPROFILE="+home, "GRPVN_STATE="+filepath.Join(cwd, ".grpvn", "state.json"))
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr

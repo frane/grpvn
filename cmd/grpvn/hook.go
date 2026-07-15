@@ -1,78 +1,133 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"strings"
+	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/frane/grpvn/internal"
 )
 
+var hookFormatFlag string
+
 var hookCmd = &cobra.Command{
 	Use:   "hook",
 	Short: "Agent-runtime hook entry points",
+	Long: `Entry points the skill installer wires into agent-runtime lifecycle hooks.
+Each subcommand reads the store once and emits the runtime's expected shape,
+selected with --format (claude, codex, gemini, cursor). Every subcommand
+fails open: a broken DB, missing state file, or unreadable stdin exits 0
+with a note on stderr — a chat tool must never be able to break an agent's
+turn lifecycle.`,
 }
 
-// hookStopCmd is the command `grpvn skill install` wires into Claude Code's
-// Stop hook. When the agent tries to end its turn with unread grpvn
-// messages, it emits {"decision":"block", ...} so the agent reads and
-// replies first. Two properties matter more than anything it reports:
-//
-//   - It must never loop. Claude Code sets stop_hook_active in the hook
-//     payload when the agent is already continuing because a stop hook
-//     blocked it; we let that stop through unconditionally, so the agent is
-//     nudged at most once per natural stop.
-//   - It must fail open. A broken DB, missing state file, or unreadable
-//     stdin exits 0 with a note on stderr — a chat tool must not be able to
-//     trap an agent in its turn.
+// failOpen is the shared error posture of every hook: report to stderr,
+// exit 0.
+func failOpen(name string, fn func() error) {
+	if err := fn(); err != nil {
+		fmt.Fprintf(os.Stderr, "grpvn hook %s: %v\n", name, err)
+	}
+}
+
+// markerPath returns the throttle marker for a hook, kept next to the state
+// file so per-runtime identities throttle independently.
+func markerPath(kind, name string) string {
+	return filepath.Join(filepath.Dir(internal.ResolveStatePath(statePathFlag)), "."+kind+"-"+name)
+}
+
+// hookStopCmd blocks ending the turn while unread messages exist (Claude
+// Code and Codex: {"decision":"block"}; Cursor: followup_message). Claude
+// Code's stop_hook_active caps the nudge at once per natural stop; Codex
+// documents no such flag, so a marker file throttles it to one block per
+// two minutes instead. Gemini is rejected — its nearest event retries the
+// response on deny, a loop with no brake.
 var hookStopCmd = &cobra.Command{
 	Use:   "stop",
-	Short: "Claude Code Stop hook: block stopping while unread messages exist",
+	Short: "Stop hook: block stopping while unread messages exist",
 	Run: func(cmd *cobra.Command, args []string) {
 		var payload struct {
 			StopHookActive bool `json:"stop_hook_active"`
 		}
 		data, _ := io.ReadAll(os.Stdin)
 		_ = json.Unmarshal(data, &payload)
-		if payload.StopHookActive {
-			return
-		}
-		_, st, db, err := session()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "grpvn hook stop:", err)
-			return
-		}
-		defer db.Close()
-		var buf bytes.Buffer
-		code, err := internal.Check(&buf, db, st)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "grpvn hook stop:", err)
-			return
-		}
-		if code != 0 {
-			return
-		}
-		out, err := json.Marshal(map[string]string{
-			"decision": "block",
-			"reason": fmt.Sprintf(
-				"Unread grpvn messages: %s. Read them with the grpvn r tool (or `grpvn r`) and reply to any questions before stopping.",
-				strings.TrimSpace(buf.String()),
-			),
+		failOpen("stop", func() error {
+			n, st, db, err := session()
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			marker := ""
+			if hookFormatFlag == internal.DialectCodex {
+				marker = markerPath("stop", n)
+			}
+			return internal.HookStop(os.Stdout, db, st, hookFormatFlag, payload.StopHookActive, marker, 2*time.Minute)
 		})
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "grpvn hook stop:", err)
-			return
-		}
-		fmt.Println(string(out))
+	},
+}
+
+// hookSessionStartCmd injects identity, follows, and pending unread into
+// the session context, so the agent starts every session knowing who it is
+// on grpvn without asking.
+var hookSessionStartCmd = &cobra.Command{
+	Use:   "session-start",
+	Short: "SessionStart hook: inject identity and unread into context",
+	Run: func(cmd *cobra.Command, args []string) {
+		failOpen("session-start", func() error {
+			_, st, db, err := session()
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			return internal.HookSessionStart(os.Stdout, db, st, hookFormatFlag)
+		})
+	},
+}
+
+// hookPromptCmd surfaces unread at turn start (UserPromptSubmit on Claude
+// Code and Codex, BeforeAgent on Gemini); silent when the inbox is clean.
+var hookPromptCmd = &cobra.Command{
+	Use:   "prompt",
+	Short: "Prompt-submit hook: surface unread at turn start",
+	Run: func(cmd *cobra.Command, args []string) {
+		failOpen("prompt", func() error {
+			_, st, db, err := session()
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			return internal.HookPrompt(os.Stdout, db, st, hookFormatFlag)
+		})
+	},
+}
+
+var postToolEveryFlag time.Duration
+
+// hookPostToolCmd gives mid-turn awareness during long-running work,
+// throttled via a marker file next to the state file so at most one nudge
+// lands per --every window.
+var hookPostToolCmd = &cobra.Command{
+	Use:   "posttool",
+	Short: "Post-tool hook: throttled mid-turn unread notice",
+	Run: func(cmd *cobra.Command, args []string) {
+		failOpen("posttool", func() error {
+			n, st, db, err := session()
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			return internal.HookPostTool(os.Stdout, db, st, markerPath("posttool", n), postToolEveryFlag, hookFormatFlag)
+		})
 	},
 }
 
 func init() {
-	hookCmd.AddCommand(hookStopCmd)
+	hookCmd.PersistentFlags().StringVar(&hookFormatFlag, "format", internal.DialectClaude, "output dialect: claude, codex, gemini, or cursor")
+	hookPostToolCmd.Flags().DurationVar(&postToolEveryFlag, "every", 60*time.Second, "minimum interval between mid-turn notices")
+	hookCmd.AddCommand(hookStopCmd, hookSessionStartCmd, hookPromptCmd, hookPostToolCmd)
 	rootCmd.AddCommand(hookCmd)
 }

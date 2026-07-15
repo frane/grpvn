@@ -29,7 +29,11 @@ type Target struct {
 	Skill     string // path under HOME where SKILL.md is written
 	MCP       string // path under HOME of the JSON config that holds mcpServers (empty = skip)
 	MCPTOML   string // path under HOME of the TOML config that holds [mcp_servers.<name>] (empty = skip)
-	Hooks     string // path under HOME of the settings JSON that takes Claude-Code-style hooks (empty = skip)
+	Hooks     string // path under HOME of the settings JSON that takes Claude-Code-style hooks, permissions, and env (empty = skip)
+	HookFile  string // path under HOME of a JSON doc that takes a "hooks" object in HookDialect's shape (empty = skip)
+	HookDial  string // hook output dialect for HookFile entries: DialectCodex, DialectGemini, or DialectCursor
+	Context   string // path under HOME of an always-loaded context file (CLAUDE.md/AGENTS.md/GEMINI.md) to append the coordination block to (empty = skip)
+	Trust     bool   // set "trust": true on the mcpServers entry (Gemini CLI: skips per-call confirmation)
 }
 
 // HomeTargets enumerates the supported integrations. Paths are relative to the
@@ -43,6 +47,7 @@ func HomeTargets() []Target {
 			Skill:     ".claude/skills/grpvn/SKILL.md",
 			MCP:       ".claude.json",
 			Hooks:     ".claude/settings.json",
+			Context:   ".claude/CLAUDE.md",
 		},
 		{
 			Name:      "Cursor",
@@ -50,6 +55,8 @@ func HomeTargets() []Target {
 			DetectDir: ".cursor",
 			Skill:     ".cursor/skills/grpvn/SKILL.md",
 			MCP:       ".cursor/mcp.json",
+			HookFile:  ".cursor/hooks.json",
+			HookDial:  DialectCursor,
 		},
 		{
 			Name:      "Codex CLI",
@@ -57,6 +64,9 @@ func HomeTargets() []Target {
 			DetectDir: ".codex",
 			Skill:     ".codex/skills/grpvn/SKILL.md",
 			MCPTOML:   ".codex/config.toml",
+			HookFile:  ".codex/hooks.json",
+			HookDial:  DialectCodex,
+			Context:   ".codex/AGENTS.md",
 		},
 		{
 			Name:      "Gemini CLI",
@@ -64,6 +74,10 @@ func HomeTargets() []Target {
 			DetectDir: ".gemini",
 			Skill:     ".gemini/skills/grpvn/SKILL.md",
 			MCP:       ".gemini/settings.json",
+			HookFile:  ".gemini/settings.json",
+			HookDial:  DialectGemini,
+			Context:   ".gemini/GEMINI.md",
+			Trust:     true,
 		},
 		{
 			Name:      "agents (generic)",
@@ -110,11 +124,13 @@ func installSkillFromHome(w io.Writer, homeOverride string, forceAll bool) error
 		home = h
 	}
 	var (
-		lastErr    error
-		written    []string
-		skipped    []string
-		mcpAdded   []string
-		hooksAdded []string
+		lastErr       error
+		written       []string
+		skipped       []string
+		mcpAdded      []string
+		settingsAdded []string
+		ctxAdded      []string
+		seeded        []string
 	)
 	for _, t := range HomeTargets() {
 		detect := filepath.Join(home, t.DetectDir)
@@ -139,9 +155,27 @@ func installSkillFromHome(w io.Writer, homeOverride string, forceAll bool) error
 		// $HOME/.grpvn/state.json and inherits the same identity.
 		statePath := filepath.Join(home, ".grpvn", "state-"+t.Slug+".json")
 		env := map[string]string{"GRPVN_STATE": statePath}
+		// Seed the per-runtime state before anything points at it. A
+		// runtime identity that follows no channels is a mailbox channel
+		// traffic can never reach — the notification hooks would guard an
+		// empty inbox forever.
+		if t.MCP != "" || t.MCPTOML != "" || t.Hooks != "" || t.HookFile != "" {
+			ok, err := seedRuntimeState(home, statePath)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if ok {
+				seeded = append(seeded, fmt.Sprintf("%s: %s", t.Name, statePath))
+			}
+		}
 		if t.MCP != "" {
 			mcpPath := filepath.Join(home, t.MCP)
-			if err := mergeMCP(mcpPath, "grpvn", "grpvn", []string{"serve"}, env); err != nil {
+			var extra map[string]interface{}
+			if t.Trust {
+				extra = map[string]interface{}{"trust": true}
+			}
+			if err := mergeMCP(mcpPath, "grpvn", "grpvn", []string{"serve"}, env, extra); err != nil {
 				lastErr = err
 				continue
 			}
@@ -160,32 +194,57 @@ func installSkillFromHome(w io.Writer, homeOverride string, forceAll bool) error
 		}
 		if t.Hooks != "" {
 			hooksPath := filepath.Join(home, t.Hooks)
-			// The hook command carries the same per-agent state file the MCP
-			// entry gets via env, so the unread check sees the runtime's own
-			// cursors. Hooks run through the shell with the session env, not
-			// the MCP server's, so the path is baked in.
-			command := fmt.Sprintf(`grpvn --state "%s" hook stop`, statePath)
-			added, err := mergeStopHook(hooksPath, command)
+			added, err := mergeClaudeSettings(hooksPath, statePath)
 			if err != nil {
 				lastErr = err
 				continue
 			}
 			if added {
-				hooksAdded = append(hooksAdded, fmt.Sprintf("%s: %s", t.Name, hooksPath))
+				settingsAdded = append(settingsAdded, fmt.Sprintf("%s: %s", t.Name, hooksPath))
+			}
+		}
+		if t.HookFile != "" {
+			hookPath := filepath.Join(home, t.HookFile)
+			added, err := mergeHooksFile(hookPath, statePath, t.HookDial)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if added {
+				settingsAdded = append(settingsAdded, fmt.Sprintf("%s: %s", t.Name, hookPath))
+			}
+		}
+		if t.Context != "" {
+			ctxPath := filepath.Join(home, t.Context)
+			added, err := mergeContext(ctxPath)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if added {
+				ctxAdded = append(ctxAdded, fmt.Sprintf("%s: %s", t.Name, ctxPath))
 			}
 		}
 	}
 	sort.Strings(written)
 	sort.Strings(mcpAdded)
-	sort.Strings(hooksAdded)
+	sort.Strings(settingsAdded)
+	sort.Strings(ctxAdded)
+	sort.Strings(seeded)
 	for _, line := range written {
 		fmt.Fprintf(w, "skill   %s\n", line)
 	}
 	for _, line := range mcpAdded {
 		fmt.Fprintf(w, "mcp     %s\n", line)
 	}
-	for _, line := range hooksAdded {
-		fmt.Fprintf(w, "hook    %s\n", line)
+	for _, line := range settingsAdded {
+		fmt.Fprintf(w, "settings %s\n", line)
+	}
+	for _, line := range ctxAdded {
+		fmt.Fprintf(w, "context %s\n", line)
+	}
+	for _, line := range seeded {
+		fmt.Fprintf(w, "seed    %s\n", line)
 	}
 	if !forceAll {
 		for _, s := range skipped {
@@ -203,7 +262,7 @@ func installSkillFromHome(w io.Writer, homeOverride string, forceAll bool) error
 // file doesn't exist it's created. Any existing keys other than the named
 // server entry are preserved. Existing non-JSON content is preserved by
 // erroring out rather than overwriting.
-func mergeMCP(path, name, command string, args []string, env map[string]string) error {
+func mergeMCP(path, name, command string, args []string, env map[string]string, extra map[string]interface{}) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}
@@ -235,6 +294,9 @@ func mergeMCP(path, name, command string, args []string, env map[string]string) 
 		}
 		entry["env"] = envMap
 	}
+	for k, v := range extra {
+		entry[k] = v
+	}
 	servers[name] = entry
 	doc["mcpServers"] = servers
 	encoded, err := json.MarshalIndent(doc, "", "  ")
@@ -264,14 +326,41 @@ func mergeMCP(path, name, command string, args []string, env map[string]string) 
 // only one canonical shape for an MCP server entry, so blind append-if-absent
 // is safe enough and dodges every "preserve comments / preserve ordering"
 // TOML-parser headache.
-// mergeStopHook registers a Stop hook in a Claude-Code-style settings JSON
-// (hooks.Stop is a list of matcher groups, each holding a list of command
-// hooks). It is idempotent: if any existing Stop hook command already
-// invokes `grpvn` with `hook stop`, the file is left untouched and
-// (false, nil) is returned — including when the user has customized the
-// command (different --state path, wrapper script). Every other key in the
-// settings document is preserved, and the write is atomic.
-func mergeStopHook(path, command string) (bool, error) {
+// hookSpec is one Claude Code hook event the installer wires. Sub is the
+// `grpvn hook <sub>` subcommand and doubles as the idempotency needle: any
+// existing command containing both "grpvn" and Sub — including
+// user-customized variants — leaves that event untouched.
+type hookSpec struct {
+	Event   string
+	Sub     string
+	Matcher string // tool-name matcher for tool events ("*" = all); empty = no matcher key
+}
+
+// grpvnHooks is the full notification surface: identity + unread at session
+// start, an unread line on every user prompt, a throttled mid-turn notice
+// after tool calls, and the end-of-turn block. Together they make delivery
+// structural instead of relying on the model remembering to poll.
+var grpvnHooks = []hookSpec{
+	{Event: "SessionStart", Sub: "hook session-start"},
+	{Event: "UserPromptSubmit", Sub: "hook prompt"},
+	{Event: "PostToolUse", Sub: "hook posttool", Matcher: "*"},
+	{Event: "Stop", Sub: "hook stop"},
+}
+
+// grpvnPermissions is what agents need allowlisted to act on a notification
+// without a permission prompt: every tool on the grpvn MCP server, and the
+// grpvn binary over Bash. Without these the hooks nudge the agent into a
+// prompt the user has to click through — which is no proactivity at all.
+var grpvnPermissions = []string{"mcp__grpvn", "Bash(grpvn:*)"}
+
+// mergeClaudeSettings wires grpvn into a Claude-Code-style settings JSON:
+// the four notification hooks (each carrying the per-runtime state path,
+// since hooks run through the shell with the session env, not the MCP
+// server's), the permission allowlist, and a session-wide GRPVN_STATE env
+// var so CLI calls inside the session resolve to the same identity as the
+// MCP server. Idempotent per item; every other key in the document is
+// preserved and the write is atomic. Returns whether anything changed.
+func mergeClaudeSettings(path, statePath string) (bool, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return false, fmt.Errorf("create config dir: %w", err)
 	}
@@ -288,35 +377,283 @@ func mergeStopHook(path, command string) (bool, error) {
 	if doc == nil {
 		doc = map[string]interface{}{}
 	}
+	changed := false
+
 	hooks, _ := doc["hooks"].(map[string]interface{})
 	if hooks == nil {
 		hooks = map[string]interface{}{}
 	}
-	stops, _ := hooks["Stop"].([]interface{})
-	for _, group := range stops {
-		g, _ := group.(map[string]interface{})
-		entries, _ := g["hooks"].([]interface{})
-		for _, entry := range entries {
-			e, _ := entry.(map[string]interface{})
-			c, _ := e["command"].(string)
-			if strings.Contains(c, "grpvn") && strings.Contains(c, "hook stop") {
-				return false, nil
+	for _, spec := range grpvnHooks {
+		groups, _ := hooks[spec.Event].([]interface{})
+		present := false
+		for _, group := range groups {
+			g, _ := group.(map[string]interface{})
+			entries, _ := g["hooks"].([]interface{})
+			for _, entry := range entries {
+				e, _ := entry.(map[string]interface{})
+				c, _ := e["command"].(string)
+				if strings.Contains(c, "grpvn") && strings.Contains(c, spec.Sub) {
+					present = true
+				}
 			}
 		}
+		if present {
+			continue
+		}
+		group := map[string]interface{}{
+			"hooks": []interface{}{
+				map[string]interface{}{
+					"type":    "command",
+					"command": fmt.Sprintf(`grpvn --state "%s" %s`, statePath, spec.Sub),
+				},
+			},
+		}
+		if spec.Matcher != "" {
+			group["matcher"] = spec.Matcher
+		}
+		hooks[spec.Event] = append(groups, group)
+		changed = true
 	}
-	stops = append(stops, map[string]interface{}{
-		"hooks": []interface{}{
-			map[string]interface{}{"type": "command", "command": command},
-		},
-	})
-	hooks["Stop"] = stops
 	doc["hooks"] = hooks
+
+	perms, _ := doc["permissions"].(map[string]interface{})
+	if perms == nil {
+		perms = map[string]interface{}{}
+	}
+	allow, _ := perms["allow"].([]interface{})
+	for _, want := range grpvnPermissions {
+		present := false
+		for _, have := range allow {
+			if s, _ := have.(string); s == want {
+				present = true
+			}
+		}
+		if !present {
+			allow = append(allow, want)
+			changed = true
+		}
+	}
+	perms["allow"] = allow
+	doc["permissions"] = perms
+
+	envDoc, _ := doc["env"].(map[string]interface{})
+	if envDoc == nil {
+		envDoc = map[string]interface{}{}
+	}
+	if _, ok := envDoc["GRPVN_STATE"]; !ok {
+		envDoc["GRPVN_STATE"] = statePath
+		changed = true
+	}
+	doc["env"] = envDoc
+
+	if !changed {
+		return false, nil
+	}
 	encoded, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return false, fmt.Errorf("encode %s: %w", path, err)
 	}
 	tmp := fmt.Sprintf("%s.tmp.%d", path, os.Getpid())
 	if err := os.WriteFile(tmp, encoded, 0644); err != nil {
+		return false, fmt.Errorf("write %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return false, fmt.Errorf("rename %s: %w", path, err)
+	}
+	return true, nil
+}
+
+// dialectHooks maps each non-Claude runtime to the lifecycle events that
+// carry grpvn's notification moments. Gemini gets no stop entry — its
+// nearest event (AfterAgent with deny) retries the response instead of
+// nudging once, a loop with no brake — and Cursor gets no prompt entry
+// because beforeSubmitPrompt can only block, not inject context.
+var dialectHooks = map[string][]hookSpec{
+	DialectCodex: {
+		{Event: "SessionStart", Sub: "hook session-start"},
+		{Event: "UserPromptSubmit", Sub: "hook prompt"},
+		{Event: "PostToolUse", Sub: "hook posttool"},
+		{Event: "Stop", Sub: "hook stop"},
+	},
+	DialectGemini: {
+		{Event: "SessionStart", Sub: "hook session-start"},
+		{Event: "BeforeAgent", Sub: "hook prompt"},
+		{Event: "AfterTool", Sub: "hook posttool"},
+	},
+	DialectCursor: {
+		{Event: "sessionStart", Sub: "hook session-start"},
+		{Event: "postToolUse", Sub: "hook posttool"},
+		{Event: "stop", Sub: "hook stop"},
+	},
+}
+
+// mergeHooksFile wires grpvn's notification hooks into a runtime's hooks
+// document: ~/.codex/hooks.json and Gemini's settings.json share Claude
+// Code's matcher-group shape, while Cursor's ~/.cursor/hooks.json takes
+// flat {"command": …} entries under a "version": 1 doc. Idempotency
+// matches mergeClaudeSettings: an existing command containing "grpvn" and
+// the subcommand leaves that event untouched, everything else in the
+// document is preserved, and the write is atomic.
+func mergeHooksFile(path, statePath, dialect string) (bool, error) {
+	specs, ok := dialectHooks[dialect]
+	if !ok {
+		return false, fmt.Errorf("unknown hook dialect %q", dialect)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return false, fmt.Errorf("create config dir: %w", err)
+	}
+	var doc map[string]interface{}
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil && len(data) > 0:
+		if err := json.Unmarshal(data, &doc); err != nil {
+			return false, fmt.Errorf("parse %s: %w", path, err)
+		}
+	case err != nil && !os.IsNotExist(err):
+		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+	if doc == nil {
+		doc = map[string]interface{}{}
+	}
+	changed := false
+	if dialect == DialectCursor {
+		if _, ok := doc["version"]; !ok {
+			doc["version"] = 1
+			changed = true
+		}
+	}
+	hooks, _ := doc["hooks"].(map[string]interface{})
+	if hooks == nil {
+		hooks = map[string]interface{}{}
+	}
+	for _, spec := range specs {
+		entries, _ := hooks[spec.Event].([]interface{})
+		present := false
+		for _, entry := range entries {
+			e, _ := entry.(map[string]interface{})
+			// Cursor entries carry the command directly; Codex/Gemini nest
+			// it in a matcher group's hooks array.
+			if c, _ := e["command"].(string); strings.Contains(c, "grpvn") && strings.Contains(c, spec.Sub) {
+				present = true
+			}
+			inner, _ := e["hooks"].([]interface{})
+			for _, ih := range inner {
+				h, _ := ih.(map[string]interface{})
+				if c, _ := h["command"].(string); strings.Contains(c, "grpvn") && strings.Contains(c, spec.Sub) {
+					present = true
+				}
+			}
+		}
+		if present {
+			continue
+		}
+		command := fmt.Sprintf(`grpvn --state "%s" %s --format %s`, statePath, spec.Sub, dialect)
+		var entry map[string]interface{}
+		if dialect == DialectCursor {
+			entry = map[string]interface{}{"command": command}
+		} else {
+			entry = map[string]interface{}{
+				"hooks": []interface{}{
+					map[string]interface{}{"type": "command", "command": command},
+				},
+			}
+		}
+		hooks[spec.Event] = append(entries, entry)
+		changed = true
+	}
+	doc["hooks"] = hooks
+	if !changed {
+		return false, nil
+	}
+	encoded, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return false, fmt.Errorf("encode %s: %w", path, err)
+	}
+	tmp := fmt.Sprintf("%s.tmp.%d", path, os.Getpid())
+	if err := os.WriteFile(tmp, encoded, 0644); err != nil {
+		return false, fmt.Errorf("write %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return false, fmt.Errorf("rename %s: %w", path, err)
+	}
+	return true, nil
+}
+
+// seedRuntimeState makes a per-runtime state file inherit the followed
+// channels and default channel from the base ~/.grpvn/state.json. Without
+// this, a runtime identity starts subscribed to nothing — a mailbox channel
+// traffic can never reach. Runs on the upgrade path too: an existing
+// per-runtime state that follows nothing and has no default channel is
+// treated as unseeded. The identity name is never copied — distinct names
+// per runtime are the point of the split.
+func seedRuntimeState(home, statePath string) (bool, error) {
+	st, err := LoadState(statePath)
+	if err != nil {
+		return false, err
+	}
+	if len(st.Follow) > 0 || st.DefaultChannel != "" {
+		return false, nil
+	}
+	base, err := LoadState(filepath.Join(home, ".grpvn", "state.json"))
+	if err != nil {
+		return false, err
+	}
+	if len(base.Follow) == 0 && base.DefaultChannel == "" {
+		return false, nil
+	}
+	st.Follow = append([]string{}, base.Follow...)
+	st.DefaultChannel = base.DefaultChannel
+	if err := st.Save(statePath); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// contextMarker guards idempotency of the coordination block; its presence
+// anywhere in the file means the block (or the user's edited descendant of
+// it) is already there, and the installer keeps its hands off.
+const contextMarker = "<!-- grpvn:coordination -->"
+
+var contextBlock = contextMarker + `
+## grpvn — peer chat with the other agents on this host
+
+Check unread grpvn messages with the c tool (or ` + "`grpvn c`" + `) at the start of
+every turn and every few tool calls during long-running work. When there is
+unread, read it with r and answer any questions before continuing. Announce
+substantive work in the relevant channel. When a reply is the only thing
+blocking you, run ` + "`grpvn w --timeout 0`" + ` as a background task — it exits the
+moment a message lands, instead of burning turns polling.
+`
+
+// mergeContext appends the coordination block to an always-loaded context
+// file (CLAUDE.md, AGENTS.md, GEMINI.md). Unlike SKILL.md — whose body is
+// lazy-loaded and in practice never opened — these files sit in every
+// session's context, so the poll instruction actually reaches the model on
+// runtimes without a hook surface.
+func mergeContext(path string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+	if bytes.Contains(data, []byte(contextMarker)) {
+		return false, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return false, fmt.Errorf("create config dir: %w", err)
+	}
+	var out bytes.Buffer
+	out.Write(data)
+	if len(data) > 0 && !bytes.HasSuffix(data, []byte("\n")) {
+		out.WriteString("\n")
+	}
+	if len(data) > 0 {
+		out.WriteString("\n")
+	}
+	out.WriteString(contextBlock)
+	tmp := fmt.Sprintf("%s.tmp.%d", path, os.Getpid())
+	if err := os.WriteFile(tmp, out.Bytes(), 0644); err != nil {
 		return false, fmt.Errorf("write %s: %w", tmp, err)
 	}
 	if err := os.Rename(tmp, path); err != nil {

@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "grpvn hook session-start" }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "grpvn hook prompt" }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "grpvn hook posttool" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "grpvn hook stop" }] }
+    ]
+  }
+}

@@ -41,6 +41,18 @@ func mustSession() (string, *internal.State, *sql.DB) {
 	return n, st, db
 }
 
+// unreadNotice prints pending unread to stderr after a non-reading verb, so
+// an agent that only ever sends or greps still finds out something is
+// waiting. Mirrors the MCP server's result suffix; errors are swallowed —
+// a broken count must not fail the verb that ran.
+func unreadNotice(db *sql.DB, st *internal.State) {
+	line, err := internal.UnreadLine(db, st)
+	if err != nil || line == "" {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[grpvn] unread: %s — run `grpvn r`\n", line)
+}
+
 var checkCmd = &cobra.Command{
 	Use:     "check",
 	Aliases: []string{"c"},
@@ -105,6 +117,7 @@ var sendCmd = &cobra.Command{
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
+		unreadNotice(db, st)
 	},
 }
 
@@ -129,6 +142,7 @@ var askCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		fmt.Println(m.ID)
+		unreadNotice(db, st)
 	},
 }
 
@@ -150,6 +164,7 @@ var grepCmd = &cobra.Command{
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
+		unreadNotice(db, st)
 	},
 }
 
@@ -167,6 +182,7 @@ var logCmd = &cobra.Command{
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
+		unreadNotice(db, st)
 	},
 }
 
@@ -184,6 +200,7 @@ var markCmd = &cobra.Command{
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
+		unreadNotice(db, st)
 	},
 }
 

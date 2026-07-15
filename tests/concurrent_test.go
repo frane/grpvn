@@ -3,7 +3,6 @@ package tests
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -29,7 +28,7 @@ func newRunner(t *testing.T, name string) *runner {
 		bin:  binPath,
 		home: home,
 		cwd:  cwd,
-		env: append(os.Environ(),
+		env: append(cleanEnviron(),
 			"HOME="+home, "USERPROFILE="+home,
 			"GRPVN_STATE="+statePath,
 		),
@@ -397,7 +396,7 @@ func TestMCPServeInitialize(t *testing.T) {
 	cwd := t.TempDir()
 	cmd := exec.Command(binPath, "serve")
 	cmd.Dir = cwd
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(cleanEnviron(),
 		"HOME="+home, "USERPROFILE="+home,
 		"GRPVN_STATE="+filepath.Join(cwd, ".grpvn", "state.json"),
 	)

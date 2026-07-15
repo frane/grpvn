@@ -390,14 +390,14 @@ func TestInstallSkillTOMLAppendsCleanly(t *testing.T) {
 // messages exist. The merge must preserve existing settings, bake the
 // per-agent state path into the command, and be idempotent — including when
 // the user has customized the command.
-func TestInstallSkillAddsClaudeStopHook(t *testing.T) {
+func TestInstallSkillWiresClaudeSettings(t *testing.T) {
 	home := t.TempDir()
 	setHome(t, home)
 	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
-	if err := os.WriteFile(settingsPath, []byte(`{"model":"opus"}`), 0644); err != nil {
+	if err := os.WriteFile(settingsPath, []byte(`{"model":"opus","permissions":{"allow":["Bash(ls:*)"]}}`), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -405,18 +405,23 @@ func TestInstallSkillAddsClaudeStopHook(t *testing.T) {
 	if err := InstallSkill(&buf); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	if !strings.Contains(buf.String(), "hook    Claude Code") {
-		t.Fatalf("expected hook line in output: %q", buf.String())
+	if !strings.Contains(buf.String(), "settings Claude Code") {
+		t.Fatalf("expected settings line in output: %q", buf.String())
 	}
 
 	type settings struct {
 		Model string `json:"model"`
 		Hooks map[string][]struct {
-			Hooks []struct {
+			Matcher string `json:"matcher"`
+			Hooks   []struct {
 				Type    string `json:"type"`
 				Command string `json:"command"`
 			} `json:"hooks"`
 		} `json:"hooks"`
+		Permissions struct {
+			Allow []string `json:"allow"`
+		} `json:"permissions"`
+		Env map[string]string `json:"env"`
 	}
 	read := func() settings {
 		t.Helper()
@@ -435,26 +440,55 @@ func TestInstallSkillAddsClaudeStopHook(t *testing.T) {
 	if s.Model != "opus" {
 		t.Fatalf("existing settings key clobbered: %#v", s)
 	}
-	if len(s.Hooks["Stop"]) != 1 || len(s.Hooks["Stop"][0].Hooks) != 1 {
-		t.Fatalf("expected exactly one Stop hook entry: %#v", s.Hooks)
+	// All four notification hooks land, each exactly once, each carrying the
+	// per-agent state file.
+	for event, sub := range map[string]string{
+		"SessionStart":     "hook session-start",
+		"UserPromptSubmit": "hook prompt",
+		"PostToolUse":      "hook posttool",
+		"Stop":             "hook stop",
+	} {
+		groups := s.Hooks[event]
+		if len(groups) != 1 || len(groups[0].Hooks) != 1 {
+			t.Fatalf("expected exactly one %s hook entry: %#v", event, s.Hooks)
+		}
+		h := groups[0].Hooks[0]
+		if h.Type != "command" {
+			t.Fatalf("%s hook type should be command, got %q", event, h.Type)
+		}
+		if !strings.Contains(h.Command, sub) || !strings.Contains(h.Command, "state-claude-code.json") {
+			t.Fatalf("%s hook command should run grpvn %s with the per-agent state file, got %q", event, sub, h.Command)
+		}
 	}
-	h := s.Hooks["Stop"][0].Hooks[0]
-	if h.Type != "command" {
-		t.Fatalf("hook type should be command, got %q", h.Type)
+	// PostToolUse needs a matcher so it runs after every tool.
+	if s.Hooks["PostToolUse"][0].Matcher != "*" {
+		t.Fatalf("PostToolUse matcher should be *, got %q", s.Hooks["PostToolUse"][0].Matcher)
 	}
-	if !strings.Contains(h.Command, "hook stop") || !strings.Contains(h.Command, "state-claude-code.json") {
-		t.Fatalf("hook command should run grpvn hook stop with the per-agent state file, got %q", h.Command)
+	// Permissions are appended, preserving the user's own entries.
+	wantPerms := append([]string{"Bash(ls:*)"}, grpvnPermissions...)
+	if len(s.Permissions.Allow) != len(wantPerms) {
+		t.Fatalf("permissions.allow = %v, want %v", s.Permissions.Allow, wantPerms)
+	}
+	for i, w := range wantPerms {
+		if s.Permissions.Allow[i] != w {
+			t.Fatalf("permissions.allow = %v, want %v", s.Permissions.Allow, wantPerms)
+		}
+	}
+	// Session env pins the per-runtime identity for Bash calls too.
+	if !strings.Contains(s.Env["GRPVN_STATE"], "state-claude-code.json") {
+		t.Fatalf("env.GRPVN_STATE should carry the per-agent state file, got %q", s.Env["GRPVN_STATE"])
 	}
 
-	// Re-running install must not duplicate the hook.
+	// Re-running install must not duplicate anything.
 	if err := InstallSkill(&bytes.Buffer{}); err != nil {
 		t.Fatalf("re-install: %v", err)
 	}
-	if s := read(); len(s.Hooks["Stop"]) != 1 {
-		t.Fatalf("re-install duplicated the Stop hook: %#v", s.Hooks)
+	if s := read(); len(s.Hooks["Stop"]) != 1 || len(s.Permissions.Allow) != len(wantPerms) {
+		t.Fatalf("re-install duplicated hooks or permissions: %#v", s)
 	}
 
-	// A user-customized grpvn hook command is respected as-is.
+	// A user-customized grpvn hook command is respected as-is; the other
+	// events are still added around it.
 	custom := []byte(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/opt/grpvn --state /elsewhere.json hook stop"}]}]}}`)
 	if err := os.WriteFile(settingsPath, custom, 0644); err != nil {
 		t.Fatal(err)
@@ -464,5 +498,232 @@ func TestInstallSkillAddsClaudeStopHook(t *testing.T) {
 	}
 	if s := read(); len(s.Hooks["Stop"]) != 1 || !strings.Contains(s.Hooks["Stop"][0].Hooks[0].Command, "/opt/grpvn") {
 		t.Fatalf("customized hook should be left untouched: %#v", s.Hooks)
+	}
+	if s := read(); len(s.Hooks["SessionStart"]) != 1 {
+		t.Fatalf("other hook events should still be installed: %#v", s.Hooks)
+	}
+}
+
+// The installer must seed a fresh per-runtime state file with the follows
+// and default channel of the base state.json — an identity subscribed to
+// nothing can never see channel traffic, which kills every notification
+// downstream.
+func TestInstallSkillSeedsRuntimeState(t *testing.T) {
+	home := t.TempDir()
+	setHome(t, home)
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	base := &State{Name: "base-name", DefaultChannel: "#dev", Follow: []string{"#dev", "#ops"}}
+	if err := base.Save(filepath.Join(home, ".grpvn", "state.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := InstallSkill(&bytes.Buffer{}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	seededPath := filepath.Join(home, ".grpvn", "state-claude-code.json")
+	st, err := LoadState(seededPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Name != "" {
+		t.Fatalf("identity name must not be copied, got %q", st.Name)
+	}
+	if st.DefaultChannel != "#dev" || len(st.Follow) != 2 {
+		t.Fatalf("seeded state should inherit follows and default: %#v", st)
+	}
+
+	// A state that already follows something (or was deliberately emptied of
+	// its default) is left alone on re-install.
+	st.Follow = []string{"#only"}
+	st.DefaultChannel = ""
+	if err := st.Save(seededPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := InstallSkill(&bytes.Buffer{}); err != nil {
+		t.Fatalf("re-install: %v", err)
+	}
+	st, err = LoadState(seededPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Follow) != 1 || st.Follow[0] != "#only" {
+		t.Fatalf("re-install must not overwrite a configured runtime state: %#v", st)
+	}
+}
+
+// The coordination block goes into the always-loaded context files, once,
+// preserving existing content.
+func TestInstallSkillAppendsContextBlock(t *testing.T) {
+	home := t.TempDir()
+	setHome(t, home)
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	ctxPath := filepath.Join(home, ".claude", "CLAUDE.md")
+	if err := os.WriteFile(ctxPath, []byte("# my rules\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := InstallSkill(&buf); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if !strings.Contains(buf.String(), "context Claude Code") {
+		t.Fatalf("expected context line in output: %q", buf.String())
+	}
+	data, err := os.ReadFile(ctxPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "# my rules") {
+		t.Fatal("existing context content clobbered")
+	}
+	if !strings.Contains(string(data), contextMarker) {
+		t.Fatal("coordination block missing")
+	}
+
+	if err := InstallSkill(&bytes.Buffer{}); err != nil {
+		t.Fatalf("re-install: %v", err)
+	}
+	again, err := os.ReadFile(ctxPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(again), contextMarker) != 1 {
+		t.Fatal("coordination block duplicated on re-install")
+	}
+}
+
+// Gemini's server entry is marked trusted so tool calls skip per-call
+// confirmation — the notification path must not dead-end in a prompt.
+func TestInstallSkillMarksGeminiTrusted(t *testing.T) {
+	home := t.TempDir()
+	setHome(t, home)
+	if err := os.MkdirAll(filepath.Join(home, ".gemini"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := InstallSkill(&bytes.Buffer{}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".gemini", "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Servers map[string]struct {
+			Trust bool `json:"trust"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if !doc.Servers["grpvn"].Trust {
+		t.Fatalf("gemini grpvn entry should carry trust: true, got %s", data)
+	}
+}
+
+// Codex, Gemini, and Cursor each get grpvn's notification hooks in their
+// own dialect: Codex a dedicated hooks.json in Claude's shape (with a Stop
+// entry), Gemini hooks inside settings.json next to mcpServers (no stop —
+// its deny semantics retry-loop), Cursor a version-1 hooks.json with flat
+// command entries (no prompt — it can't inject there).
+func TestInstallSkillWiresRuntimeHookFiles(t *testing.T) {
+	home := t.TempDir()
+	setHome(t, home)
+	for _, d := range []string{".codex", ".gemini", ".cursor"} {
+		if err := os.MkdirAll(filepath.Join(home, d), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := InstallSkill(&bytes.Buffer{}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	type group struct {
+		Command string `json:"command"`
+		Hooks   []struct {
+			Command string `json:"command"`
+		} `json:"hooks"`
+	}
+	load := func(rel string) map[string][]group {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(home, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Version int                `json:"version"`
+			Hooks   map[string][]group `json:"hooks"`
+		}
+		if err := json.Unmarshal(data, &doc); err != nil {
+			t.Fatalf("parse %s: %v\n%s", rel, err, data)
+		}
+		if rel == ".cursor/hooks.json" && doc.Version != 1 {
+			t.Fatalf("cursor hooks.json needs version 1, got %d", doc.Version)
+		}
+		return doc.Hooks
+	}
+
+	codex := load(".codex/hooks.json")
+	for event, sub := range map[string]string{
+		"SessionStart":     "hook session-start",
+		"UserPromptSubmit": "hook prompt",
+		"PostToolUse":      "hook posttool",
+		"Stop":             "hook stop",
+	} {
+		gs := codex[event]
+		if len(gs) != 1 || len(gs[0].Hooks) != 1 {
+			t.Fatalf("codex %s: expected one nested entry: %#v", event, codex)
+		}
+		c := gs[0].Hooks[0].Command
+		if !strings.Contains(c, sub) || !strings.Contains(c, "--format codex") || !strings.Contains(c, "state-codex.json") {
+			t.Fatalf("codex %s command wrong: %q", event, c)
+		}
+	}
+
+	gemini := load(".gemini/settings.json")
+	if len(gemini["SessionStart"]) != 1 || len(gemini["BeforeAgent"]) != 1 || len(gemini["AfterTool"]) != 1 {
+		t.Fatalf("gemini events missing: %#v", gemini)
+	}
+	if len(gemini["Stop"]) != 0 || len(gemini["AfterAgent"]) != 0 {
+		t.Fatalf("gemini must not get a stop-style hook: %#v", gemini)
+	}
+	if c := gemini["AfterTool"][0].Hooks[0].Command; !strings.Contains(c, "--format gemini") {
+		t.Fatalf("gemini command wrong: %q", c)
+	}
+	// mcpServers must survive in the same file.
+	raw, _ := os.ReadFile(filepath.Join(home, ".gemini/settings.json"))
+	if !strings.Contains(string(raw), "mcpServers") {
+		t.Fatalf("gemini settings lost mcpServers: %s", raw)
+	}
+
+	cursor := load(".cursor/hooks.json")
+	for event, sub := range map[string]string{
+		"sessionStart": "hook session-start",
+		"postToolUse":  "hook posttool",
+		"stop":         "hook stop",
+	} {
+		gs := cursor[event]
+		if len(gs) != 1 || gs[0].Command == "" {
+			t.Fatalf("cursor %s: expected one flat entry: %#v", event, cursor)
+		}
+		if !strings.Contains(gs[0].Command, sub) || !strings.Contains(gs[0].Command, "--format cursor") {
+			t.Fatalf("cursor %s command wrong: %q", event, gs[0].Command)
+		}
+	}
+	if len(cursor["beforeSubmitPrompt"]) != 0 {
+		t.Fatalf("cursor must not get a prompt hook: %#v", cursor)
+	}
+
+	// Idempotent across re-installs.
+	before, _ := os.ReadFile(filepath.Join(home, ".codex/hooks.json"))
+	if err := InstallSkill(&bytes.Buffer{}); err != nil {
+		t.Fatalf("re-install: %v", err)
+	}
+	after, _ := os.ReadFile(filepath.Join(home, ".codex/hooks.json"))
+	if !bytes.Equal(before, after) {
+		t.Fatalf("re-install changed codex hooks.json\nbefore: %s\nafter: %s", before, after)
 	}
 }
