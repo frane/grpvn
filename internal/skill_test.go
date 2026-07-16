@@ -3,6 +3,7 @@ package internal
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -725,5 +726,58 @@ func TestInstallSkillWiresRuntimeHookFiles(t *testing.T) {
 	after, _ := os.ReadFile(filepath.Join(home, ".codex/hooks.json"))
 	if !bytes.Equal(before, after) {
 		t.Fatalf("re-install changed codex hooks.json\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
+// Project scope reaches every wiring surface: GRPVN_SCOPE in the MCP env
+// and settings env, --scope project in hook commands — and an existing
+// installer-written install upgrades in place. Claude Desktop stays
+// runtime-scoped.
+func TestInstallSkillWiresProjectScope(t *testing.T) {
+	home := t.TempDir()
+	setHome(t, home)
+	for _, d := range []string{".claude", ".codex"} {
+		if err := os.MkdirAll(filepath.Join(home, d), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Simulate a pre-scope install: hooks and env without --scope/GRPVN_SCOPE.
+	statePath := filepath.Join(home, ".grpvn", "state-claude-code.json")
+	old := fmt.Sprintf(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"grpvn --state \"%s\" hook stop"}]}]},"env":{"GRPVN_STATE":%q}}`, statePath, statePath)
+	if err := os.WriteFile(filepath.Join(home, ".claude", "settings.json"), []byte(old), 0644); err != nil {
+		t.Fatal(err)
+	}
+	codexState := filepath.Join(home, ".grpvn", "state-codex.json")
+	toml := fmt.Sprintf("[mcp_servers.grpvn]\ncommand = \"grpvn\"\nargs = [\"serve\"]\n\n[mcp_servers.grpvn.env]\nGRPVN_STATE = %q\n", codexState)
+	if err := os.WriteFile(filepath.Join(home, ".codex", "config.toml"), []byte(toml), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := InstallSkill(&bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+
+	settings, _ := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+	for _, want := range []string{`--scope project hook stop`, `--scope project hook prompt`, `"GRPVN_SCOPE": "project"`} {
+		if !strings.Contains(string(settings), want) {
+			t.Fatalf("settings missing %q:\n%s", want, settings)
+		}
+	}
+	if strings.Count(string(settings), "hook stop") != 1 {
+		t.Fatalf("upgrade must rewrite, not duplicate, the Stop hook:\n%s", settings)
+	}
+
+	mcp, _ := os.ReadFile(filepath.Join(home, ".claude.json"))
+	if !strings.Contains(string(mcp), `"GRPVN_SCOPE": "project"`) {
+		t.Fatalf(".claude.json MCP env missing GRPVN_SCOPE:\n%s", mcp)
+	}
+
+	cfg, _ := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
+	if !strings.Contains(string(cfg), `GRPVN_SCOPE = "project"`) {
+		t.Fatalf("codex config missing GRPVN_SCOPE upgrade:\n%s", cfg)
+	}
+	codexHooks, _ := os.ReadFile(filepath.Join(home, ".codex", "hooks.json"))
+	if !strings.Contains(string(codexHooks), "--scope project") {
+		t.Fatalf("codex hooks missing --scope:\n%s", codexHooks)
 	}
 }

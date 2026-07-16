@@ -29,6 +29,14 @@ var rootCmd = &cobra.Command{
 	Short:         "Local-first peer chat for AI agents",
 	SilenceUsage:  true,
 	SilenceErrors: true,
+	// --scope travels through the same env var the MCP configs set, so
+	// every state-path resolution in the process — including ones that
+	// never see the flag value — agrees on the active scope.
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		if scopeFlag != "" {
+			os.Setenv("GRPVN_SCOPE", scopeFlag)
+		}
+	},
 	Run: func(cmd *cobra.Command, args []string) {
 		checkCmd.Run(cmd, args)
 	},
@@ -36,11 +44,12 @@ var rootCmd = &cobra.Command{
 
 var (
 	statePathFlag, asFlag, colorFlag string
+	scopeFlag                        string
 	humanFlag, fullFlag, tsFlag      bool
 	countFlag                        int
 
 	// Overridden by goreleaser via -X main.version / main.commit / main.date.
-	version = "0.3.2"
+	version = "0.4.0"
 	commit  = ""
 	date    = ""
 )
@@ -53,6 +62,7 @@ func Execute() {
 }
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&statePathFlag, "state", "s", "", "state file path")
+	rootCmd.PersistentFlags().StringVar(&scopeFlag, "scope", "", `identity scope: "project" keys the state file by the current project root; "host" forces the base file even when $GRPVN_SCOPE=project`)
 	rootCmd.PersistentFlags().StringVarP(&asFlag, "as", "a", "", "agent name")
 	rootCmd.PersistentFlags().BoolVarP(&humanFlag, "human", "H", false, "human mode")
 	rootCmd.PersistentFlags().BoolVarP(&fullFlag, "full", "F", false, "full ULIDs")
@@ -64,7 +74,16 @@ func init() {
 
 func bootstrap() (string, *internal.State, error) {
 	p := internal.ResolveStatePath(statePathFlag)
-	s, err := internal.LoadState(p)
+	base := internal.ResolveBaseStatePath(statePathFlag)
+	var s *internal.State
+	var err error
+	if p != base {
+		// Project scope: a first touch in a new project inherits the
+		// runtime's follows and default channel instead of starting deaf.
+		s, err = internal.LoadStateSeeded(p, base)
+	} else {
+		s, err = internal.LoadState(p)
+	}
 	if err != nil {
 		return "", nil, err
 	}

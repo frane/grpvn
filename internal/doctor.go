@@ -35,7 +35,11 @@ func Doctor(w io.Writer, home, activeStatePath string) error {
 		if p == activeStatePath {
 			active = " (active here)"
 		}
-		fmt.Fprintf(w, "ok    %s: %s follows %d channel(s)%s\n", filepath.Base(p), st.Name, len(st.Follow), active)
+		scope := ""
+		if st.Root != "" {
+			scope = " project=" + st.Root
+		}
+		fmt.Fprintf(w, "ok    %s: %s follows %d channel(s)%s%s\n", filepath.Base(p), st.Name, len(st.Follow), scope, active)
 		if st.Name != "" {
 			names[st.Name] = p
 		}

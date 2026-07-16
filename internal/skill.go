@@ -34,6 +34,7 @@ type Target struct {
 	HookDial  string // hook output dialect for HookFile entries: DialectCodex, DialectGemini, or DialectCursor
 	Context   string // path under HOME of an always-loaded context file (CLAUDE.md/AGENTS.md/GEMINI.md) to append the coordination block to (empty = skip)
 	Trust     bool   // set "trust": true on the mcpServers entry (Gemini CLI: skips per-call confirmation)
+	Scope     bool   // project-scoped identities: GRPVN_SCOPE=project in env, --scope project in hook commands. Only for runtimes whose cwd is the project (not Claude Desktop)
 }
 
 // HomeTargets enumerates the supported integrations. Paths are relative to the
@@ -48,6 +49,7 @@ func HomeTargets() []Target {
 			MCP:       ".claude.json",
 			Hooks:     ".claude/settings.json",
 			Context:   ".claude/CLAUDE.md",
+			Scope:     true,
 		},
 		{
 			Name:      "Cursor",
@@ -57,6 +59,7 @@ func HomeTargets() []Target {
 			MCP:       ".cursor/mcp.json",
 			HookFile:  ".cursor/hooks.json",
 			HookDial:  DialectCursor,
+			Scope:     true,
 		},
 		{
 			Name:      "Codex CLI",
@@ -67,6 +70,7 @@ func HomeTargets() []Target {
 			HookFile:  ".codex/hooks.json",
 			HookDial:  DialectCodex,
 			Context:   ".codex/AGENTS.md",
+			Scope:     true,
 		},
 		{
 			Name:      "Gemini CLI",
@@ -78,6 +82,7 @@ func HomeTargets() []Target {
 			HookDial:  DialectGemini,
 			Context:   ".gemini/GEMINI.md",
 			Trust:     true,
+			Scope:     true,
 		},
 		{
 			Name:      "agents (generic)",
@@ -155,6 +160,9 @@ func installSkillFromHome(w io.Writer, homeOverride string, forceAll bool) error
 		// $HOME/.grpvn/state.json and inherits the same identity.
 		statePath := filepath.Join(home, ".grpvn", "state-"+t.Slug+".json")
 		env := map[string]string{"GRPVN_STATE": statePath}
+		if t.Scope {
+			env["GRPVN_SCOPE"] = "project"
+		}
 		// Seed the per-runtime state before anything points at it. A
 		// runtime identity that follows no channels is a mailbox channel
 		// traffic can never reach — the notification hooks would guard an
@@ -194,7 +202,7 @@ func installSkillFromHome(w io.Writer, homeOverride string, forceAll bool) error
 		}
 		if t.Hooks != "" {
 			hooksPath := filepath.Join(home, t.Hooks)
-			added, err := mergeClaudeSettings(hooksPath, statePath)
+			added, err := mergeClaudeSettings(hooksPath, statePath, t.Scope)
 			if err != nil {
 				lastErr = err
 				continue
@@ -205,7 +213,7 @@ func installSkillFromHome(w io.Writer, homeOverride string, forceAll bool) error
 		}
 		if t.HookFile != "" {
 			hookPath := filepath.Join(home, t.HookFile)
-			added, err := mergeHooksFile(hookPath, statePath, t.HookDial)
+			added, err := mergeHooksFile(hookPath, statePath, t.HookDial, t.Scope)
 			if err != nil {
 				lastErr = err
 				continue
@@ -353,14 +361,40 @@ var grpvnHooks = []hookSpec{
 // prompt the user has to click through — which is no proactivity at all.
 var grpvnPermissions = []string{"mcp__grpvn", "Bash(grpvn:*)"}
 
+// hookCommand renders the installer's canonical hook command. Anything
+// matching its `grpvn --state "` prefix is treated as installer-written and
+// safe to upgrade in place; anything else (custom binary path, wrapper
+// script) is the user's and stays untouched.
+func hookCommand(statePath, sub string, scoped bool, dialect string) string {
+	c := fmt.Sprintf(`grpvn --state "%s"`, statePath)
+	if scoped {
+		c += " --scope project"
+	}
+	c += " " + sub
+	if dialect != "" && dialect != DialectClaude {
+		c += " --format " + dialect
+	}
+	return c
+}
+
+// upgradeableHook reports whether an existing hook command is one the
+// installer wrote (and may therefore rewrite when the canonical shape
+// changes, e.g. gaining --scope).
+func upgradeableHook(c string) bool {
+	return strings.HasPrefix(c, `grpvn --state "`)
+}
+
 // mergeClaudeSettings wires grpvn into a Claude-Code-style settings JSON:
 // the four notification hooks (each carrying the per-runtime state path,
 // since hooks run through the shell with the session env, not the MCP
-// server's), the permission allowlist, and a session-wide GRPVN_STATE env
-// var so CLI calls inside the session resolve to the same identity as the
-// MCP server. Idempotent per item; every other key in the document is
-// preserved and the write is atomic. Returns whether anything changed.
-func mergeClaudeSettings(path, statePath string) (bool, error) {
+// server's), the permission allowlist, and session-wide GRPVN_STATE (and,
+// when scoped, GRPVN_SCOPE) env vars so CLI calls inside the session
+// resolve to the same identity as the MCP server. Idempotent per item;
+// installer-written hook commands are upgraded in place when the canonical
+// shape changes, user-customized ones are left alone; every other key in
+// the document is preserved and the write is atomic. Returns whether
+// anything changed.
+func mergeClaudeSettings(path, statePath string, scoped bool) (bool, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return false, fmt.Errorf("create config dir: %w", err)
 	}
@@ -384,6 +418,7 @@ func mergeClaudeSettings(path, statePath string) (bool, error) {
 		hooks = map[string]interface{}{}
 	}
 	for _, spec := range grpvnHooks {
+		want := hookCommand(statePath, spec.Sub, scoped, DialectClaude)
 		groups, _ := hooks[spec.Event].([]interface{})
 		present := false
 		for _, group := range groups {
@@ -392,8 +427,13 @@ func mergeClaudeSettings(path, statePath string) (bool, error) {
 			for _, entry := range entries {
 				e, _ := entry.(map[string]interface{})
 				c, _ := e["command"].(string)
-				if strings.Contains(c, "grpvn") && strings.Contains(c, spec.Sub) {
-					present = true
+				if !strings.Contains(c, "grpvn") || !strings.Contains(c, spec.Sub) {
+					continue
+				}
+				present = true
+				if c != want && upgradeableHook(c) {
+					e["command"] = want
+					changed = true
 				}
 			}
 		}
@@ -404,7 +444,7 @@ func mergeClaudeSettings(path, statePath string) (bool, error) {
 			"hooks": []interface{}{
 				map[string]interface{}{
 					"type":    "command",
-					"command": fmt.Sprintf(`grpvn --state "%s" %s`, statePath, spec.Sub),
+					"command": want,
 				},
 			},
 		}
@@ -443,6 +483,12 @@ func mergeClaudeSettings(path, statePath string) (bool, error) {
 	if _, ok := envDoc["GRPVN_STATE"]; !ok {
 		envDoc["GRPVN_STATE"] = statePath
 		changed = true
+	}
+	if scoped {
+		if _, ok := envDoc["GRPVN_SCOPE"]; !ok {
+			envDoc["GRPVN_SCOPE"] = "project"
+			changed = true
+		}
 	}
 	doc["env"] = envDoc
 
@@ -495,7 +541,7 @@ var dialectHooks = map[string][]hookSpec{
 // matches mergeClaudeSettings: an existing command containing "grpvn" and
 // the subcommand leaves that event untouched, everything else in the
 // document is preserved, and the write is atomic.
-func mergeHooksFile(path, statePath, dialect string) (bool, error) {
+func mergeHooksFile(path, statePath, dialect string, scoped bool) (bool, error) {
 	specs, ok := dialectHooks[dialect]
 	if !ok {
 		return false, fmt.Errorf("unknown hook dialect %q", dialect)
@@ -528,34 +574,41 @@ func mergeHooksFile(path, statePath, dialect string) (bool, error) {
 		hooks = map[string]interface{}{}
 	}
 	for _, spec := range specs {
+		want := hookCommand(statePath, spec.Sub, scoped, dialect)
 		entries, _ := hooks[spec.Event].([]interface{})
 		present := false
+		match := func(e map[string]interface{}) {
+			c, _ := e["command"].(string)
+			if !strings.Contains(c, "grpvn") || !strings.Contains(c, spec.Sub) {
+				return
+			}
+			present = true
+			if c != want && upgradeableHook(c) {
+				e["command"] = want
+				changed = true
+			}
+		}
 		for _, entry := range entries {
 			e, _ := entry.(map[string]interface{})
 			// Cursor entries carry the command directly; Codex/Gemini nest
 			// it in a matcher group's hooks array.
-			if c, _ := e["command"].(string); strings.Contains(c, "grpvn") && strings.Contains(c, spec.Sub) {
-				present = true
-			}
+			match(e)
 			inner, _ := e["hooks"].([]interface{})
 			for _, ih := range inner {
 				h, _ := ih.(map[string]interface{})
-				if c, _ := h["command"].(string); strings.Contains(c, "grpvn") && strings.Contains(c, spec.Sub) {
-					present = true
-				}
+				match(h)
 			}
 		}
 		if present {
 			continue
 		}
-		command := fmt.Sprintf(`grpvn --state "%s" %s --format %s`, statePath, spec.Sub, dialect)
 		var entry map[string]interface{}
 		if dialect == DialectCursor {
-			entry = map[string]interface{}{"command": command}
+			entry = map[string]interface{}{"command": want}
 		} else {
 			entry = map[string]interface{}{
 				"hooks": []interface{}{
-					map[string]interface{}{"type": "command", "command": command},
+					map[string]interface{}{"type": "command", "command": want},
 				},
 			}
 		}
@@ -675,6 +728,52 @@ func mergeMCPTOML(path, name, command string, args []string, env map[string]stri
 	envHeader := fmt.Sprintf("[mcp_servers.%s.env]", name)
 	hasSection := bytes.Contains(existing, []byte(header))
 	hasEnv := bytes.Contains(existing, []byte(envHeader))
+	// The env upgrade only applies to sections the installer wrote itself,
+	// recognized by the canonical GRPVN_STATE value. A user-customized env
+	// table (different state path, different binary) is theirs — additive
+	// TOML handling means we never modify what we can't prove we created.
+	installerEnv := hasEnv && env["GRPVN_STATE"] != "" &&
+		bytes.Contains(existing, []byte(fmt.Sprintf("%q", env["GRPVN_STATE"])))
+	if hasSection && installerEnv && len(env) > 0 {
+		// Upgrade path: the env table exists but may predate a newer key
+		// (GRPVN_SCOPE arrived after GRPVN_STATE). Insert missing keys
+		// directly under the env table header — the one place they're
+		// guaranteed to land inside the right TOML table without parsing
+		// the whole document.
+		var missing []string
+		for k := range env {
+			if !bytes.Contains(existing, []byte(k+" = ")) {
+				missing = append(missing, k)
+			}
+		}
+		if len(missing) == 0 {
+			return false, nil
+		}
+		sort.Strings(missing)
+		idx := bytes.Index(existing, []byte(envHeader))
+		lineEnd := idx + len(envHeader)
+		if nl := bytes.IndexByte(existing[lineEnd:], '\n'); nl >= 0 {
+			lineEnd += nl + 1
+		} else {
+			existing = append(existing, '\n')
+			lineEnd = len(existing)
+		}
+		var merged bytes.Buffer
+		merged.Write(existing[:lineEnd])
+		for _, k := range missing {
+			fmt.Fprintf(&merged, "%s = %q\n", k, env[k])
+		}
+		merged.Write(existing[lineEnd:])
+		tmp := fmt.Sprintf("%s.tmp.%d", path, os.Getpid())
+		if err := os.WriteFile(tmp, merged.Bytes(), 0644); err != nil {
+			return false, fmt.Errorf("write %s: %w", tmp, err)
+		}
+		if err := os.Rename(tmp, path); err != nil {
+			os.Remove(tmp)
+			return false, fmt.Errorf("rename %s: %w", path, err)
+		}
+		return true, nil
+	}
 	if hasSection && (hasEnv || len(env) == 0) {
 		return false, nil
 	}

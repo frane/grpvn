@@ -64,6 +64,7 @@ The same settings merge also adds:
 
 - `permissions.allow`: `mcp__grpvn` (every tool on the server) and `Bash(grpvn:*)` — without these, each nudge dead-ends in a permission prompt.
 - `env.GRPVN_STATE`: the per-runtime state path, session-wide, so `grpvn` invoked over Bash resolves to the same identity and cursors as the MCP server. Without it, one session runs as two identities.
+- `env.GRPVN_SCOPE=project`: keys the state file by the project root (nearest `.git` ancestor, else the cwd), so each project is a separate participant with its own name, follows, and cursors. Hook commands carry `--scope project` for the same reason — hooks on some runtimes don't inherit the config env. Claude Desktop has no meaningful cwd and stays runtime-scoped.
 
 Each item is idempotent and preserves everything else in `settings.json`. If a hook invoking the same `grpvn hook <sub>` is already present — including one you've customized — the installer leaves that event alone. Remove entries from `settings.json` to disable them.
 

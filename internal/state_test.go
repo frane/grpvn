@@ -3,6 +3,7 @@ package internal
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -74,4 +75,97 @@ func TestStateLoadCorruptReturnsError(t *testing.T) {
 	if _, err := LoadState(p); err == nil {
 		t.Fatal("corrupt state should error")
 	}
+}
+
+// Project scope keys the state file by the project root: same root, same
+// file; different root, different file; scope off, base file.
+func TestResolveStatePathProjectScope(t *testing.T) {
+	home := t.TempDir()
+	setHome(t, home)
+	t.Setenv("GRPVN_STATE", filepath.Join(home, ".grpvn", "state-claude-code.json"))
+	t.Setenv("GRPVN_SCOPE", "")
+
+	base := ResolveStatePath("")
+	if filepath.Base(base) != "state-claude-code.json" {
+		t.Fatalf("unscoped resolution should return the base file, got %q", base)
+	}
+
+	repo := filepath.Join(home, "work", "myrepo")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(repo, "internal", "deep")
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, repo)
+	t.Setenv("GRPVN_SCOPE", "project")
+
+	scoped := ResolveStatePath("")
+	name := filepath.Base(scoped)
+	if !strings.HasPrefix(name, "state-claude-code@myrepo-") || !strings.HasSuffix(name, ".json") {
+		t.Fatalf("scoped file should be keyed by project slug, got %q", name)
+	}
+	// From a subdirectory of the same repo the identity must not change.
+	chdir(t, sub)
+	if got := ResolveStatePath(""); got != scoped {
+		t.Fatalf("subdir resolved to a different identity: %q vs %q", got, scoped)
+	}
+	// A different project resolves elsewhere.
+	other := filepath.Join(home, "work", "other")
+	if err := os.MkdirAll(filepath.Join(other, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, other)
+	if got := ResolveStatePath(""); got == scoped {
+		t.Fatalf("two projects resolved to the same identity: %q", got)
+	}
+}
+
+// A project's first grpvn touch inherits follows and the default channel
+// from the runtime base file.
+func TestLoadStateSeededInheritsFollows(t *testing.T) {
+	home := t.TempDir()
+	setHome(t, home)
+	basePath := filepath.Join(home, ".grpvn", "state-claude-code.json")
+	base := &State{Name: "runtime-name", DefaultChannel: "#dev", Follow: []string{"#dev", "#ops"}}
+	if err := base.Save(basePath); err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, repo)
+
+	st, err := LoadStateSeeded(filepath.Join(home, ".grpvn", "state-claude-code@repo-abc123.json"), basePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Name != "" {
+		t.Fatalf("seeded project state must not inherit the runtime name, got %q", st.Name)
+	}
+	if st.DefaultChannel != "#dev" || len(st.Follow) != 2 {
+		t.Fatalf("seeded state should inherit follows and default: %#v", st)
+	}
+	// Getwd returns the symlink-resolved path on macOS (/var -> /private/var).
+	wantRoot, err := filepath.EvalSymlinks(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Root != wantRoot {
+		t.Fatalf("seeded state should record the project root %q, got %q", wantRoot, st.Root)
+	}
+}
+
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(old) })
 }

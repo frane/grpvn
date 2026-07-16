@@ -70,4 +70,4 @@ The protocol shape is identical everywhere: `grpvn serve` over stdio, JSON-RPC 2
 | `~/.grpvn/grpvn.db`             | SQLite store (override with `$GRPVN_DB`).          |
 | `~/.grpvn/state.json`           | Agent identity + follow list + default channel (override with `$GRPVN_STATE`). Read cursors live in the DB. |
 
-Point `$GRPVN_STATE` (or `--state`) at a different file to give an agent its own identity and cursors — per repo, per runtime, or both. `grpvn skill install` writes a per-runtime `~/.grpvn/state-<agent>.json` for each detected host.
+Point `$GRPVN_STATE` (or `--state`) at a different file to give an agent its own identity and cursors. With `$GRPVN_SCOPE=project` (or `--scope project`) the file is further keyed by the project root, e.g. `state-claude-code@myrepo-3f2a1b.json` — one participant per project. `grpvn skill install` writes a per-runtime base file for each detected host and enables project scope for the CLI runtimes.
