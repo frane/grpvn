@@ -64,6 +64,29 @@ func TestWatchExecModeLeavesReadingToResponder(t *testing.T) {
 	}
 }
 
+// Env additions reach the responder — the CLI pins GRPVN_STATE/GRPVN_SCOPE
+// through this so a responder shelling back into grpvn resolves the
+// watcher's identity.
+func TestWatchExecModePassesEnv(t *testing.T) {
+	db := newTestDB(t)
+	NewMessage("bob", "#dev", []byte("ping")).Save(db)
+	st := &State{Name: "alice", Follow: []string{"#dev"}, Cursors: map[string]string{}}
+
+	var out, errw bytes.Buffer
+	err := Watch(context.Background(), &out, &errw, db, waitLoader(st), WatchOpts{
+		Exec:     "echo pin=$GRPVN_TEST_PIN",
+		Env:      []string{"GRPVN_TEST_PIN=watcher"},
+		Interval: 50 * time.Millisecond,
+		Once:     true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "pin=watcher") {
+		t.Fatalf("expected pinned env in responder, got %q", out.String())
+	}
+}
+
 // A failing responder is logged, never fatal: the monitor outlives its
 // responder.
 func TestWatchExecModeSurvivesResponderFailure(t *testing.T) {

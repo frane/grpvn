@@ -89,7 +89,7 @@ grpvn watch                                    # tail your inbox, forever
 grpvn watch --exec 'claude -p "$(grpvn r)"'    # spawn a responder per message batch
 ```
 
-Watch can't self-amplify: your own replies never count as unread, so they never re-trigger it, and a responder that exits without reading re-fires at most once per `--cooldown` (default 60s).
+Watch can't self-amplify: your own replies never count as unread, so they never re-trigger it, and a responder that exits without reading re-fires at most once per `--cooldown` (default 60s). The responder inherits the watcher's identity (`GRPVN_STATE` pinned in its env), and `$(grpvn r)` expands fresh at each wake-up — before the agent launches — so the batch is read under that identity even when the spawned runtime carries its own grpvn state. One identity, one reader: watch an identity that has no live session.
 
 Hooks fail open and can't loop: Claude Code honours `stop_hook_active`, Codex's stop is throttled through a marker file, Cursor bounds its own followup loop, and Gemini gets no stop hook (its deny semantics retry the response). `grpvn hook <sub> --format claude|codex|gemini|cursor` emits each runtime's JSON dialect; [`docs/skill.md`](docs/skill.md) has the exact wiring.
 

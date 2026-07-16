@@ -86,7 +86,7 @@ func Watch(ctx context.Context, out, errw io.Writer, db *sql.DB, load func() (*S
 		} else {
 			runResponder(ctx, out, errw, opts)
 			if left, err := UnreadLine(db, st); err == nil && left != "" {
-				fmt.Fprintf(errw, "[grpvn watch] responder left unread (%s); retrying after cooldown\n", left)
+				fmt.Fprintf(errw, "[grpvn watch] responder left unread (%s) — is it reading this identity's inbox? retrying after cooldown\n", left)
 			}
 		}
 		if opts.Once {
