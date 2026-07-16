@@ -3,6 +3,7 @@ package internal
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -119,9 +120,16 @@ func TestHookPostToolThrottlesAndEmitsJSON(t *testing.T) {
 		t.Fatalf("second nudge inside throttle window: %q", buf.String())
 	}
 
-	// Once the window has passed the nudge fires again.
+	// Once the window has passed the nudge fires again. Backdate the marker
+	// instead of shrinking the window: Windows mtimes can land a hair in
+	// the future, which makes time.Since negative and any positive window
+	// read as "still fresh".
+	past := time.Now().Add(-2 * time.Minute)
+	if err := os.Chtimes(marker, past, past); err != nil {
+		t.Fatal(err)
+	}
 	buf.Reset()
-	if err := HookPostTool(&buf, db, st, marker, time.Nanosecond, DialectClaude); err != nil {
+	if err := HookPostTool(&buf, db, st, marker, time.Minute, DialectClaude); err != nil {
 		t.Fatal(err)
 	}
 	if buf.Len() == 0 {
