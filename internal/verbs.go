@@ -60,6 +60,52 @@ func Check(w io.Writer, db *sql.DB, st *State) (int, error) {
 // TARGET, guarded to be monotonic. Delivery is at-least-once: two reads by
 // the same agent racing each other may both print a message, but the
 // commit-ordered seq guarantees neither can skip one.
+// scanMessage reads one row into a Message. withSeq matches queries that
+// select seq as the leading column.
+func scanMessage(rows *sql.Rows, withSeq bool) (*Message, error) {
+	var m Message
+	var pID, corr sql.NullString
+	var err error
+	if withSeq {
+		err = rows.Scan(&m.Seq, &m.ID, &m.Sender, &m.Target, &m.Body, &m.ChainRoot, &m.ChainDepth, &pID, &corr, &m.CreatedAt)
+	} else {
+		err = rows.Scan(&m.ID, &m.Sender, &m.Target, &m.Body, &m.ChainRoot, &m.ChainDepth, &pID, &corr, &m.CreatedAt)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if pID.Valid {
+		m.ParentID = &pID.String
+	}
+	if corr.Valid {
+		m.Correlation = &corr.String
+	}
+	return &m, nil
+}
+
+// AutoFollow subscribes the sender to a channel it just posted into.
+// Posting says "I care about this conversation"; without the follow, the
+// replies land where the sender never looks — the field failure was four
+// posts into a channel and three answers the sender reported as "no
+// reply". DMs and already-followed channels are no-ops. The send has
+// already committed when this runs, so save failures are returned for the
+// caller to warn about, never to fail the verb.
+func AutoFollow(st *State, statePath, target string) (bool, error) {
+	if !strings.HasPrefix(target, "#") {
+		return false, nil
+	}
+	for _, f := range st.Follow {
+		if f == target {
+			return false, nil
+		}
+	}
+	st.Follow = append(st.Follow, target)
+	if err := st.Save(statePath); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func Read(w io.Writer, db *sql.DB, st *State, limit int, advance bool, ts bool, full bool, human bool, color string) (int, error) {
 	cursors, err := loadCursors(db, st.Name)
 	if err != nil {
@@ -89,36 +135,22 @@ func Read(w io.Writer, db *sql.DB, st *State, limit int, advance bool, ts bool, 
 	defer rows.Close()
 
 	newCursors := map[string]int64{}
-	count := 0
+	var msgs []*Message
 	for rows.Next() {
-		var m Message
-		var pID, corr sql.NullString
-		if err := rows.Scan(&m.Seq, &m.ID, &m.Sender, &m.Target, &m.Body, &m.ChainRoot, &m.ChainDepth, &pID, &corr, &m.CreatedAt); err != nil {
+		m, err := scanMessage(rows, true)
+		if err != nil {
 			return 0, err
 		}
-		if pID.Valid {
-			m.ParentID = &pID.String
-		}
-		if corr.Valid {
-			m.Correlation = &corr.String
-		}
-		if human {
-			if count == 0 {
-				HumanHeader(w, ShouldColor(color))
-			}
-			RenderHuman(w, &m, st.Name, ShouldColor(color))
-		} else {
-			RenderAI(w, &m, st.Name, st.DefaultChannel, ts, full)
-		}
 		newCursors[m.Target] = m.Seq
-		count++
+		msgs = append(msgs, m)
 	}
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
-	if count == 0 {
+	if len(msgs) == 0 {
 		return 2, nil
 	}
+	RenderBatch(w, msgs, st.Name, st.DefaultChannel, ts, full, human, color)
 	if advance {
 		for target, pos := range newCursors {
 			if err := advanceCursor(db, st.Name, target, pos); err != nil {
@@ -220,35 +252,21 @@ func Grep(w io.Writer, db *sql.DB, name string, follow []string, pattern string,
 	if err != nil {
 		return fmt.Errorf("invalid pattern: %w", err)
 	}
-	count := 0
+	var msgs []*Message
 	for rows.Next() {
-		var m Message
-		var pID, corr sql.NullString
-		if err := rows.Scan(&m.ID, &m.Sender, &m.Target, &m.Body, &m.ChainRoot, &m.ChainDepth, &pID, &corr, &m.CreatedAt); err != nil {
+		m, err := scanMessage(rows, false)
+		if err != nil {
 			return err
 		}
 		if !re.Match(m.Body) {
 			continue
 		}
-		if pID.Valid {
-			m.ParentID = &pID.String
-		}
-		if corr.Valid {
-			m.Correlation = &corr.String
-		}
-		if human {
-			if count == 0 {
-				HumanHeader(w, ShouldColor(color))
-			}
-			RenderHuman(w, &m, name, ShouldColor(color))
-		} else {
-			RenderAI(w, &m, name, defaultChannel, ts, full)
-		}
-		count++
-		if limit > 0 && count >= limit {
+		msgs = append(msgs, m)
+		if limit > 0 && len(msgs) >= limit {
 			break
 		}
 	}
+	RenderBatch(w, msgs, name, defaultChannel, ts, full, human, color)
 	return nil
 }
 
@@ -280,29 +298,15 @@ func Log(w io.Writer, db *sql.DB, name string, arg string, limit int, defaultCha
 		return err
 	}
 	defer rows.Close()
-	count := 0
+	var msgs []*Message
 	for rows.Next() {
-		var m Message
-		var pID, corr sql.NullString
-		if err := rows.Scan(&m.ID, &m.Sender, &m.Target, &m.Body, &m.ChainRoot, &m.ChainDepth, &pID, &corr, &m.CreatedAt); err != nil {
+		m, err := scanMessage(rows, false)
+		if err != nil {
 			return err
 		}
-		if pID.Valid {
-			m.ParentID = &pID.String
-		}
-		if corr.Valid {
-			m.Correlation = &corr.String
-		}
-		if human {
-			if count == 0 {
-				HumanHeader(w, ShouldColor(color))
-			}
-			RenderHuman(w, &m, name, ShouldColor(color))
-		} else {
-			RenderAI(w, &m, name, defaultChannel, ts, full)
-		}
-		count++
+		msgs = append(msgs, m)
 	}
+	RenderBatch(w, msgs, name, defaultChannel, ts, full, human, color)
 	return nil
 }
 
@@ -313,29 +317,15 @@ func Mark(w io.Writer, db *sql.DB, name string, msgArg string, delete bool, defa
 			return err
 		}
 		defer rows.Close()
-		count := 0
+		var msgs []*Message
 		for rows.Next() {
-			var m Message
-			var pID, corr sql.NullString
-			if err := rows.Scan(&m.ID, &m.Sender, &m.Target, &m.Body, &m.ChainRoot, &m.ChainDepth, &pID, &corr, &m.CreatedAt); err != nil {
+			m, err := scanMessage(rows, false)
+			if err != nil {
 				return err
 			}
-			if pID.Valid {
-				m.ParentID = &pID.String
-			}
-			if corr.Valid {
-				m.Correlation = &corr.String
-			}
-			if human {
-				if count == 0 {
-					HumanHeader(w, ShouldColor(color))
-				}
-				RenderHuman(w, &m, name, ShouldColor(color))
-			} else {
-				RenderAI(w, &m, name, defaultChannel, ts, full)
-			}
-			count++
+			msgs = append(msgs, m)
 		}
+		RenderBatch(w, msgs, name, defaultChannel, ts, full, human, color)
 		return nil
 	}
 	m, err := FindMessageByPrefix(db, msgArg)

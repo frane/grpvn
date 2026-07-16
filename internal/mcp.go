@@ -95,7 +95,7 @@ func ServeMCP(name, version string, b Bootstrap) error {
 		return mcp.NewToolResultText(buf.String()), nil
 	})
 
-	s.AddTool(tool("r", "Reads unread messages and advances the cursor"), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.AddTool(tool("r", "Reads unread messages and advances the cursor. If a previous r call's response was lost by the transport, its messages were still marked read — recover them with l (full history, ignores read state). On a flaky connection prefer p (peek) first"), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		_, st, db, err := open()
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
@@ -142,9 +142,14 @@ func ServeMCP(name, version string, b Bootstrap) error {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			defer db.Close()
-			if _, err := Send(db, n, args.Target, args.Body, st.DefaultChannel, false); err != nil {
+			m, err := Send(db, n, args.Target, args.Body, st.DefaultChannel, false)
+			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
+			// Posting into a channel subscribes the sender; replies to this
+			// message must be able to reach it. Fail open — the send is
+			// already committed.
+			_, _ = AutoFollow(st, statePath(), m.Target)
 			return mcp.NewToolResultText(notice(db, st, "sent")), nil
 		})
 
@@ -165,6 +170,7 @@ func ServeMCP(name, version string, b Bootstrap) error {
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
+			_, _ = AutoFollow(st, statePath(), m.Target)
 			return mcp.NewToolResultText(notice(db, st, m.ID)), nil
 		})
 

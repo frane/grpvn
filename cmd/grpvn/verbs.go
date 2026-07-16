@@ -113,10 +113,12 @@ var sendCmd = &cobra.Command{
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
-		if _, err := internal.Send(db, n, t, b, st.DefaultChannel, false); err != nil {
+		m, err := internal.Send(db, n, t, b, st.DefaultChannel, false)
+		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
+		autoFollow(st, m.Target)
 		unreadNotice(db, st)
 	},
 }
@@ -142,8 +144,23 @@ var askCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		fmt.Println(m.ID)
+		autoFollow(st, m.Target)
 		unreadNotice(db, st)
 	},
+}
+
+// autoFollow subscribes the sender to a channel it just posted into, so
+// replies to its own messages can never land outside its unread. Warns
+// instead of failing — the send already committed.
+func autoFollow(st *internal.State, target string) {
+	added, err := internal.AutoFollow(st, internal.ResolveStatePath(statePathFlag), target)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warn: could not auto-follow %s: %v\n", target, err)
+		return
+	}
+	if added {
+		fmt.Fprintf(os.Stderr, "[grpvn] now following %s (posted into it)\n", target)
+	}
 }
 
 var grepCmd = &cobra.Command{

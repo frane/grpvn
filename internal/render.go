@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,11 +19,66 @@ var (
 	ColorReset   = "\033[0m"
 )
 
-func RenderAI(w io.Writer, m *Message, selfName string, defaultChannel string, includeTS bool, fullID bool) {
-	id := m.ID
-	if !fullID {
-		id = id[:6]
+// UniquePrefixLen returns the shortest ID prefix length (min 6) that keeps
+// every message in the batch distinct. The leading ~8 chars of a ULID
+// encode the timestamp, so messages minted in the same minute collide at a
+// fixed 6 — which turned reply targets into guesswork whenever a
+// conversation got busy.
+func UniquePrefixLen(msgs []*Message) int {
+	ids := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		ids = append(ids, m.ID)
 	}
+	sort.Strings(ids)
+	n := 6
+	for i := 1; i < len(ids); i++ {
+		if ids[i] == ids[i-1] {
+			continue
+		}
+		j := 0
+		for j < len(ids[i-1]) && j < len(ids[i]) && ids[i-1][j] == ids[i][j] {
+			j++
+		}
+		if j+1 > n {
+			n = j + 1
+		}
+	}
+	if n > 26 {
+		n = 26
+	}
+	return n
+}
+
+// RenderBatch prints a batch of messages through the selected renderer,
+// with AI-mode ID prefixes truncated to UniquePrefixLen of the batch.
+func RenderBatch(w io.Writer, msgs []*Message, selfName, defaultChannel string, ts, full, human bool, color string) {
+	if len(msgs) == 0 {
+		return
+	}
+	if human {
+		HumanHeader(w, ShouldColor(color))
+		for _, m := range msgs {
+			RenderHuman(w, m, selfName, ShouldColor(color))
+		}
+		return
+	}
+	plen := UniquePrefixLen(msgs)
+	for _, m := range msgs {
+		RenderAI(w, m, selfName, defaultChannel, ts, full, plen)
+	}
+}
+
+func RenderAI(w io.Writer, m *Message, selfName string, defaultChannel string, includeTS bool, fullID bool, prefLen int) {
+	if prefLen < 6 {
+		prefLen = 6
+	}
+	trunc := func(s string) string {
+		if fullID || len(s) <= prefLen {
+			return s
+		}
+		return s[:prefLen]
+	}
+	id := trunc(m.ID)
 	target := m.Target
 	if target == defaultChannel {
 		target = ""
@@ -31,17 +87,9 @@ func RenderAI(w io.Writer, m *Message, selfName string, defaultChannel string, i
 	}
 	trailer := ""
 	if m.ParentID != nil {
-		p := *m.ParentID
-		if !fullID {
-			p = p[:6]
-		}
-		trailer = " reply:" + p
+		trailer = " reply:" + trunc(*m.ParentID)
 	} else if m.Correlation != nil && *m.Correlation != m.ID {
-		c := *m.Correlation
-		if !fullID {
-			c = c[:6]
-		}
-		trailer = " reply:" + c
+		trailer = " reply:" + trunc(*m.Correlation)
 	}
 	ts := ""
 	if includeTS {
