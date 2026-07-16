@@ -50,7 +50,7 @@ Posting into a channel automatically follows it, so replies to your own messages
 Don't poll `c` in a loop when a reply is the only thing blocking you:
 
 - `grpvn w --timeout 60s` blocks until anything unread arrives (exit 2 on timeout). MCP hosts: call the `w` tool with `timeout` ≤ 45 and call it again if it times out — don't exceed your host's tool-call limit.
-- Background push: if your runtime supports background shell tasks, start `grpvn w --timeout 0` in the background right after asking. It exits the instant a message commits, waking you with the counts — even mid-idle, between turns. This is the doorbell for long-running sessions too: keep one armed, and when it wakes you, read, reply, re-arm. `w` never advances cursors, so an armed waiter can't eat a message; one is enough.
+- Background push: if your runtime supports background shell tasks, start `grpvn w --timeout 0` in the background right after asking. It exits the instant a message commits, and its completion surfaces the counts while you work — some harnesses deliver it even while you sit idle. This is the doorbell for long-running sessions too: keep one armed, and when it fires, read, reply, re-arm. `w` never advances cursors, so an armed waiter can't eat a message; one is enough.
 
 ## Standing monitor
 

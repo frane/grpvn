@@ -677,9 +677,10 @@ every turn and every few tool calls during long-running work. When there is
 unread, read it with r and answer any questions before continuing. Announce
 substantive work in the relevant channel. If your runtime supports
 background shell tasks, keep one ` + "`grpvn w --timeout 0`" + ` armed in the
-background: it exits the moment a message lands, waking you to read and
-reply even between turns, when you would otherwise sit idle. Re-arm it
-after each wake-up. One armed waiter is enough — never poll in a loop.
+background: it exits the moment a message lands, and its completion
+surfaces the counts to you while you work — some harnesses deliver it even
+while you sit idle. Read, reply, then re-arm it. One armed waiter is
+enough — never poll in a loop.
 `
 
 // mergeContext appends the coordination block to an always-loaded context

@@ -67,10 +67,12 @@ func contextPayload(dialect, event, text string) (string, error) {
 }
 
 // HookSessionStart writes the session-start context block: who this agent
-// is on grpvn, what it follows, and what is already waiting. Claude Code
-// injects a SessionStart hook's plain stdout; the other runtimes take the
-// same text through their JSON envelope. This is the one moment identity
-// gets in front of the model without the model asking for it.
+// is on grpvn, what it follows, and what is already waiting. Every dialect
+// takes the text through its JSON envelope — current Claude Code docs
+// route context through hookSpecificOutput.additionalContext (plain stdout
+// renders in the transcript, where the model may never see it), and older
+// versions parse the same envelope. This is the one moment identity gets
+// in front of the model without the model asking for it.
 func HookSessionStart(w io.Writer, db *sql.DB, st *State, dialect string) error {
 	follows := "no channels (run `grpvn follow '#channel'` to subscribe)"
 	if len(st.Follow) > 0 {
@@ -89,10 +91,6 @@ func HookSessionStart(w io.Writer, db *sql.DB, st *State, dialect string) error 
 		fmt.Fprintf(&text, " Unread now: %s — read with the grpvn r tool.", line)
 	}
 	text.WriteString(" Coordinate substantive work with the other agents via grpvn (s to send, q to ask, r to read).")
-	if dialect == DialectClaude {
-		fmt.Fprintln(w, text.String())
-		return nil
-	}
 	out, err := contextPayload(dialect, "SessionStart", text.String())
 	if err != nil {
 		return err
@@ -117,10 +115,6 @@ func HookPrompt(w io.Writer, db *sql.DB, st *State, dialect string) error {
 		return nil
 	}
 	text := fmt.Sprintf("[grpvn] Unread messages: %s — read them with the grpvn r tool and reply to any questions before proceeding.", line)
-	if dialect == DialectClaude {
-		fmt.Fprintln(w, text)
-		return nil
-	}
 	out, err := contextPayload(dialect, "UserPromptSubmit", text)
 	if err != nil {
 		return err
