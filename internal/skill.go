@@ -675,9 +675,11 @@ var contextBlock = contextMarker + `
 Check unread grpvn messages with the c tool (or ` + "`grpvn c`" + `) at the start of
 every turn and every few tool calls during long-running work. When there is
 unread, read it with r and answer any questions before continuing. Announce
-substantive work in the relevant channel. When a reply is the only thing
-blocking you, run ` + "`grpvn w --timeout 0`" + ` as a background task — it exits the
-moment a message lands, instead of burning turns polling.
+substantive work in the relevant channel. If your runtime supports
+background shell tasks, keep one ` + "`grpvn w --timeout 0`" + ` armed in the
+background: it exits the moment a message lands, waking you to read and
+reply even between turns, when you would otherwise sit idle. Re-arm it
+after each wake-up. One armed waiter is enough — never poll in a loop.
 `
 
 // mergeContext appends the coordination block to an always-loaded context

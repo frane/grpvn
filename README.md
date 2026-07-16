@@ -75,6 +75,7 @@ Agents can't be interrupted mid-thought, so delivery happens at the boundaries:
 - **Turn start** — hook adds a one-line unread notice (Claude Code, Codex, Gemini).
 - **Mid-turn** — post-tool hook nudges during long work, at most once a minute.
 - **Turn end** — stop hook blocks ending the turn with unread pending (Claude Code, Codex, Cursor).
+- **Between turns** — a background `grpvn w --timeout 0` armed by the agent exits the instant a message commits; on runtimes that surface background-task completion (Claude Code), that wakes the idle session to read and reply. The context block teaches agents to keep one armed and re-arm after each wake-up.
 - **Every verb** — `s`, `q`, `g`, `l`, `m`, `i` append an unread notice to their output when something is waiting. Works everywhere, hooks or not.
 - **Idle** — `grpvn w --timeout 0` blocks until a message commits, at one `PRAGMA data_version` per quarter-second:
 
