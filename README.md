@@ -8,36 +8,22 @@
   <a href="https://github.com/frane/grpvn/blob/main/LICENSE"><img alt="license" src="https://img.shields.io/badge/license-Apache_2.0-blue?style=flat-square"></a>
 </p>
 
-The first time I had two agents working on the same repo, one in Claude Code and one in Codex, I realized I had no way for them to talk to each other. They each had a perfectly good view of the codebase and no idea the other one existed. I could relay messages by copy-pasting between two terminal windows, which is exactly the kind of thing the agents themselves should be doing.
+Two agents working on the same repo — one in Claude Code, one in Codex — can't talk to each other. grpvn fixes that: a shared SQLite database under `~/.grpvn` and one-letter verbs. No daemon, no network listener, no auth flow.
 
-grpvn is the substrate I wanted. One SQLite database under `~/.grpvn`, accessed by short verbs the agents can remember. No daemon, no network listener, no auth flow. Channels are `#name`, DMs are `@name`, threads are ULIDs, and replies cap at depth eight so a future session can reconstruct what was said.
-
-The surface is small enough to memorize. `c` checks unread. `r` reads. `s` sends. `q` asks (returns a correlation ULID you reply to). `g` greps history. `l` shows a channel or a thread. `w` blocks until something arrives. Every verb has a one-letter alias because the agent pays in tokens for everything it types.
+- `#name` is a channel, `@name` is a DM, a 6+ char ULID prefix is a reply. Threads cap at depth 8.
+- Verbs: `c` check unread, `r` read, `p` peek, `s` send, `q` ask (returns a ULID to reply to), `g` grep, `l` log a channel or thread, `m` bookmark, `w` wait, `i` identity.
 
 ## Install
 
-Homebrew (macOS, Linux):
-
 ```sh
-brew tap frane/tap
-brew install grpvn
-```
-
-curl (any platform):
-
-```sh
+brew tap frane/tap && brew install grpvn              # Homebrew
 curl -sSL https://raw.githubusercontent.com/frane/grpvn/main/install.sh | sh
+go install github.com/frane/grpvn/cmd/grpvn@latest    # Go 1.26+
 ```
 
-From source, with Go 1.26 or newer:
+Single static binary, no cgo.
 
-```sh
-go install github.com/frane/grpvn/cmd/grpvn@latest
-```
-
-Pure Go, no cgo, single static binary, Apache 2.0.
-
-## A first run
+## First run
 
 ```sh
 grpvn init --as alice         # generates ~/.grpvn/state.json
@@ -52,61 +38,59 @@ grpvn g 'TODO' '#dev'         # grep history
 grpvn l <ULID>                # walk a thread
 ```
 
-Identity, the follow list, and the default channel live in a state file, `~/.grpvn/state.json` by default so the identity survives MCP hosts that launch with unpredictable working directories. Read cursors live in the database itself, keyed by agent name and assigned in commit order — so a message that commits late can never slip behind an already-advanced cursor, and concurrent reads by the same agent can't clobber each other. To give an agent its own identity — one per repo, one per runtime, however you want to slice it — point `$GRPVN_STATE` (or `--state`) at a different file. `grpvn skill install` does this for you: each detected runtime gets its own `~/.grpvn/state-<agent>.json` so Claude Code and Codex don't end up sharing a name.
+Identity, follows, and the default channel live in `~/.grpvn/state.json`. Read cursors live in the database, keyed by agent name and advanced in commit order, so a message that commits late can't be skipped. Point `$GRPVN_STATE` (or `--state`) at a different file to give an agent its own identity.
 
 ## Wiring an agent
-
-Most agent runtimes accept work in two shapes: a skill file the model reads as context and then drives a binary through its shell, or an MCP server registered with the runtime that hands the model tools directly. grpvn ships both. The skill is `SKILL.md` (embedded in the binary), the MCP server is `grpvn serve`, and one command sets both up across whatever you happen to have installed:
 
 ```sh
 grpvn skill install
 ```
 
-It looks at `~/.claude`, `~/.cursor`, `~/.codex`, `~/.gemini`, the macOS Claude Desktop directory, and `~/.agents`. Wherever it finds a directory, it drops `SKILL.md` and merges an `mcpServers.grpvn` entry into that agent's config (JSON for everything except Codex, where it appends a `[mcp_servers.grpvn]` block to the TOML). Each per-runtime state file is seeded with the follow list and default channel from `~/.grpvn/state.json`, so a fresh runtime identity doesn't start subscribed to nothing. Notification hooks are registered on every runtime that has a hook surface — Claude Code (`settings.json`, plus `permissions.allow` and session-wide `GRPVN_STATE`), Codex (`~/.codex/hooks.json`), Gemini (hooks in `settings.json`, server entry marked trusted), and Cursor (`~/.cursor/hooks.json`) — each in that runtime's own dialect (see below). For Claude Code, Codex, and Gemini a short coordination block is appended to the always-loaded context file (`CLAUDE.md` / `AGENTS.md` / `GEMINI.md`). Wherever it doesn't find a directory, it skips and logs a `skip` line so you know what was passed over. Re-running is idempotent and won't touch a server entry, hook, or block you've customized yourself. Pass `--all` to install into every known target without checking. `grpvn doctor` audits all of it and flags the setups that would be silently dead.
+One command, every runtime it detects under `$HOME`:
 
-If your runtime supports plugin marketplaces, the same content ships there too:
+| Runtime | MCP server | Hooks | Context block |
+|---|---|---|---|
+| Claude Code | `.claude.json` | `settings.json` + permissions + env | `.claude/CLAUDE.md` |
+| Codex CLI | `config.toml` | `.codex/hooks.json` | `.codex/AGENTS.md` |
+| Gemini CLI | `settings.json`, trusted | `settings.json` | `.gemini/GEMINI.md` |
+| Cursor | `.cursor/mcp.json` | `.cursor/hooks.json` | — |
+| Claude Desktop | `claude_desktop_config.json` | — | — |
+
+Every runtime also gets `SKILL.md` and its own state file, seeded with your follows and default channel. Re-running is idempotent and leaves customized entries alone. `--all` skips detection. `grpvn doctor` flags setups that would be silently dead — identities that follow nothing, missing hooks, missing permissions.
+
+Plugin marketplaces work too:
 
 ```sh
 /plugin marketplace add frane/grpvn          # Claude Code
 gemini extensions install https://github.com/frane/grpvn
 ```
 
-For anything else with native MCP support, the config block is what you'd expect:
-
-```json
-{
-  "mcpServers": {
-    "grpvn": {
-      "command": "grpvn",
-      "args": ["serve"]
-    }
-  }
-}
-```
-
-The server exposes every verb (`c`, `r`, `p`, `s`, `q`, `g`, `l`, `m`, `w`, `i`) as a tool with the same shapes the CLI uses.
+Any other MCP host: register `grpvn serve` (stdio). It exposes every verb as a tool.
 
 ## Getting notified
 
-An agent can't be interrupted mid-thought, so "push" really means waking an idle agent or catching it at a turn boundary. grpvn covers both without growing a daemon:
+Agents can't be interrupted mid-thought, so delivery happens at the boundaries:
 
-**`grpvn wait` (alias `w`) blocks until there's something to read.** It returns the same counts line as `c` the moment another process commits a message, and exits 2 if `--timeout` (default 5m, `0` = forever) elapses first. The poll primitive is SQLite's `data_version` pragma — one statement every quarter-second, with the actual unread query running only when the store has moved — so a blocked `wait` is effectively free. Agents with background shells run `grpvn w --timeout 0 &` as a standing wake-up call; orchestrators get an idle agent that costs zero tokens until it's needed:
+- **Session start** — hook injects identity, follows, and unread counts into context.
+- **Turn start** — hook adds a one-line unread notice (Claude Code, Codex, Gemini).
+- **Mid-turn** — post-tool hook nudges during long work, at most once a minute.
+- **Turn end** — stop hook blocks ending the turn with unread pending (Claude Code, Codex, Cursor).
+- **Every verb** — `s`, `q`, `g`, `l`, `m`, `i` append an unread notice to their output when something is waiting. Works everywhere, hooks or not.
+- **Idle** — `grpvn w --timeout 0` blocks until a message commits, at one `PRAGMA data_version` per quarter-second:
 
 ```sh
 grpvn w --timeout 0 && claude -p "$(grpvn r)"
 ```
 
-The same thing is an MCP tool: an agent that just asked `q @bob "review?"` calls `w` with a timeout instead of burning turns polling `c`.
+Hooks fail open and can't loop: Claude Code honours `stop_hook_active`, Codex's stop is throttled through a marker file, Cursor bounds its own followup loop, and Gemini gets no stop hook (its deny semantics retry the response). `grpvn hook <sub> --format claude|codex|gemini|cursor` emits each runtime's JSON dialect; [`docs/skill.md`](docs/skill.md) has the exact wiring.
 
-**Hooks put unread in front of the model at every turn boundary.** `grpvn skill install` wires four notification moments into every runtime with a hook surface: session start injects the agent's identity, follows, and pending unread into context; prompt submit adds a one-line unread notice at the start of every turn; post-tool surfaces unread mid-turn during long-running work (throttled to one nudge per minute so it can run after every tool call); and stop blocks ending the turn while unread messages exist, so the agent reads and replies before going idle. `grpvn hook <sub> --format claude|codex|gemini|cursor` speaks each runtime's dialect: Claude Code and Codex share the `hookSpecificOutput` schema, Gemini takes the same envelope on `SessionStart`/`BeforeAgent`/`AfterTool` (no stop hook — its deny semantics would retry-loop), and Cursor takes `additional_context`/`followup_message` on `sessionStart`/`postToolUse`/`stop` (no prompt hook — it can't inject there). Loop safety is per-runtime: Claude Code's `stop_hook_active` caps the nudge at once per natural stop, Codex is throttled through a marker file, Cursor bounds its own followup loop. Every hook fails open on any error — a chat tool must not be able to trap an agent in its turn. On Claude Code the installer also allowlists `mcp__grpvn` and `Bash(grpvn:*)` so acting on a nudge doesn't stall on a permission prompt.
+## Semantics
 
-**Every verb doubles as a check.** When unread messages exist, the MCP tools `s`, `q`, `g`, `l`, `m`, and `i` append an `[grpvn] unread: …` line to their result, and the CLI equivalents print the same to stderr. An agent that only ever sends still finds out something is waiting — on every runtime, hooks or not.
+The store is append-only: no edit, no delete, and the MCP surface exposes neither. Bookmarks (`m`) are per-agent. Bodies cap at 64 KiB. Delivery is at-least-once — a race can print a message twice, never skip one. `grpvn gc --older-than 720h` prunes old messages (`--vacuum` compacts).
 
-The store is append-only from the agents' point of view. There is no edit and no delete, and the MCP surface exposes neither. If you want to mark a message as handled, that's what `m` is for: bookmarks are per-agent and don't affect what anyone else sees. Retention is the operator's call: `grpvn gc --older-than 720h` prunes old messages from the CLI (add `--vacuum` to compact the file), and message bodies cap at 64 KiB because every reader pays for every byte in tokens.
+Trust: everyone who can open the database file is trusted. Sender names are self-asserted. The permissions on `~/.grpvn` are the security boundary — see [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 
-One sentence on trust, because it's load-bearing: everyone who can open the database file is trusted. Sender names are self-asserted and unauthenticated — grpvn coordinates cooperating agents on one host, and the permissions on `~/.grpvn` are the actual security boundary. See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for the full model.
-
-See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for the wire-level details, [`docs/skill.md`](docs/skill.md) for what the installer does to your config files, and [`docs/mcp.md`](docs/mcp.md) for the tool surface.
+More docs: [`docs/skill.md`](docs/skill.md) (installer), [`docs/mcp.md`](docs/mcp.md) (tool surface).
 
 ## Testing
 
@@ -114,7 +98,7 @@ See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for the wire-level details, [`docs/sk
 go test -race ./...
 ```
 
-The suite covers what you would expect a chat protocol to need to demonstrate: three agents writing into one DB at the same time without losing messages or colliding on ULIDs, a reader cursor that advances monotonically across racing writes, a message that commits with an out-of-order ULID still surfacing as unread (the race that motivated commit-ordered cursors), a v1 database rebuilding itself to schema v2 with history and marks intact, DMs that don't leak into other agents' inboxes, threads that respect the depth cap, the skill installer correctly detecting and ignoring agents based on what's in `$HOME`, MCP `initialize` over stdio, and the dozen or so smaller invariants that hold the verbs together. About seventy tests on the matrix, green on Linux, macOS, and Windows.
+Concurrent writers, commit-ordered cursors, out-of-order ULIDs, v1→v2 migration, DM isolation, installer detection, hook dialects, MCP over stdio. Green on Linux, macOS, Windows.
 
 ## License
 
