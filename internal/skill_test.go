@@ -743,8 +743,23 @@ func TestInstallSkillWiresProjectScope(t *testing.T) {
 	}
 	// Simulate a pre-scope install: hooks and env without --scope/GRPVN_SCOPE.
 	statePath := filepath.Join(home, ".grpvn", "state-claude-code.json")
-	old := fmt.Sprintf(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"grpvn --state \"%s\" hook stop"}]}]},"env":{"GRPVN_STATE":%q}}`, statePath, statePath)
-	if err := os.WriteFile(filepath.Join(home, ".claude", "settings.json"), []byte(old), 0644); err != nil {
+	// Build the fixture with json.Marshal — Windows paths contain
+	// backslashes that raw Sprintf would turn into invalid JSON escapes.
+	oldDoc, err := json.Marshal(map[string]interface{}{
+		"hooks": map[string]interface{}{
+			"Stop": []interface{}{map[string]interface{}{
+				"hooks": []interface{}{map[string]interface{}{
+					"type":    "command",
+					"command": fmt.Sprintf(`grpvn --state "%s" hook stop`, statePath),
+				}},
+			}},
+		},
+		"env": map[string]interface{}{"GRPVN_STATE": statePath},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".claude", "settings.json"), oldDoc, 0644); err != nil {
 		t.Fatal(err)
 	}
 	codexState := filepath.Join(home, ".grpvn", "state-codex.json")

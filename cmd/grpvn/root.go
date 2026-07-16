@@ -94,12 +94,14 @@ func bootstrap() (string, *internal.State, error) {
 	if n == "" {
 		n = s.Name
 	}
+	minted := false
 	if n == "" {
 		n, err = internal.GenerateIdentity()
 		if err != nil {
 			return "", nil, fmt.Errorf("generate identity: %w", err)
 		}
 		s.Name = n
+		minted = true
 		// Surface save failures instead of silently regenerating the
 		// identity on every subsequent call. Claude Desktop launches with
 		// an unwritable cwd; the historic silent-swallow turned that into
@@ -111,8 +113,20 @@ func bootstrap() (string, *internal.State, error) {
 		// Identity came from --as or GRPVN_AS; persist it so subsequent
 		// calls without the flag see the same name.
 		s.Name = n
+		minted = true
 		if err := s.Save(p); err != nil {
 			return "", nil, fmt.Errorf("save state to %s: %w", p, err)
+		}
+	}
+	if minted {
+		// A new participant starts reading from now; the host's history
+		// stays reachable via l but must not arrive as unread. Best-effort:
+		// on failure the identity works, just with a noisy first read.
+		if db, err := internal.OpenDB(); err == nil {
+			if err := internal.FastForwardCursors(db, s); err != nil {
+				fmt.Fprintln(os.Stderr, "warn: fast-forward cursors:", err)
+			}
+			db.Close()
 		}
 	}
 	return n, s, nil

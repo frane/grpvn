@@ -149,7 +149,7 @@ func ServeMCP(name, version string, b Bootstrap) error {
 			// Posting into a channel subscribes the sender; replies to this
 			// message must be able to reach it. Fail open — the send is
 			// already committed.
-			_, _ = AutoFollow(st, statePath(), m.Target)
+			_, _ = AutoFollow(db, st, statePath(), m.Target)
 			return mcp.NewToolResultText(notice(db, st, "sent")), nil
 		})
 
@@ -170,7 +170,7 @@ func ServeMCP(name, version string, b Bootstrap) error {
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			_, _ = AutoFollow(st, statePath(), m.Target)
+			_, _ = AutoFollow(db, st, statePath(), m.Target)
 			return mcp.NewToolResultText(notice(db, st, m.ID)), nil
 		})
 

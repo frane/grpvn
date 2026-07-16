@@ -194,13 +194,19 @@ func TestRenderBatchShortPrefixWhenUnambiguous(t *testing.T) {
 // Posting into a channel subscribes the sender; DMs and known channels
 // don't.
 func TestAutoFollow(t *testing.T) {
+	db := newTestDB(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")
 	st := &State{Name: "alice", Follow: []string{"#dev"}}
 	if err := st.Save(path); err != nil {
 		t.Fatal(err)
 	}
-	added, err := AutoFollow(st, path, "#fsd")
+	// Pre-existing traffic in the channel must not arrive as unread when
+	// the follow is created by posting — the sender wants replies, not the
+	// channel's history.
+	NewMessage("bob", "#fsd", []byte("old traffic")).Save(db)
+
+	added, err := AutoFollow(db, st, path, "#fsd")
 	if err != nil || !added {
 		t.Fatalf("expected follow added, got added=%v err=%v", added, err)
 	}
@@ -211,10 +217,36 @@ func TestAutoFollow(t *testing.T) {
 	if len(saved.Follow) != 2 || saved.Follow[1] != "#fsd" {
 		t.Fatalf("follow not persisted: %#v", saved.Follow)
 	}
-	if added, _ := AutoFollow(st, path, "#fsd"); added {
+	if line, _ := UnreadLine(db, st); line != "" {
+		t.Fatalf("auto-followed channel history leaked into unread: %q", line)
+	}
+	NewMessage("bob", "#fsd", []byte("a reply")).Save(db)
+	if line, _ := UnreadLine(db, st); line != "1 #fsd" {
+		t.Fatalf("new traffic after auto-follow should be unread, got %q", line)
+	}
+	if added, _ := AutoFollow(db, st, path, "#fsd"); added {
 		t.Fatal("re-following must be a no-op")
 	}
-	if added, _ := AutoFollow(st, path, "@bob"); added {
+	if added, _ := AutoFollow(db, st, path, "@bob"); added {
 		t.Fatal("DMs must not be followed")
+	}
+}
+
+// A freshly minted identity starts at the store's tail: history is
+// reachable via l but must not arrive as unread.
+func TestFastForwardCursors(t *testing.T) {
+	db := newTestDB(t)
+	NewMessage("bob", "#dev", []byte("ancient")).Save(db)
+	NewMessage("bob", "@alice", []byte("old dm")).Save(db)
+	st := &State{Name: "alice", Follow: []string{"#dev"}}
+	if err := FastForwardCursors(db, st); err != nil {
+		t.Fatal(err)
+	}
+	if line, _ := UnreadLine(db, st); line != "" {
+		t.Fatalf("history leaked into unread after fast-forward: %q", line)
+	}
+	NewMessage("bob", "#dev", []byte("fresh")).Save(db)
+	if line, _ := UnreadLine(db, st); line != "1 #dev" {
+		t.Fatalf("fresh traffic should be unread, got %q", line)
 	}
 }

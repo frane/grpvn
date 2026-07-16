@@ -94,3 +94,29 @@ func MigrateLegacyCursors(db *sql.DB, st *State, statePath string) error {
 	}
 	return nil
 }
+
+// FastForwardCursors positions the agent's cursor for every followed
+// channel and its DM inbox at the store's current tail. Called once when
+// an identity is minted: a brand-new participant starts reading from now
+// instead of replaying the host's entire history as unread — which in the
+// field meant a first Stop hook blocking on 200 ancient messages and the
+// agent paying tokens to read them all. History stays one `l` away.
+func FastForwardCursors(db *sql.DB, st *State) error {
+	for _, target := range targetsFor(st.Name, st.Follow) {
+		if err := fastForwardTarget(db, st.Name, target); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func fastForwardTarget(db *sql.DB, agent, target string) error {
+	var max sql.NullInt64
+	if err := db.QueryRow("SELECT MAX(seq) FROM messages WHERE target = ?", target).Scan(&max); err != nil {
+		return err
+	}
+	if !max.Valid {
+		return nil
+	}
+	return advanceCursor(db, agent, target, max.Int64)
+}

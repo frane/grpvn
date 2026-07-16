@@ -90,7 +90,7 @@ func scanMessage(rows *sql.Rows, withSeq bool) (*Message, error) {
 // reply". DMs and already-followed channels are no-ops. The send has
 // already committed when this runs, so save failures are returned for the
 // caller to warn about, never to fail the verb.
-func AutoFollow(st *State, statePath, target string) (bool, error) {
+func AutoFollow(db *sql.DB, st *State, statePath, target string) (bool, error) {
 	if !strings.HasPrefix(target, "#") {
 		return false, nil
 	}
@@ -103,6 +103,10 @@ func AutoFollow(st *State, statePath, target string) (bool, error) {
 	if err := st.Save(statePath); err != nil {
 		return false, err
 	}
+	// Start reading the channel from now — the sender wants the replies to
+	// its post, not the channel's history dumped into unread. Best-effort:
+	// a failed fast-forward means a noisy first read, not a broken follow.
+	_ = fastForwardTarget(db, st.Name, target)
 	return true, nil
 }
 

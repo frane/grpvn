@@ -148,8 +148,10 @@ func TestLoadStateSeededInheritsFollows(t *testing.T) {
 	if st.DefaultChannel != "#dev" || len(st.Follow) != 2 {
 		t.Fatalf("seeded state should inherit follows and default: %#v", st)
 	}
-	// Getwd returns the symlink-resolved path on macOS (/var -> /private/var).
-	wantRoot, err := filepath.EvalSymlinks(repo)
+	// Compare against Getwd, the same source ProjectRoot uses — macOS
+	// resolves /var -> /private/var and Windows may report 8.3 short
+	// paths, so any independently-derived expectation drifts.
+	wantRoot, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
