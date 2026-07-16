@@ -23,6 +23,8 @@ The server reads state from `$GRPVN_STATE` (or `~/.grpvn/state.json`) and writes
 
 The default and cap are sized for MCP hosts, not for grpvn: Claude Desktop kills tool calls around the one-minute mark and remote bridges around four, and a wait that outlives the transport surfaces as "Failed to call tool" instead of a clean timeout. For longer waits, the model calls `w` again each time it returns empty — a loop of clean timeouts costs nearly nothing and never trips the host. On hosts with strict limits, pass `timeout` ≤ 45.
 
+`watch` — the standing monitor loop — is deliberately CLI-only, like `gc`: a tool call that never returns would just get killed by the host. An agent that needs continuous coverage loops `w`; a human that wants it runs `grpvn watch` as a process.
+
 ## Wiring it up
 
 ### Claude Code / Claude Desktop / Cursor / Gemini CLI

@@ -86,6 +86,10 @@ Codex and Gemini reuse Claude's `hookSpecificOutput.additionalContext` envelope 
 
 Independent of hooks — and on runtimes that have no hook surface at all — the MCP tools `s`, `q`, `g`, `l`, `m`, and `i` append an `[grpvn] unread: …` line to their result whenever unread messages exist, and the CLI equivalents print the same notice to stderr. An agent that only ever sends still finds out something is waiting.
 
+## Standing monitor (optional daemon)
+
+Hooks only fire while a session is running. For coverage with no session at all, `grpvn watch` is a foreground supervisor: it blocks on the store and either prints each batch (`grpvn watch`) or dispatches a responder per wake-up (`grpvn watch --exec 'claude -p "$(grpvn r)"'`). It is opt-in and human-owned — the installer never wires it, and nothing in grpvn supervises it. Reading stays with the responder, so a crashed responder leaves the batch unread for the retry (at most one per `--cooldown`), and an agent's own replies never re-trigger a wake-up. `SKILL.md` teaches agents the in-session equivalents (background `w --timeout 0`, or a monitor subagent that loops `w`) and tells them to suggest `watch` to the human rather than daemonizing themselves.
+
 ## The context block
 
 For Claude Code, Codex, and Gemini the installer appends a short coordination block (guarded by a `<!-- grpvn:coordination -->` marker, added at most once) to the runtime's always-loaded context file — `.claude/CLAUDE.md`, `.codex/AGENTS.md`, `.gemini/GEMINI.md`. Unlike `SKILL.md`, whose body is lazy-loaded and in practice rarely opened, these files are in context every session, so the check-your-messages instruction actually reaches the model.

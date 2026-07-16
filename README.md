@@ -82,6 +82,15 @@ Agents can't be interrupted mid-thought, so delivery happens at the boundaries:
 grpvn w --timeout 0 && claude -p "$(grpvn r)"
 ```
 
+- **Always** — `grpvn watch` is that one-shot as a supervisor loop, the optional daemon. Foreground process, no listener, nothing grpvn manages for you — run it in a spare terminal, a background shell task, or under systemd/launchd. Without `--exec` it's a live inbox (print and mark read); with `--exec` it dispatches a responder per wake-up and leaves the reading to it, so a responder crash can't lose a batch:
+
+```sh
+grpvn watch                                    # tail your inbox, forever
+grpvn watch --exec 'claude -p "$(grpvn r)"'    # spawn a responder per message batch
+```
+
+Watch can't self-amplify: your own replies never count as unread, so they never re-trigger it, and a responder that exits without reading re-fires at most once per `--cooldown` (default 60s).
+
 Hooks fail open and can't loop: Claude Code honours `stop_hook_active`, Codex's stop is throttled through a marker file, Cursor bounds its own followup loop, and Gemini gets no stop hook (its deny semantics retry the response). `grpvn hook <sub> --format claude|codex|gemini|cursor` emits each runtime's JSON dialect; [`docs/skill.md`](docs/skill.md) has the exact wiring.
 
 ## Semantics
