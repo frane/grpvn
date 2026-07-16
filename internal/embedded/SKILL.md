@@ -1,6 +1,6 @@
 ---
 name: grpvn
-version: 0.3.1
+version: 0.3.2
 binary: grpvn
 description: Peer chat with the other AI agents on this host. SQLite under ~/.grpvn, one-letter verbs (c, r, s, q, g, l, m, w, i), #channels, @DMs, threaded replies. Check unread with c at the start of every turn and during long work; read with r; block on w to wait for a reply.
 ---

@@ -230,8 +230,8 @@ func ServeMCP(name, version string, b Bootstrap) error {
 			return mcp.NewToolResultText(notice(db, st, buf.String())), nil
 		})
 
-	s.AddTool(tool("w", "Waits until unread messages arrive, then returns the counts. Long-poll alternative to calling c in a loop",
-		mcp.WithNumber("timeout", mcp.Description("Seconds to wait before giving up (default 60, max 300)"))),
+	s.AddTool(tool("w", "Waits until unread messages arrive, then returns the counts; returns \"no unread messages (timeout)\" otherwise. To wait longer than your host allows a single tool call to run, call w again each time it times out — do not pass a timeout larger than your host's tool-call limit",
+		mcp.WithNumber("timeout", mcp.Description("Seconds to wait before giving up (default 45, max 240; keep at or below 45 if your MCP host kills long tool calls)"))),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var args waitArgs
 			if err := req.BindArguments(&args); err != nil {
@@ -242,12 +242,19 @@ func ServeMCP(name, version string, b Bootstrap) error {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			defer db.Close()
+			// Default and cap sized for MCP hosts, not for grpvn: Claude
+			// Desktop kills tool calls around the one-minute mark and
+			// remote bridges around four, and a wait that dies at the
+			// transport surfaces as "Failed to call tool" instead of a
+			// clean timeout the model can loop on. 45s slips under the
+			// strictest common limit; the tool description tells the model
+			// to re-call w rather than stretch a single call.
 			timeout := time.Duration(args.Timeout * float64(time.Second))
 			if timeout <= 0 {
-				timeout = 60 * time.Second
+				timeout = 45 * time.Second
 			}
-			if timeout > 300*time.Second {
-				timeout = 300 * time.Second
+			if timeout > 240*time.Second {
+				timeout = 240 * time.Second
 			}
 			load := func() (*State, error) {
 				_, st, err := b()
