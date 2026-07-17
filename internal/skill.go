@@ -664,12 +664,33 @@ func seedRuntimeState(home, statePath string) (bool, error) {
 	return true, nil
 }
 
-// contextMarker guards idempotency of the coordination block; its presence
-// anywhere in the file means the block (or the user's edited descendant of
-// it) is already there, and the installer keeps its hands off.
-const contextMarker = "<!-- grpvn:coordination -->"
+// contextMarker and contextMarkerEnd delimit the installer-owned region of
+// a context file. Both present: the region is replaced on upgrade. Only the
+// start marker (a legacy install, or a user-edited descendant): replaced
+// only when the block matches a shipped version verbatim, otherwise hands
+// off.
+const (
+	contextMarker    = "<!-- grpvn:coordination -->"
+	contextMarkerEnd = "<!-- /grpvn:coordination -->"
+)
 
 var contextBlock = contextMarker + `
+## grpvn — peer chat with the other agents on this host
+
+Check unread grpvn messages with the c tool (or ` + "`grpvn c`" + `) at the start of
+every turn and every few tool calls during long-running work. When there is
+unread, read it with r and answer any questions before continuing. Announce
+substantive work in the relevant channel. If your runtime supports
+background shell tasks, keep one ` + "`grpvn w --timeout 0`" + ` armed as a
+background task from the start of the session: it exits the moment a
+message lands, waking you with the counts — read with r, reply, re-arm.
+One armed waiter per session; never poll in a loop.
+` + contextMarkerEnd + `
+`
+
+// legacyContextBlocks are prior shipped block texts (no end marker), safe
+// to replace verbatim on upgrade because we wrote them.
+var legacyContextBlocks = []string{contextMarker + `
 ## grpvn — peer chat with the other agents on this host
 
 Check unread grpvn messages with the c tool (or ` + "`grpvn c`" + `) at the start of
@@ -678,7 +699,7 @@ unread, read it with r and answer any questions before continuing. Announce
 substantive work in the relevant channel. When a reply is the only thing
 blocking you, run ` + "`grpvn w --timeout 0`" + ` as a background task — it exits the
 moment a message lands, instead of burning turns polling.
-`
+`}
 
 // mergeContext appends the coordination block to an always-loaded context
 // file (CLAUDE.md, AGENTS.md, GEMINI.md). Unlike SKILL.md — whose body is
@@ -690,21 +711,48 @@ func mergeContext(path string) (bool, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return false, fmt.Errorf("read %s: %w", path, err)
 	}
-	if bytes.Contains(data, []byte(contextMarker)) {
-		return false, nil
-	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return false, fmt.Errorf("create config dir: %w", err)
 	}
 	var out bytes.Buffer
-	out.Write(data)
-	if len(data) > 0 && !bytes.HasSuffix(data, []byte("\n")) {
-		out.WriteString("\n")
+	switch {
+	case bytes.Contains(data, []byte(contextMarkerEnd)):
+		// Marked region: replace it wholesale on upgrade.
+		start := bytes.Index(data, []byte(contextMarker))
+		end := bytes.Index(data, []byte(contextMarkerEnd)) + len(contextMarkerEnd)
+		if start < 0 || start > end {
+			return false, nil
+		}
+		replaced := append(append([]byte{}, data[:start]...), []byte(strings.TrimSuffix(contextBlock, "\n"))...)
+		replaced = append(replaced, data[end:]...)
+		if bytes.Equal(replaced, data) {
+			return false, nil
+		}
+		out.Write(replaced)
+	case bytes.Contains(data, []byte(contextMarker)):
+		// Legacy block without an end marker: upgrade only what we
+		// verifiably wrote; a user-edited descendant stays untouched.
+		upgraded := false
+		for _, legacy := range legacyContextBlocks {
+			if bytes.Contains(data, []byte(legacy)) {
+				out.Write(bytes.Replace(data, []byte(legacy), []byte(contextBlock), 1))
+				upgraded = true
+				break
+			}
+		}
+		if !upgraded {
+			return false, nil
+		}
+	default:
+		out.Write(data)
+		if len(data) > 0 && !bytes.HasSuffix(data, []byte("\n")) {
+			out.WriteString("\n")
+		}
+		if len(data) > 0 {
+			out.WriteString("\n")
+		}
+		out.WriteString(contextBlock)
 	}
-	if len(data) > 0 {
-		out.WriteString("\n")
-	}
-	out.WriteString(contextBlock)
 	tmp := fmt.Sprintf("%s.tmp.%d", path, os.Getpid())
 	if err := os.WriteFile(tmp, out.Bytes(), 0644); err != nil {
 		return false, fmt.Errorf("write %s: %w", tmp, err)

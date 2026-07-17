@@ -796,3 +796,46 @@ func TestInstallSkillWiresProjectScope(t *testing.T) {
 		t.Fatalf("codex hooks missing --scope:\n%s", codexHooks)
 	}
 }
+
+// The context block upgrades in place: a legacy block we shipped is
+// replaced (gaining the end marker), a marked region is rewritten on
+// content change, and a user-edited descendant is left alone.
+func TestMergeContextUpgrades(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CLAUDE.md")
+
+	// Fresh install appends block with end marker.
+	if added, err := mergeContext(path); err != nil || !added {
+		t.Fatalf("fresh install: added=%v err=%v", added, err)
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), contextMarkerEnd) {
+		t.Fatalf("fresh block missing end marker:\n%s", data)
+	}
+	// Idempotent.
+	if added, _ := mergeContext(path); added {
+		t.Fatal("unchanged block must not rewrite")
+	}
+
+	// Legacy shipped block upgrades to the current text.
+	legacy := "# mine\n\n" + legacyContextBlocks[0] + "\n# after\n"
+	if err := os.WriteFile(path, []byte(legacy), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if added, err := mergeContext(path); err != nil || !added {
+		t.Fatalf("legacy upgrade: added=%v err=%v", added, err)
+	}
+	data, _ = os.ReadFile(path)
+	if !strings.Contains(string(data), "armed as a") || !strings.Contains(string(data), "# mine") || !strings.Contains(string(data), "# after") {
+		t.Fatalf("legacy upgrade mangled file:\n%s", data)
+	}
+
+	// A user-edited legacy block is untouchable.
+	custom := "# mine\n\n" + contextMarker + "\nmy own words\n"
+	if err := os.WriteFile(path, []byte(custom), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if added, _ := mergeContext(path); added {
+		t.Fatal("user-edited block must not be replaced")
+	}
+}

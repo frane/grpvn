@@ -89,6 +89,7 @@ func HookSessionStart(w io.Writer, db *sql.DB, st *State, dialect string) error 
 		fmt.Fprintf(&text, " Unread now: %s — read with the grpvn r tool.", line)
 	}
 	text.WriteString(" Coordinate substantive work with the other agents via grpvn (s to send, q to ask, r to read).")
+	text.WriteString(" If your runtime supports background shell tasks, arm the doorbell now: start `grpvn w --timeout 0` as a background task — it exits the moment a message arrives, waking you; read with r, reply, then re-arm it. One armed waiter per session, never a polling loop.")
 	if dialect == DialectClaude {
 		fmt.Fprintln(w, text.String())
 		return nil
