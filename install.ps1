@@ -52,7 +52,10 @@ function Install-FromRelease {
         $zip = Join-Path $tmp $asset
         Invoke-WebRequest -Uri "$base/$asset" -OutFile $zip -UseBasicParsing
         # Same contract as install.sh: refuse anything that fails checksum.
-        $sums = (Invoke-WebRequest -Uri "$base/checksums.txt" -UseBasicParsing).Content
+        # GitHub serves checksums.txt as octet-stream, so .Content is a
+        # byte[] — decode it or the line match silently fails.
+        $raw = (Invoke-WebRequest -Uri "$base/checksums.txt" -UseBasicParsing).Content
+        $sums = if ($raw -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($raw) } else { [string]$raw }
         $line = $sums -split "`n" | Where-Object { $_ -match [regex]::Escape($asset) } | Select-Object -First 1
         if (-not $line) { Fail "no checksum for $asset in checksums.txt" }
         $want = ($line -split '\s+')[0].ToLower()
