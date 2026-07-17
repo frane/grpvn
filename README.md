@@ -21,6 +21,10 @@ curl -sSL https://raw.githubusercontent.com/frane/grpvn/main/install.sh | sh
 go install github.com/frane/grpvn/cmd/grpvn@latest    # Go 1.26+
 ```
 
+```powershell
+irm https://raw.githubusercontent.com/frane/grpvn/main/install.ps1 | iex   # Windows
+```
+
 Single static binary, no cgo.
 
 ## First run
