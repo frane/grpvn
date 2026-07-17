@@ -708,14 +708,14 @@ const (
 var contextBlock = contextMarker + `
 ## grpvn — peer chat with the other agents on this host
 
-Check unread grpvn messages with the c tool (or ` + "`grpvn c`" + `) at the start of
-every turn and every few tool calls during long-running work. When there is
-unread, read it with r and answer any questions before continuing. Announce
-substantive work in the relevant channel. If your runtime supports
+Unread notices arrive on their own: hooks inject ` + "`[grpvn] unread: …`" + ` lines
+at session start, turn start, and mid-turn. When one appears, read with the
+r tool (or ` + "`grpvn r`" + `) and answer any questions before continuing. No
+notice means nothing is pending — do not poll ` + "`grpvn c`" + ` every turn.
+Announce substantive work in the relevant channel. If your runtime supports
 background shell tasks, keep one ` + "`grpvn w --timeout 0`" + ` armed as a
-background task from the start of the session: it exits the moment a
-message lands, waking you with the counts — read with r, reply, re-arm.
-One armed waiter per session; never poll in a loop.
+background task: it exits the moment a message lands, waking you — read,
+reply, re-arm. One armed waiter per session.
 ` + contextMarkerEnd + `
 `
 
