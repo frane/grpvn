@@ -839,3 +839,81 @@ func TestMergeContextUpgrades(t *testing.T) {
 		t.Fatal("user-edited block must not be replaced")
 	}
 }
+
+// OpenCode gets its own config dialect (mcp.<name>, array command), the
+// doorbell plugin, and the context block; a sibling .jsonc wins; a plugin
+// file we didn't write is never overwritten.
+func TestInstallSkillWiresOpenCode(t *testing.T) {
+	home := t.TempDir()
+	setHome(t, home)
+	if err := os.MkdirAll(filepath.Join(home, ".config", "opencode"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Existing .jsonc must take precedence over creating opencode.json.
+	jsonc := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	if err := os.WriteFile(jsonc, []byte(`{"$schema":"https://opencode.ai/config.json","theme":"dark"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := InstallSkill(&buf); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "opencode", "opencode.json")); !os.IsNotExist(err) {
+		t.Fatal("installer must merge into the existing .jsonc, not create opencode.json")
+	}
+	data, _ := os.ReadFile(jsonc)
+	var doc struct {
+		Theme string `json:"theme"`
+		MCP   map[string]struct {
+			Type    string            `json:"type"`
+			Command []string          `json:"command"`
+			Enabled bool              `json:"enabled"`
+			Env     map[string]string `json:"environment"`
+		} `json:"mcp"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("merged jsonc unparseable: %v\n%s", err, data)
+	}
+	if doc.Theme != "dark" {
+		t.Fatal("merge clobbered existing keys")
+	}
+	srv := doc.MCP["grpvn"]
+	if srv.Type != "local" || len(srv.Command) != 2 || srv.Command[0] != "grpvn" || srv.Command[1] != "serve" || !srv.Enabled {
+		t.Fatalf("grpvn mcp entry wrong: %#v", srv)
+	}
+	if !strings.Contains(srv.Env["GRPVN_STATE"], "state-opencode.json") || srv.Env["GRPVN_SCOPE"] != "project" {
+		t.Fatalf("grpvn mcp env wrong: %#v", srv.Env)
+	}
+
+	plugin := filepath.Join(home, ".config", "opencode", "plugins", "grpvn-doorbell.js")
+	pdata, err := os.ReadFile(plugin)
+	if err != nil {
+		t.Fatalf("plugin not written: %v", err)
+	}
+	for _, want := range []string{openCodePluginMarker, "state-opencode.json", "promptAsync", "--scope project"} {
+		if !strings.Contains(string(pdata), want) {
+			t.Fatalf("plugin missing %q:\n%s", want, pdata)
+		}
+	}
+	// Context block lands in the global AGENTS.md.
+	cdata, _ := os.ReadFile(filepath.Join(home, ".config", "opencode", "AGENTS.md"))
+	if !strings.Contains(string(cdata), contextMarker) {
+		t.Fatal("opencode AGENTS.md missing context block")
+	}
+
+	// Idempotent; and a user-customized plugin (marker removed) is left alone.
+	if err := InstallSkill(&bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(plugin, []byte("// my own plugin\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := InstallSkill(&bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.ReadFile(plugin)
+	if string(after) != "// my own plugin\n" {
+		t.Fatalf("user plugin overwritten: %s", after)
+	}
+}

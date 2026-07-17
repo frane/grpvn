@@ -33,6 +33,8 @@ type Target struct {
 	HookFile  string // path under HOME of a JSON doc that takes a "hooks" object in HookDialect's shape (empty = skip)
 	HookDial  string // hook output dialect for HookFile entries: DialectCodex, DialectGemini, or DialectCursor
 	Context   string // path under HOME of an always-loaded context file (CLAUDE.md/AGENTS.md/GEMINI.md) to append the coordination block to (empty = skip)
+	MCPOC     string // path under HOME of an OpenCode config (mcp.<name> entries, array command); a sibling .jsonc takes precedence (empty = skip)
+	Plugin    string // path under HOME where the OpenCode doorbell plugin is written (empty = skip)
 	Trust     bool   // set "trust": true on the mcpServers entry (Gemini CLI: skips per-call confirmation)
 	Scope     bool   // project-scoped identities: GRPVN_SCOPE=project in env, --scope project in hook commands. Only for runtimes whose cwd is the project (not Claude Desktop)
 }
@@ -82,6 +84,16 @@ func HomeTargets() []Target {
 			HookDial:  DialectGemini,
 			Context:   ".gemini/GEMINI.md",
 			Trust:     true,
+			Scope:     true,
+		},
+		{
+			Name:      "OpenCode",
+			Slug:      "opencode",
+			DetectDir: ".config/opencode",
+			Skill:     ".config/opencode/skills/grpvn/SKILL.md",
+			MCPOC:     ".config/opencode/opencode.json",
+			Plugin:    ".config/opencode/plugins/grpvn-doorbell.js",
+			Context:   ".config/opencode/AGENTS.md",
 			Scope:     true,
 		},
 		{
@@ -167,7 +179,7 @@ func installSkillFromHome(w io.Writer, homeOverride string, forceAll bool) error
 		// runtime identity that follows no channels is a mailbox channel
 		// traffic can never reach — the notification hooks would guard an
 		// empty inbox forever.
-		if t.MCP != "" || t.MCPTOML != "" || t.Hooks != "" || t.HookFile != "" {
+		if t.MCP != "" || t.MCPTOML != "" || t.Hooks != "" || t.HookFile != "" || t.MCPOC != "" {
 			ok, err := seedRuntimeState(home, statePath)
 			if err != nil {
 				lastErr = err
@@ -198,6 +210,25 @@ func installSkillFromHome(w io.Writer, homeOverride string, forceAll bool) error
 			}
 			if added {
 				mcpAdded = append(mcpAdded, fmt.Sprintf("%s: %s", t.Name, tomlPath))
+			}
+		}
+		if t.MCPOC != "" {
+			mcpPath, err := mergeOpenCodeMCP(filepath.Join(home, t.MCPOC), statePath)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			mcpAdded = append(mcpAdded, fmt.Sprintf("%s: %s", t.Name, mcpPath))
+		}
+		if t.Plugin != "" {
+			pluginPath := filepath.Join(home, t.Plugin)
+			added, err := writeOpenCodePlugin(pluginPath, statePath)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if added {
+				settingsAdded = append(settingsAdded, fmt.Sprintf("%s: %s", t.Name, pluginPath))
 			}
 		}
 		if t.Hooks != "" {
@@ -894,4 +925,145 @@ func mergeMCPTOML(path, name, command string, args []string, env map[string]stri
 		return false, fmt.Errorf("rename %s: %w", path, err)
 	}
 	return true, nil
+}
+
+// openCodePluginMarker identifies installer-owned plugin files, so upgrades
+// rewrite them and user-modified copies stay untouched.
+const openCodePluginMarker = "grpvn doorbell — installed by `grpvn skill install`"
+
+// openCodePlugin is the OpenCode push plugin: it arms a `grpvn w` waiter in
+// a loop and injects a wake-up prompt into the active session the moment a
+// peer message commits — the idle-wake OpenCode's hook events alone can't
+// express. The state path is baked in at install time because the plugin
+// runs in the OpenCode server's env, which carries no GRPVN_* variables.
+const openCodePlugin = `// %s — delete this file to disable.
+// Wakes the active session the moment a grpvn peer message commits,
+// instead of waiting for the next user prompt. One armed waiter, a
+// two-minute brake between wake-ups, and injection only when a session
+// is live. Own sends never count as unread, so replies can't re-trigger.
+export const GrpvnDoorbell = async ({ client, $ }) => {
+  const STATE = %q;
+  let session = null;
+  let pending = null;
+  const inject = async (counts) => {
+    if (!session) { pending = counts; return; }
+    try {
+      await client.session.promptAsync({
+        path: { id: session },
+        body: { parts: [{ type: "text", text: "[grpvn] New messages: " + counts + " — read them with the grpvn r tool and reply to any questions." }] },
+      });
+    } catch (e) {}
+  };
+  (async () => {
+    while (true) {
+      try {
+        const res = await $` + "`grpvn --state ${STATE} --scope project w --timeout 3600s`" + `.quiet().nothrow();
+        if (res.exitCode === 0) {
+          await inject((res.text() || "").trim() || "unread");
+          // w returns immediately while unread persists; give the session
+          // time to read before the next wake-up.
+          await new Promise((r) => setTimeout(r, 120000));
+        }
+      } catch (e) {
+        await new Promise((r) => setTimeout(r, 60000));
+      }
+    }
+  })();
+  return {
+    event: async ({ event }) => {
+      const id = event?.properties?.sessionID || event?.properties?.info?.id;
+      if (id && (event?.type || "").startsWith("session")) {
+        session = id;
+        if (pending) { const c = pending; pending = null; await inject(c); }
+      }
+    },
+  };
+};
+`
+
+// writeOpenCodePlugin installs or upgrades the doorbell plugin. A file we
+// didn't write (no marker) is left alone.
+func writeOpenCodePlugin(path, statePath string) (bool, error) {
+	content := fmt.Sprintf(openCodePlugin, openCodePluginMarker, statePath)
+	existing, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if string(existing) == content {
+			return false, nil
+		}
+		if !bytes.Contains(existing, []byte(openCodePluginMarker)) {
+			return false, nil
+		}
+	case !os.IsNotExist(err):
+		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return false, fmt.Errorf("create plugin dir: %w", err)
+	}
+	tmp := fmt.Sprintf("%s.tmp.%d", path, os.Getpid())
+	if err := os.WriteFile(tmp, []byte(content), 0644); err != nil {
+		return false, fmt.Errorf("write %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return false, fmt.Errorf("rename %s: %w", path, err)
+	}
+	return true, nil
+}
+
+// mergeOpenCodeMCP registers grpvn in OpenCode's config, which uses
+// mcp.<name> entries with an array command — not the mcpServers shape the
+// other JSON hosts share. If a sibling .jsonc exists it takes precedence
+// (OpenCode reads either; users who renamed theirs keep one file). A config
+// with JSONC comments fails our strict parse and is refused rather than
+// clobbered, same contract as every other merge.
+func mergeOpenCodeMCP(path, statePath string) (string, error) {
+	if alt := strings.TrimSuffix(path, ".json") + ".jsonc"; alt != path {
+		if _, err := os.Stat(alt); err == nil {
+			path = alt
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return "", fmt.Errorf("create config dir: %w", err)
+	}
+	var doc map[string]interface{}
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil && len(data) > 0:
+		if err := json.Unmarshal(data, &doc); err != nil {
+			return "", fmt.Errorf("parse %s (JSONC comments are not supported by the installer): %w", path, err)
+		}
+	case err != nil && !os.IsNotExist(err):
+		return "", fmt.Errorf("read %s: %w", path, err)
+	}
+	if doc == nil {
+		doc = map[string]interface{}{"$schema": "https://opencode.ai/config.json"}
+	}
+	mcp, _ := doc["mcp"].(map[string]interface{})
+	if mcp == nil {
+		mcp = map[string]interface{}{}
+	}
+	mcp["grpvn"] = map[string]interface{}{
+		"type":    "local",
+		"command": []interface{}{"grpvn", "serve"},
+		"enabled": true,
+		"environment": map[string]interface{}{
+			"GRPVN_STATE": statePath,
+			"GRPVN_SCOPE": "project",
+		},
+	}
+	doc["mcp"] = mcp
+	encoded, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("encode %s: %w", path, err)
+	}
+	tmp := fmt.Sprintf("%s.tmp.%d", path, os.Getpid())
+	if err := os.WriteFile(tmp, encoded, 0644); err != nil {
+		return "", fmt.Errorf("write %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return "", fmt.Errorf("rename %s: %w", path, err)
+	}
+	return path, nil
 }

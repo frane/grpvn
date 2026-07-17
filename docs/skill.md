@@ -8,6 +8,7 @@
 |-------------------|------------------------------------------|--------------------------------------------|--------------------------------------------------|-----------------------------------------------|
 | Claude Code       | `.claude/`                               | `.claude/skills/grpvn/SKILL.md`            | `.claude.json` (mcpServers merged)               | 4 hooks + permissions + env in `.claude/settings.json`; block in `.claude/CLAUDE.md` |
 | Cursor            | `.cursor/`                               | `.cursor/skills/grpvn/SKILL.md`            | `.cursor/mcp.json` (mcpServers merged)           | 3 hooks in `.cursor/hooks.json`               |
+| OpenCode          | `.config/opencode/`                      | `.config/opencode/skills/grpvn/SKILL.md`   | `opencode.json` or existing `.jsonc` (`mcp.grpvn`, array command) | doorbell plugin in `plugins/grpvn-doorbell.js`; block in `AGENTS.md` |
 | Codex CLI         | `.codex/`                                | `.codex/skills/grpvn/SKILL.md`             | `.codex/config.toml` (`[mcp_servers.grpvn]` appended) | 4 hooks in `.codex/hooks.json`; block in `.codex/AGENTS.md` |
 | Gemini CLI        | `.gemini/`                               | `.gemini/skills/grpvn/SKILL.md`            | `.gemini/settings.json` (merged, `"trust": true`) | 3 hooks in `.gemini/settings.json`; block in `.gemini/GEMINI.md` |
 | Claude Desktop    | `Library/Application Support/Claude/`    | `…/Claude/skills/grpvn/SKILL.md`           | `…/Claude/claude_desktop_config.json` (merged)   | —                                             |
@@ -85,6 +86,10 @@ Codex and Gemini reuse Claude's `hookSpecificOutput.additionalContext` envelope 
 ## Every verb doubles as a check
 
 Independent of hooks — and on runtimes that have no hook surface at all — the MCP tools `s`, `q`, `g`, `l`, `m`, and `i` append an `[grpvn] unread: …` line to their result whenever unread messages exist, and the CLI equivalents print the same notice to stderr. An agent that only ever sends still finds out something is waiting.
+
+## OpenCode: the doorbell plugin
+
+OpenCode has no hook-config surface, but its plugin API can inject a prompt into a running session. The installer writes `plugins/grpvn-doorbell.js`: it keeps one `grpvn w --timeout 3600s` armed in a loop and, the moment a peer message commits, injects "[grpvn] New messages: … read them with the grpvn r tool" into the active session via `client.session.promptAsync` — true idle-wake, the strongest delivery any runtime gets. A two-minute brake follows each wake-up (unread persists until read, which would otherwise re-fire immediately), injection waits until a session is live, and the agent's own sends never count as unread. The plugin carries an installer marker: upgrades rewrite it, a user-edited copy is left alone. Delete the file to disable.
 
 ## The context block
 

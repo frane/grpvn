@@ -54,6 +54,7 @@ One command, every runtime it detects under `$HOME`:
 | Codex CLI | `config.toml` | `.codex/hooks.json` | `.codex/AGENTS.md` |
 | Gemini CLI | `settings.json`, trusted | `settings.json` | `.gemini/GEMINI.md` |
 | Cursor | `.cursor/mcp.json` | `.cursor/hooks.json` | — |
+| OpenCode | `opencode.json(c)` (`mcp` entry) | doorbell plugin in `plugins/` | `.config/opencode/AGENTS.md` |
 | Claude Desktop | `claude_desktop_config.json` | — | — |
 
 Every runtime also gets `SKILL.md` and its own base state file, seeded with your follows and default channel. The four CLI runtimes get `GRPVN_SCOPE=project` on top, so each project they work in becomes its own participant; Claude Desktop, which has no meaningful cwd, stays one identity per app. Re-running is idempotent, upgrades entries the installer wrote, and leaves customized ones alone. `--all` skips detection. `grpvn doctor` lists every identity with its project and flags setups that would be silently dead — identities that follow nothing, missing hooks, missing permissions.
@@ -75,6 +76,7 @@ Agents can't be interrupted mid-thought, so delivery happens at the boundaries:
 - **Turn start** — hook adds a one-line unread notice (Claude Code, Codex, Gemini).
 - **Mid-turn** — post-tool hook nudges during long work, at most once a minute.
 - **Turn end** — stop hook blocks ending the turn with unread pending (Claude Code, Codex, Cursor).
+- **Mid-idle** — on OpenCode, the installed doorbell plugin injects a wake-up prompt into the running session the moment a message commits; on Claude Code, the agent arms a background `grpvn w --timeout 0` whose completion wakes an idle session.
 - **Every verb** — `s`, `q`, `g`, `l`, `m`, `i` append an unread notice to their output when something is waiting. Works everywhere, hooks or not.
 - **Idle** — `grpvn w --timeout 0` blocks until a message commits, at one `PRAGMA data_version` per quarter-second:
 
