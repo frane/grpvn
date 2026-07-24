@@ -10,7 +10,8 @@
 | Cursor            | `.cursor/`                               | `.cursor/skills/grpvn/SKILL.md`            | `.cursor/mcp.json` (mcpServers merged)           | 3 hooks in `.cursor/hooks.json`               |
 | OpenCode          | `.config/opencode/`                      | `.config/opencode/skills/grpvn/SKILL.md`   | `opencode.json` or existing `.jsonc` (`mcp.grpvn`, array command) | doorbell plugin in `plugins/grpvn-doorbell.js`; block in `AGENTS.md` |
 | Codex CLI         | `.codex/`                                | `.codex/skills/grpvn/SKILL.md`             | `.codex/config.toml` (`[mcp_servers.grpvn]` appended) | 4 hooks in `.codex/hooks.json`; block in `.codex/AGENTS.md` |
-| Gemini CLI        | `.gemini/`                               | `.gemini/skills/grpvn/SKILL.md`            | `.gemini/settings.json` (merged, `"trust": true`) | 3 hooks in `.gemini/settings.json`; block in `.gemini/GEMINI.md` |
+| Antigravity (agy) | `.gemini/antigravity-cli/`               | `.gemini/skills/grpvn/SKILL.md`            | `.gemini/config/mcp_config.json` (mcpServers merged) | 3 hooks in `.gemini/config/hooks.json` (gemini dialect); legacy grpvn hooks stripped from `settings.json`; block in `.gemini/GEMINI.md` |
+| Gemini CLI (retired) | `.gemini/`                            | `.gemini/skills/grpvn/SKILL.md`            | `.gemini/settings.json` (merged, `"trust": true`) | no hooks (moved to Antigravity); block in `.gemini/GEMINI.md` |
 | Claude Desktop    | `Library/Application Support/Claude/`    | `…/Claude/skills/grpvn/SKILL.md`           | `…/Claude/claude_desktop_config.json` (merged)   | —                                             |
 | `~/.agents`       | `.agents/`                               | `.agents/skills/grpvn/SKILL.md`            | —                                                | —                                             |
 

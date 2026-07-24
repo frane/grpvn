@@ -34,6 +34,7 @@ type Target struct {
 	HookDial  string // hook output dialect for HookFile entries: DialectCodex, DialectGemini, or DialectCursor
 	Context   string // path under HOME of an always-loaded context file (CLAUDE.md/AGENTS.md/GEMINI.md) to append the coordination block to (empty = skip)
 	MCPOC     string // path under HOME of an OpenCode config (mcp.<name> entries, array command); a sibling .jsonc takes precedence (empty = skip)
+	CleanHook string // path under HOME of a hooks-bearing JSON whose installer-written grpvn entries are REMOVED (migration: Antigravity strips the legacy Gemini hooks from settings.json so they can't double-fire)
 	Plugin    string // path under HOME where the OpenCode doorbell plugin is written (empty = skip)
 	Trust     bool   // set "trust": true on the mcpServers entry (Gemini CLI: skips per-call confirmation)
 	Scope     bool   // project-scoped identities: GRPVN_SCOPE=project in env, --scope project in hook commands. Only for runtimes whose cwd is the project (not Claude Desktop)
@@ -75,15 +76,34 @@ func HomeTargets() []Target {
 			Scope:     true,
 		},
 		{
+			// Retired upstream (Antigravity replaced it mid-2026) but still
+			// wired for laggards: skill, MCP, context — no hooks, which now
+			// belong to the Antigravity target below. Keeping hooks here too
+			// would double-fire in agy, which reads both config roots.
 			Name:      "Gemini CLI",
 			Slug:      "gemini",
 			DetectDir: ".gemini",
 			Skill:     ".gemini/skills/grpvn/SKILL.md",
 			MCP:       ".gemini/settings.json",
-			HookFile:  ".gemini/settings.json",
-			HookDial:  DialectGemini,
 			Context:   ".gemini/GEMINI.md",
 			Trust:     true,
+			Scope:     true,
+		},
+		{
+			// Gemini CLI's successor. Shares ~/.gemini (and therefore the
+			// gemini state slug — same identities, no migration) but reads
+			// MCP and hooks from its own config root: settings.json entries
+			// are ignored for MCP, and hooks.json keeps Gemini's event
+			// vocabulary, so the gemini dialect carries over unchanged.
+			Name:      "Antigravity",
+			Slug:      "gemini",
+			DetectDir: ".gemini/antigravity-cli",
+			Skill:     ".gemini/skills/grpvn/SKILL.md",
+			MCP:       ".gemini/config/mcp_config.json",
+			HookFile:  ".gemini/config/hooks.json",
+			HookDial:  DialectGemini,
+			Context:   ".gemini/GEMINI.md",
+			CleanHook: ".gemini/settings.json",
 			Scope:     true,
 		},
 		{
@@ -251,6 +271,17 @@ func installSkillFromHome(w io.Writer, homeOverride string, forceAll bool) error
 			}
 			if added {
 				settingsAdded = append(settingsAdded, fmt.Sprintf("%s: %s", t.Name, hookPath))
+			}
+		}
+		if t.CleanHook != "" {
+			cleanPath := filepath.Join(home, t.CleanHook)
+			removed, err := removeInstallerHooks(cleanPath)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if removed {
+				settingsAdded = append(settingsAdded, fmt.Sprintf("%s: %s (legacy hooks removed)", t.Name, cleanPath))
 			}
 		}
 		if t.Context != "" {
@@ -649,6 +680,80 @@ func mergeHooksFile(path, statePath, dialect string, scoped bool) (bool, error) 
 	doc["hooks"] = hooks
 	if !changed {
 		return false, nil
+	}
+	encoded, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return false, fmt.Errorf("encode %s: %w", path, err)
+	}
+	tmp := fmt.Sprintf("%s.tmp.%d", path, os.Getpid())
+	if err := os.WriteFile(tmp, encoded, 0644); err != nil {
+		return false, fmt.Errorf("write %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return false, fmt.Errorf("rename %s: %w", path, err)
+	}
+	return true, nil
+}
+
+// removeInstallerHooks strips installer-written grpvn hook entries (the
+// `grpvn --state "` shape; user-customized commands stay) from a
+// hooks-bearing JSON document, pruning groups and events left empty.
+// Migration tool: when a runtime's hooks move to a new file, the old ones
+// must go, or a successor runtime that reads both locations fires twice.
+func removeInstallerHooks(path string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+	var doc map[string]interface{}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return false, fmt.Errorf("parse %s: %w", path, err)
+	}
+	hooks, _ := doc["hooks"].(map[string]interface{})
+	if hooks == nil {
+		return false, nil
+	}
+	changed := false
+	for event, raw := range hooks {
+		groups, _ := raw.([]interface{})
+		var keptGroups []interface{}
+		for _, group := range groups {
+			g, _ := group.(map[string]interface{})
+			entries, _ := g["hooks"].([]interface{})
+			var kept []interface{}
+			for _, entry := range entries {
+				e, _ := entry.(map[string]interface{})
+				if c, _ := e["command"].(string); upgradeableHook(c) {
+					changed = true
+					continue
+				}
+				kept = append(kept, entry)
+			}
+			if len(entries) > 0 && len(kept) == 0 {
+				continue // group existed only for grpvn
+			}
+			if g != nil {
+				g["hooks"] = kept
+			}
+			keptGroups = append(keptGroups, group)
+		}
+		if len(keptGroups) == 0 {
+			delete(hooks, event)
+		} else {
+			hooks[event] = keptGroups
+		}
+	}
+	if !changed {
+		return false, nil
+	}
+	if len(hooks) == 0 {
+		delete(doc, "hooks")
+	} else {
+		doc["hooks"] = hooks
 	}
 	encoded, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {

@@ -56,7 +56,8 @@ One command, every runtime it detects under `$HOME`:
 |---|---|---|---|
 | Claude Code | `.claude.json` | `settings.json` + permissions + env | `.claude/CLAUDE.md` |
 | Codex CLI | `config.toml` | `.codex/hooks.json` | `.codex/AGENTS.md` |
-| Gemini CLI | `settings.json`, trusted | `settings.json` | `.gemini/GEMINI.md` |
+| Antigravity (agy) | `.gemini/config/mcp_config.json` | `.gemini/config/hooks.json` | `.gemini/GEMINI.md` |
+| Gemini CLI (retired) | `settings.json`, trusted | — | `.gemini/GEMINI.md` |
 | Cursor | `.cursor/mcp.json` | `.cursor/hooks.json` | — |
 | OpenCode | `opencode.json(c)` (`mcp` entry) | doorbell plugin in `plugins/` | `.config/opencode/AGENTS.md` |
 | Claude Desktop | `claude_desktop_config.json` | — | — |

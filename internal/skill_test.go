@@ -684,20 +684,14 @@ func TestInstallSkillWiresRuntimeHookFiles(t *testing.T) {
 		}
 	}
 
-	gemini := load(".gemini/settings.json")
-	if len(gemini["SessionStart"]) != 1 || len(gemini["BeforeAgent"]) != 1 || len(gemini["AfterTool"]) != 1 {
-		t.Fatalf("gemini events missing: %#v", gemini)
-	}
-	if len(gemini["Stop"]) != 0 || len(gemini["AfterAgent"]) != 0 {
-		t.Fatalf("gemini must not get a stop-style hook: %#v", gemini)
-	}
-	if c := gemini["AfterTool"][0].Hooks[0].Command; !strings.Contains(c, "--format gemini") {
-		t.Fatalf("gemini command wrong: %q", c)
-	}
-	// mcpServers must survive in the same file.
+	// Gemini CLI is retired: it keeps MCP but no longer gets hooks — those
+	// belong to the Antigravity target, or agy would fire them twice.
 	raw, _ := os.ReadFile(filepath.Join(home, ".gemini/settings.json"))
 	if !strings.Contains(string(raw), "mcpServers") {
 		t.Fatalf("gemini settings lost mcpServers: %s", raw)
+	}
+	if strings.Contains(string(raw), "hook prompt") {
+		t.Fatalf("retired gemini target must not write hooks: %s", raw)
 	}
 
 	cursor := load(".cursor/hooks.json")
@@ -915,5 +909,103 @@ func TestInstallSkillWiresOpenCode(t *testing.T) {
 	after, _ := os.ReadFile(plugin)
 	if string(after) != "// my own plugin\n" {
 		t.Fatalf("user plugin overwritten: %s", after)
+	}
+}
+
+// Antigravity (agy) shares ~/.gemini but reads MCP and hooks from its own
+// config root. The installer wires both there, in the gemini dialect, and
+// strips the legacy grpvn hooks out of settings.json so agy — which reads
+// both locations — can't fire them twice.
+func TestInstallSkillWiresAntigravity(t *testing.T) {
+	home := t.TempDir()
+	setHome(t, home)
+	if err := os.MkdirAll(filepath.Join(home, ".gemini", "antigravity-cli"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Legacy state: a pre-Antigravity install left gemini hooks plus a user
+	// hook in settings.json.
+	statePath := filepath.Join(home, ".grpvn", "state-gemini.json")
+	legacy, err := json.Marshal(map[string]interface{}{
+		"hooks": map[string]interface{}{
+			"BeforeAgent": []interface{}{map[string]interface{}{
+				"hooks": []interface{}{map[string]interface{}{
+					"type":    "command",
+					"command": fmt.Sprintf(`grpvn --state "%s" hook prompt --format gemini`, statePath),
+				}},
+			}},
+			"SessionStart": []interface{}{map[string]interface{}{
+				"hooks": []interface{}{map[string]interface{}{
+					"type":    "command",
+					"command": "/opt/mine/audit.sh",
+				}},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".gemini", "settings.json"), legacy, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := InstallSkill(&bytes.Buffer{}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	// MCP lands in the config root with the mcpServers shape.
+	mcpData, err := os.ReadFile(filepath.Join(home, ".gemini", "config", "mcp_config.json"))
+	if err != nil {
+		t.Fatalf("mcp_config.json not written: %v", err)
+	}
+	var mcpDoc struct {
+		Servers map[string]struct {
+			Command string            `json:"command"`
+			Args    []string          `json:"args"`
+			Env     map[string]string `json:"env"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(mcpData, &mcpDoc); err != nil {
+		t.Fatal(err)
+	}
+	srv := mcpDoc.Servers["grpvn"]
+	if srv.Command != "grpvn" || len(srv.Args) != 1 || srv.Args[0] != "serve" {
+		t.Fatalf("agy mcp entry wrong: %#v", srv)
+	}
+	if !strings.Contains(srv.Env["GRPVN_STATE"], "state-gemini.json") || srv.Env["GRPVN_SCOPE"] != "project" {
+		t.Fatalf("agy mcp env wrong: %#v", srv.Env)
+	}
+
+	// Hooks land in config/hooks.json, gemini dialect, no stop event.
+	hooksData, err := os.ReadFile(filepath.Join(home, ".gemini", "config", "hooks.json"))
+	if err != nil {
+		t.Fatalf("config/hooks.json not written: %v", err)
+	}
+	for _, want := range []string{"SessionStart", "BeforeAgent", "AfterTool", "--format gemini", "--scope project"} {
+		if !strings.Contains(string(hooksData), want) {
+			t.Fatalf("agy hooks missing %q:\n%s", want, hooksData)
+		}
+	}
+	if strings.Contains(string(hooksData), `"Stop"`) {
+		t.Fatalf("agy must not get a stop hook:\n%s", hooksData)
+	}
+
+	// Legacy grpvn hooks are stripped from settings.json; the user's own
+	// hook survives.
+	settings, _ := os.ReadFile(filepath.Join(home, ".gemini", "settings.json"))
+	if strings.Contains(string(settings), "hook prompt") {
+		t.Fatalf("legacy grpvn hooks not removed:\n%s", settings)
+	}
+	if !strings.Contains(string(settings), "/opt/mine/audit.sh") {
+		t.Fatalf("user hook was removed:\n%s", settings)
+	}
+
+	// Idempotent second run.
+	before, _ := os.ReadFile(filepath.Join(home, ".gemini", "config", "hooks.json"))
+	if err := InstallSkill(&bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.ReadFile(filepath.Join(home, ".gemini", "config", "hooks.json"))
+	if !bytes.Equal(before, after) {
+		t.Fatalf("re-install changed agy hooks\nbefore: %s\nafter: %s", before, after)
 	}
 }
