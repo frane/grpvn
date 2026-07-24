@@ -17,6 +17,9 @@ on:
 permissions:
   contents: write
   packages: write
+  # npm trusted publishing: the workflow authenticates to npmjs.com via
+  # GitHub's OIDC token — no NPM_TOKEN secret anywhere.
+  id-token: write
 
 jobs:
   goreleaser:
@@ -59,23 +62,20 @@ jobs:
           # frane/homebrew-tap. Missing token is fine: homebrew_casks.skip_upload
           # in .goreleaser.yaml short-circuits the cask step.
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
-      # Publishes the npm launcher (grpvn-cli) at the tag's version. Skipped
-      # cleanly when the NPM_TOKEN secret isn't configured — secrets can't be
-      # used in `if:` directly, hence the env indirection.
+      # Publishes the npm launcher (grpvn-cli) at the tag's version via npm
+      # trusted publishing: npmjs.com is configured to trust this workflow's
+      # OIDC identity (repo frane/grpvn, workflow release.yml), so there is
+      # no token. Requires npm >= 11.5.1 for the OIDC exchange; provenance
+      # comes with it.
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
       - name: Publish npm launcher
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "NPM_TOKEN not set; skipping npm publish"
-            exit 0
-          fi
-          TAG="${GITHUB_REF_NAME}"
+          npm install -g npm@latest
+          TAG="${GITHUB_REF_NAME:-$(git describe --tags --exact-match)}"
           cd npm
           npm version --no-git-tag-version "${TAG#v}"
           npm publish --access public
