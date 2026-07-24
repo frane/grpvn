@@ -43,7 +43,10 @@ func Doctor(w io.Writer, home, activeStatePath string) error {
 		if st.Name != "" {
 			names[st.Name] = p
 		}
-		if len(st.Follow) == 0 && st.DefaultChannel == "" {
+		// A quiet start is normal for project identities (they subscribe by
+		// posting); a runtime- or host-level identity with nothing at all
+		// is still a dead mailbox.
+		if len(st.Follow) == 0 && st.DefaultChannel == "" && st.Root == "" {
 			fmt.Fprintf(w, "warn  %s follows no channels — channel traffic will never show as unread for it; run `grpvn --state %q follow '#channel'` or re-run `grpvn skill install` to seed it\n", st.Name, p)
 		}
 	}

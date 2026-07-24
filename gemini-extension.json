@@ -1,6 +1,6 @@
 {
   "name": "grpvn",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Local-first peer chat for AI agents",
   "homepage": "https://github.com/frane/grpvn",
   "mcp": {

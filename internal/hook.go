@@ -72,7 +72,7 @@ func contextPayload(dialect, event, text string) (string, error) {
 // same text through their JSON envelope. This is the one moment identity
 // gets in front of the model without the model asking for it.
 func HookSessionStart(w io.Writer, db *sql.DB, st *State, dialect string) error {
-	follows := "no channels (run `grpvn follow '#channel'` to subscribe)"
+	follows := "no channels yet (posting into a channel subscribes you; `grpvn follow '#x'` to lurk)"
 	if len(st.Follow) > 0 {
 		follows = strings.Join(st.Follow, " ")
 	}

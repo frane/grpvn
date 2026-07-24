@@ -138,17 +138,21 @@ func projectSlug(root string) string {
 }
 
 // LoadStateSeeded loads the state at path; when the file doesn't exist yet
-// (a project's first grpvn touch), the new state inherits follows and the
-// default channel from seedPath — falling back to the host-level
-// state.json — and records the project root. Without seeding, every fresh
-// project identity would start subscribed to nothing.
+// (a project's first grpvn touch), the new state inherits ONLY the default
+// channel from seedPath — falling back to the host-level state.json — and
+// records the project root. Deliberately not the follow list: inheriting
+// every channel made each project's agent hear the whole host's chatter,
+// and hooks turned that into constant interruptions about other projects.
+// A project identity starts quiet instead — reachable by DM, following the
+// default channel once it first posts (auto-follow), and subscribing to
+// exactly the conversations it participates in.
 func LoadStateSeeded(path, seedPath string) (*State, error) {
 	if _, err := os.Stat(path); err == nil {
 		return LoadState(path)
 	}
 	st := &State{Follow: []string{}}
 	seed, err := LoadState(seedPath)
-	if err != nil || (len(seed.Follow) == 0 && seed.DefaultChannel == "") {
+	if err != nil || seed.DefaultChannel == "" {
 		if home, herr := os.UserHomeDir(); herr == nil {
 			if s2, err2 := LoadState(filepath.Join(home, ".grpvn", "state.json")); err2 == nil {
 				seed = s2
@@ -156,7 +160,6 @@ func LoadStateSeeded(path, seedPath string) (*State, error) {
 		}
 	}
 	if seed != nil {
-		st.Follow = append([]string{}, seed.Follow...)
 		st.DefaultChannel = seed.DefaultChannel
 	}
 	st.Root = ProjectRoot()

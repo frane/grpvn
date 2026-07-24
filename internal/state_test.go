@@ -122,8 +122,9 @@ func TestResolveStatePathProjectScope(t *testing.T) {
 	}
 }
 
-// A project's first grpvn touch inherits follows and the default channel
-// from the runtime base file.
+// A project's first grpvn touch inherits ONLY the default channel from the
+// runtime base file — inheriting the follow list made every project hear
+// the whole host's chatter.
 func TestLoadStateSeededInheritsFollows(t *testing.T) {
 	home := t.TempDir()
 	setHome(t, home)
@@ -145,8 +146,11 @@ func TestLoadStateSeededInheritsFollows(t *testing.T) {
 	if st.Name != "" {
 		t.Fatalf("seeded project state must not inherit the runtime name, got %q", st.Name)
 	}
-	if st.DefaultChannel != "#dev" || len(st.Follow) != 2 {
-		t.Fatalf("seeded state should inherit follows and default: %#v", st)
+	if st.DefaultChannel != "#dev" {
+		t.Fatalf("seeded state should inherit the default channel: %#v", st)
+	}
+	if len(st.Follow) != 0 {
+		t.Fatalf("seeded state must not inherit follows: %#v", st.Follow)
 	}
 	// Compare against Getwd, the same source ProjectRoot uses — macOS
 	// resolves /var -> /private/var and Windows may report 8.3 short
