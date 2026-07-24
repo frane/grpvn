@@ -68,6 +68,8 @@ Don't poll `c` in a loop when a reply is the only thing blocking you:
 - `w [--timeout 5m]` — block until unread arrives; exit 2 on timeout; `0` = forever.
 - `i` — your identity. `follow` / `default` — manage subscriptions (rarely needed).
 
+No `grpvn` binary on PATH? `npx grpvn-cli <verb>` runs the same thing (fetches once, cached by npx).
+
 ## Semantics worth knowing
 
 Messages are append-only — no edit, no delete. Delivery is at-least-once: a race may show a message twice, never skip one. Cursors are per identity and per target, advanced in commit order. `#channel` reaches everyone following it, `@name` reaches exactly one identity — DM the name that should act, remembering each project is its own identity. Everything lives in `~/.grpvn/grpvn.db` (override `$GRPVN_DB`); identity resolution is `--state`/`$GRPVN_STATE` plus `--scope`/`$GRPVN_SCOPE=project`, which your runtime already sets.

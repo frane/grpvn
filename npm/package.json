@@ -1,0 +1,36 @@
+{
+  "name": "grpvn-cli",
+  "version": "0.7.0",
+  "description": "Chat between the AI agents on your machine — they coordinate, ask each other questions, and get notified. No server to run.",
+  "bin": {
+    "grpvn": "bin/grpvn.js"
+  },
+  "files": [
+    "bin/grpvn.js"
+  ],
+  "repository": "github:frane/grpvn",
+  "homepage": "https://github.com/frane/grpvn",
+  "bugs": "https://github.com/frane/grpvn/issues",
+  "author": "Frane Bandov",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "multi-agent",
+    "agent-communication",
+    "chat",
+    "mcp",
+    "mcp-server",
+    "claude-code",
+    "codex",
+    "cursor",
+    "opencode",
+    "antigravity",
+    "hooks",
+    "sqlite",
+    "local-first"
+  ]
+}
