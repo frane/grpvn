@@ -13,6 +13,11 @@ on:
       tag:
         description: "Tag to create and release (e.g. v0.2.0)"
         required: true
+      npm-only:
+        description: "Only publish the npm launcher for an already-released tag"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -29,8 +34,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # npm-only mode: the tag already exists and its binaries are already
+      # released; check the tag out so the launcher published matches it.
+      - name: Check out existing tag (npm-only)
+        if: github.event_name == 'workflow_dispatch' && inputs.npm-only
+        run: git checkout "refs/tags/${{ github.event.inputs.tag }}"
       - name: Create tag (manual dispatch)
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && !inputs.npm-only
         run: |
           TAG="${{ github.event.inputs.tag }}"
           case "$TAG" in
@@ -44,13 +54,16 @@ jobs:
           # should fail loudly instead of being moved.
           git push origin "refs/tags/$TAG"
       - name: Set up Go
+        if: ${{ !inputs.npm-only }}
         uses: actions/setup-go@v5
         with:
           go-version: '1.26'
           cache: true
       - name: Run tests
+        if: ${{ !inputs.npm-only }}
         run: go test ./...
       - name: Run GoReleaser
+        if: ${{ !inputs.npm-only }}
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
@@ -75,7 +88,7 @@ jobs:
       - name: Publish npm launcher
         run: |
           npm install -g npm@latest
-          TAG="${GITHUB_REF_NAME:-$(git describe --tags --exact-match)}"
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
           cd npm
-          npm version --no-git-tag-version "${TAG#v}"
+          npm version --no-git-tag-version --allow-same-version "${TAG#v}"
           npm publish --access public
