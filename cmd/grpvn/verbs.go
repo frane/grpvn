@@ -164,8 +164,19 @@ func autoFollow(db *sql.DB, st *internal.State, target string) {
 }
 
 var grepCmd = &cobra.Command{
-	Use:     "grep",
+	Use:     "grep <pattern> [#channel|@user]",
 	Aliases: []string{"g"},
+	Short:   "Search message history with a regex",
+	Long: `Searches message bodies for an RE2 pattern.
+
+The optional second argument is the search scope: one #channel or @user to
+search instead of the default, which is your followed channels plus @me.
+It is the CLI equivalent of the MCP g tool's "scope" argument.
+
+Note that the global --scope flag is unrelated: it selects an *identity*
+(project|host) and takes no channel name. Use "grpvn channels" to see which
+channels exist.`,
+	Args: cobra.MaximumNArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
 		n, st, db := mustSession()
 		defer db.Close()
@@ -185,15 +196,45 @@ var grepCmd = &cobra.Command{
 	},
 }
 
+var channelsCmd = &cobra.Command{
+	Use:     "channels",
+	Aliases: []string{"ch"},
+	Short:   "List every channel in the store, followed or not",
+	Long: `Prints one line per channel: name, message count, time since the last
+message, and "following" if you follow it. Unlike "grpvn follow", which
+lists only your own subscriptions, this answers "what channels exist?".`,
+	Run: func(cmd *cobra.Command, args []string) {
+		_, st, db := mustSession()
+		defer db.Close()
+		if err := internal.Channels(os.Stdout, db, st.Follow); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		unreadNotice(db, st)
+	},
+}
+
 var logCmd = &cobra.Command{
-	Use:     "log",
+	Use:     "log [#channel|@user|ULID]",
 	Aliases: []string{"l"},
+	Short:   "Print the history of a target or thread",
+	Long: `Prints every message in a #channel, an @user DM thread, or the reply chain
+containing a message ULID prefix. With no argument it lists the channels
+that exist, the same as "grpvn channels".`,
 	Run: func(cmd *cobra.Command, args []string) {
 		n, st, db := mustSession()
 		defer db.Close()
 		arg := ""
 		if len(args) > 0 {
 			arg = args[0]
+		}
+		if arg == "" {
+			if err := internal.Channels(os.Stdout, db, st.Follow); err != nil {
+				fmt.Fprintln(os.Stderr, "error:", err)
+				os.Exit(1)
+			}
+			unreadNotice(db, st)
+			return
 		}
 		if err := internal.Log(os.Stdout, db, n, arg, countFlag, st.DefaultChannel, tsFlag, fullFlag, humanFlag, colorFlag); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
@@ -416,5 +457,5 @@ func init() {
 	gcCmd.Flags().DurationVar(&gcOlderThanFlag, "older-than", 0, "prune messages older than this (e.g. 720h)")
 	gcCmd.Flags().BoolVar(&gcVacuumFlag, "vacuum", false, "compact the database file after pruning")
 	_ = gcCmd.MarkFlagRequired("older-than")
-	rootCmd.AddCommand(checkCmd, readCmd, peekCmd, sendCmd, askCmd, grepCmd, logCmd, markCmd, idCmd, initCmd, followCmd, defaultCmd, gcCmd)
+	rootCmd.AddCommand(checkCmd, readCmd, peekCmd, sendCmd, askCmd, grepCmd, logCmd, channelsCmd, markCmd, idCmd, initCmd, followCmd, defaultCmd, gcCmd)
 }

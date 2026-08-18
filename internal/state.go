@@ -63,6 +63,29 @@ func LoadState(path string) (*State, error) {
 // unread meant for the session in project B. Claude Desktop and friends,
 // which launch with unpredictable working directories, simply don't get
 // scope wired and keep one identity per runtime.
+// ValidateScope rejects anything that is not an identity scope. Callers
+// pass the --scope flag value or $GRPVN_SCOPE; "" means unset.
+//
+// ResolveStatePath treats every value other than "project" as "use the base
+// file", so an unrecognized scope used to resolve a *different identity*
+// with a nonzero exit nowhere in sight: `grpvn r --scope '#chan'` would
+// advance some other identity's unread cursor, and `grpvn grep p --scope
+// '#chan'` would search that identity's follow list and come back empty —
+// indistinguishable from "no match". The confusion has an obvious source:
+// the MCP g tool's `scope` is a *search* scope taking #channel/@user, so a
+// caller who reads that schema and shells out to the CLI passes a channel
+// to a flag that means something else entirely. Hence the explicit hint.
+func ValidateScope(v string) error {
+	switch v {
+	case "", "project", "host":
+		return nil
+	}
+	if strings.HasPrefix(v, "#") || strings.HasPrefix(v, "@") {
+		return fmt.Errorf("invalid scope %q: --scope selects an identity (project|host), not a search target; to search one channel or user pass it to grep instead: grpvn grep <pattern> %s", v, v)
+	}
+	return fmt.Errorf("invalid scope %q: --scope takes project|host", v)
+}
+
 func ResolveStatePath(override string) string {
 	base := ResolveBaseStatePath(override)
 	if os.Getenv("GRPVN_SCOPE") != "project" {

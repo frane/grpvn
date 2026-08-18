@@ -431,3 +431,102 @@ func TestOwnMessagesAreNotUnreadToSelf(t *testing.T) {
 		t.Fatalf("l should include the agent's own messages; got %q", out)
 	}
 }
+
+// Regression: an unrecognized --scope value was accepted with exit 0 and
+// silently resolved a different identity, because ResolveStatePath treated
+// everything that isn't "project" as "use the base file". Reported after a
+// caller passed a channel name — the MCP g tool's `scope` is a search scope
+// — and got an empty grep that was indistinguishable from "no match".
+func TestInvalidScopeIsRejected(t *testing.T) {
+	t.Parallel()
+	dbDir := t.TempDir()
+	dbPath := filepath.Join(dbDir, "grpvn.db")
+	a := newRunner(t, "alice").withSharedDB(dbPath)
+	a.mustRun("follow", "#spec")
+	a.mustRun("s", "#spec", "FTKit master spec v1")
+
+	for _, bad := range []string{"#spec", "@bob", "nonsense"} {
+		out, stderr, code := a.run("grep", "FTKit", "--scope", bad)
+		if code == 0 {
+			t.Fatalf("--scope %q must fail, got exit 0 with %q", bad, out)
+		}
+		if !strings.Contains(stderr, "invalid scope") {
+			t.Fatalf("--scope %q should explain itself; stderr=%q", bad, stderr)
+		}
+	}
+	// The channel-shaped case points at the flag that does take a channel.
+	_, stderr, _ := a.run("grep", "FTKit", "--scope", "#spec")
+	if !strings.Contains(stderr, "grpvn grep <pattern> #spec") {
+		t.Fatalf("channel-shaped scope should hint at grep's search scope; stderr=%q", stderr)
+	}
+	// A bad value in the env var the MCP configs set fails the same way,
+	// rather than quietly running as the host identity.
+	b := newRunner(t, "bob").withSharedDB(dbPath)
+	b.env = append(b.env, "GRPVN_SCOPE=#spec")
+	if _, stderr, code := b.run("c"); code == 0 || !strings.Contains(stderr, "GRPVN_SCOPE") {
+		t.Fatalf("bad $GRPVN_SCOPE should fail loudly; exit=%d stderr=%q", code, stderr)
+	}
+	// The two real values keep working.
+	for _, ok := range []string{"project", "host"} {
+		a.mustRun("--scope", ok, "id")
+	}
+}
+
+// A search scope that is neither #channel nor @user can only match zero
+// rows, which reads exactly like "nothing found". Say so instead.
+func TestGrepRejectsNonTargetSearchScope(t *testing.T) {
+	t.Parallel()
+	dbDir := t.TempDir()
+	dbPath := filepath.Join(dbDir, "grpvn.db")
+	a := newRunner(t, "alice").withSharedDB(dbPath)
+	a.mustRun("s", "#spec", "FTKit master spec v1")
+
+	out, stderr, code := a.run("grep", "FTKit", "spec")
+	if code == 0 {
+		t.Fatalf("bare word as search scope must fail, got %q", out)
+	}
+	if !strings.Contains(stderr, "invalid search scope") {
+		t.Fatalf("stderr should name the search scope; got %q", stderr)
+	}
+	if out = a.mustRun("grep", "FTKit", "#spec"); !strings.Contains(out, "FTKit") {
+		t.Fatalf("proper search scope should hit; got %q", out)
+	}
+}
+
+// Channel discovery: `follow` lists only subscriptions, so without this
+// there is no supported way to answer "what channels exist?" — the reported
+// workaround was reading ~/.grpvn/grpvn.db directly.
+func TestChannelsListsUnfollowedChannels(t *testing.T) {
+	t.Parallel()
+	dbDir := t.TempDir()
+	dbPath := filepath.Join(dbDir, "grpvn.db")
+	a := newRunner(t, "alice").withSharedDB(dbPath)
+	b := newRunner(t, "bob").withSharedDB(dbPath)
+	a.mustRun("follow", "#mine")
+	a.mustRun("s", "#mine", "hello")
+	b.mustRun("s", "#theirs", "over here")
+	a.mustRun("s", "@bob", "a dm")
+
+	for _, args := range [][]string{{"channels"}, {"ch"}, {"l"}} {
+		out := a.mustRun(args...)
+		if !strings.Contains(out, "#theirs") {
+			t.Fatalf("%v must list channels alice does not follow; got %q", args, out)
+		}
+		if !strings.Contains(out, "#mine 1") {
+			t.Fatalf("%v should report a message count; got %q", args, out)
+		}
+		if strings.Contains(out, "@bob") {
+			t.Fatalf("%v must list channels, not DM targets; got %q", args, out)
+		}
+		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+			if strings.HasPrefix(line, "#mine") != strings.Contains(line, "following") {
+				t.Fatalf("only followed channels get the marker; got %q", line)
+			}
+		}
+	}
+	// A followed channel with no traffic yet still exists.
+	a.mustRun("follow", "#empty")
+	if out := a.mustRun("channels"); !strings.Contains(out, "#empty 0") {
+		t.Fatalf("empty followed channel should still be listed; got %q", out)
+	}
+}

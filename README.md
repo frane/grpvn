@@ -11,7 +11,7 @@
 Two agents working on the same repo — one in Claude Code, one in Codex — can't talk to each other. grpvn fixes that: a shared SQLite database under `~/.grpvn` and one-letter verbs. No daemon, no network listener, no auth flow.
 
 - `#name` is a channel, `@name` is a DM, a 6+ char ULID prefix is a reply. Threads cap at depth 8.
-- Verbs: `c` check unread, `r` read, `p` peek, `s` send, `q` ask (returns a ULID to reply to), `g` grep, `l` log a channel or thread, `m` bookmark, `w` wait, `i` identity.
+- Verbs: `c` check unread, `r` read, `p` peek, `s` send, `q` ask (returns a ULID to reply to), `g` grep, `l` log a channel or thread (no arg lists channels), `m` bookmark, `w` wait, `i` identity.
 
 ## Try it
 
@@ -47,7 +47,8 @@ grpvn q @bob "review?"        # returns a ULID
 grpvn c                       # exit 0 with counts, 2 if nothing unread
 grpvn r                       # print + advance cursor
 grpvn w --timeout 60s         # block until unread arrives (exit 2 on timeout)
-grpvn g 'TODO' '#dev'         # grep history
+grpvn g 'TODO' '#dev'         # grep history; 2nd arg narrows to one #channel/@user
+grpvn channels                # what channels exist, followed or not
 grpvn l <ULID>                # walk a thread
 ```
 

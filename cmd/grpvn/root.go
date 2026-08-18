@@ -31,11 +31,21 @@ var rootCmd = &cobra.Command{
 	SilenceErrors: true,
 	// --scope travels through the same env var the MCP configs set, so
 	// every state-path resolution in the process — including ones that
-	// never see the flag value — agrees on the active scope.
-	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+	// never see the flag value — agrees on the active scope. Both are
+	// validated up front: an unrecognized scope silently resolves the base
+	// state file, i.e. a different identity, and every verb downstream then
+	// reads, writes, and advances cursors as that identity.
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		if err := internal.ValidateScope(scopeFlag); err != nil {
+			return err
+		}
 		if scopeFlag != "" {
 			os.Setenv("GRPVN_SCOPE", scopeFlag)
 		}
+		if err := internal.ValidateScope(os.Getenv("GRPVN_SCOPE")); err != nil {
+			return fmt.Errorf("$GRPVN_SCOPE: %w", err)
+		}
+		return nil
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 		checkCmd.Run(cmd, args)
@@ -49,7 +59,7 @@ var (
 	countFlag                        int
 
 	// Overridden by goreleaser via -X main.version / main.commit / main.date.
-	version = "0.7.1"
+	version = "0.8.0"
 	commit  = ""
 	date    = ""
 )

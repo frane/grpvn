@@ -236,6 +236,12 @@ func Gc(w io.Writer, db *sql.DB, olderThan time.Duration, vacuum bool) error {
 func Grep(w io.Writer, db *sql.DB, name string, follow []string, pattern string, scope string, limit int, defaultChannel string, ts bool, full bool, human bool, color string) error {
 	var v []string
 	if scope != "" {
+		// A search scope is a target, and every target starts with # or @.
+		// Anything else can only ever match zero rows, which reads exactly
+		// like "nothing found" — say so instead.
+		if !strings.HasPrefix(scope, "#") && !strings.HasPrefix(scope, "@") {
+			return fmt.Errorf("invalid search scope %q: pass a #channel or @user, or leave it empty to search followed channels and @me", scope)
+		}
 		v = []string{scope}
 	} else {
 		v = append([]string{}, follow...)
@@ -311,6 +317,50 @@ func Log(w io.Writer, db *sql.DB, name string, arg string, limit int, defaultCha
 		msgs = append(msgs, m)
 	}
 	RenderBatch(w, msgs, name, defaultChannel, ts, full, human, color)
+	return nil
+}
+
+// Channels lists every channel that exists in the store — not just the ones
+// this agent follows — with its message count, how long ago it last saw
+// traffic, and whether the agent is following it. Without this there is no
+// supported answer to "what channels are there?", and the only way to find
+// out is to open ~/.grpvn/grpvn.db behind the CLI's back.
+func Channels(w io.Writer, db *sql.DB, follow []string) error {
+	rows, err := db.Query("SELECT target, COUNT(*), MAX(created_at) FROM messages WHERE target LIKE '#%' GROUP BY target ORDER BY MAX(created_at) DESC")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	followed := make(map[string]bool, len(follow))
+	for _, f := range follow {
+		followed[f] = true
+	}
+	seen := map[string]bool{}
+	for rows.Next() {
+		var target string
+		var count int
+		var last int64
+		if err := rows.Scan(&target, &count, &last); err != nil {
+			return err
+		}
+		seen[target] = true
+		suffix := ""
+		if followed[target] {
+			suffix = " following"
+		}
+		fmt.Fprintf(w, "%s %d %s%s\n", target, count, RelativeTime(last), suffix)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	// A followed channel with no messages yet still exists as far as this
+	// agent is concerned; leaving it out would make the list disagree with
+	// `grpvn follow`.
+	for _, f := range follow {
+		if !seen[f] {
+			fmt.Fprintf(w, "%s 0 - following\n", f)
+		}
+	}
 	return nil
 }
 

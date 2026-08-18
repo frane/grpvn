@@ -176,7 +176,7 @@ func ServeMCP(name, version string, b Bootstrap) error {
 
 	s.AddTool(tool("g", "Greps message history with a regex pattern",
 		mcp.WithString("pattern", mcp.Description("RE2 pattern"), mcp.Required()),
-		mcp.WithString("scope", mcp.Description("#channel or @user; empty = followed channels and @me"))),
+		mcp.WithString("scope", mcp.Description("Search scope: one #channel or @user; empty = followed channels and @me. On the CLI this is grep's second positional argument, not the --scope flag (that one selects an identity)"))),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var args patternArgs
 			if err := req.BindArguments(&args); err != nil {
@@ -194,8 +194,8 @@ func ServeMCP(name, version string, b Bootstrap) error {
 			return mcp.NewToolResultText(notice(db, st, buf.String())), nil
 		})
 
-	s.AddTool(tool("l", "Logs history of a target (#channel/@user) or thread (ULID prefix)",
-		mcp.WithString("target", mcp.Description("#channel, @user, or message ULID prefix"), mcp.Required())),
+	s.AddTool(tool("l", "Logs history of a target (#channel/@user) or thread (ULID prefix). With no target, lists every channel that exists — name, message count, age of the last message, and whether you follow it",
+		mcp.WithString("target", mcp.Description("#channel, @user, or message ULID prefix; empty = list the channels that exist"))),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var args targetArgs
 			if err := req.BindArguments(&args); err != nil {
@@ -207,6 +207,12 @@ func ServeMCP(name, version string, b Bootstrap) error {
 			}
 			defer db.Close()
 			var buf bytes.Buffer
+			if args.Target == "" {
+				if err := Channels(&buf, db, st.Follow); err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
+				}
+				return mcp.NewToolResultText(notice(db, st, buf.String())), nil
+			}
 			if err := Log(&buf, db, n, args.Target, 0, st.DefaultChannel, false, false, false, "never"); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}

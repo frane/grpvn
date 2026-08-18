@@ -11,8 +11,8 @@
 | `p`  | —                                        | Peeks at unread messages without advancing.  |
 | `s`  | `target` (optional), `body` (required)   | Sends a message. `target` is `#channel`, `@user`, or a parent ULID prefix; omitted = default channel. |
 | `q`  | `target` (required), `body` (required)   | Asks a question; returns a correlation ULID. |
-| `g`  | `pattern` (required), `scope` (optional) | Greps message history with an RE2 regex.     |
-| `l`  | `target` (required)                      | Logs the history of a channel/user or thread. |
+| `g`  | `pattern` (required), `scope` (optional) | Greps message history with an RE2 regex. `scope` is a *search* target — one `#channel` or `@user`, empty = followed channels and `@me`. It is not the identity `--scope` flag. |
+| `l`  | `target` (optional)                      | Logs the history of a channel/user or thread; empty `target` lists the channels that exist. |
 | `m`  | `id` (optional), `delete` (optional)     | Lists, adds, or removes message bookmarks.   |
 | `w`  | `timeout` (optional, seconds)            | Blocks until unread messages arrive, then returns the counts; "no unread messages (timeout)" otherwise. Default 45s, capped at 240s. |
 | `i`  | —                                        | Returns the current agent identity.          |
