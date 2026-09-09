@@ -114,6 +114,121 @@ func TestReadWithoutAdvanceKeepsCursor(t *testing.T) {
 	}
 }
 
+func TestReadOneTargetLeavesOthersUnread(t *testing.T) {
+	db := newTestDB(t)
+	dev := NewMessage("bob", "#dev", []byte("parser"))
+	dev.Save(db)
+	ops := NewMessage("bob", "#ops", []byte("deploy"))
+	ops.Save(db)
+	dm := NewMessage("bob", "@alice", []byte("hey"))
+	dm.Save(db)
+
+	st := &State{Name: "alice", Follow: []string{"#dev", "#ops"}}
+	var buf bytes.Buffer
+	code, err := Read(&buf, db, st, 0, true, false, false, false, "never", "#dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 {
+		t.Fatalf("expected 0, got %d", code)
+	}
+	if !strings.Contains(buf.String(), "parser") {
+		t.Fatalf("expected #dev body, got %q", buf.String())
+	}
+	if strings.Contains(buf.String(), "deploy") || strings.Contains(buf.String(), "hey") {
+		t.Fatalf("r '#dev' must not print other targets: %q", buf.String())
+	}
+	if pos := cursorPos(t, db, "alice", "#dev"); pos != dev.Seq {
+		t.Fatalf("#dev cursor should advance to %d, got %d", dev.Seq, pos)
+	}
+	if pos := cursorPos(t, db, "alice", "#ops"); pos != 0 {
+		t.Fatalf("#ops cursor should stay 0, got %d", pos)
+	}
+	if pos := cursorPos(t, db, "alice", "@alice"); pos != 0 {
+		t.Fatalf("DM cursor should stay 0, got %d", pos)
+	}
+
+	buf.Reset()
+	code, err = Read(&buf, db, st, 0, true, false, false, false, "never", "@me")
+	if err != nil || code != 0 {
+		t.Fatalf("r @me: code=%d err=%v", code, err)
+	}
+	if !strings.Contains(buf.String(), "hey") {
+		t.Fatalf("expected DM body, got %q", buf.String())
+	}
+	if pos := cursorPos(t, db, "alice", "@alice"); pos != dm.Seq {
+		t.Fatalf("DM cursor should advance to %d, got %d", dm.Seq, pos)
+	}
+	if pos := cursorPos(t, db, "alice", "#ops"); pos != 0 {
+		t.Fatalf("#ops must still be unread, got cursor %d", pos)
+	}
+}
+
+func TestReadRejectsUnfollowedTarget(t *testing.T) {
+	db := newTestDB(t)
+	st := &State{Name: "alice", Follow: []string{"#dev"}}
+	var buf bytes.Buffer
+	_, err := Read(&buf, db, st, 0, true, false, false, false, "never", "#ops")
+	if err == nil || !strings.Contains(err.Error(), "not following") {
+		t.Fatalf("expected not-following error, got %v", err)
+	}
+}
+
+func TestCheckActionableOmitsChannelChatter(t *testing.T) {
+	db := newTestDB(t)
+	st := &State{Name: "alice", Follow: []string{"#dev", "#ops"}}
+	NewMessage("bob", "#dev", []byte("noise")).Save(db)
+	NewMessage("bob", "#ops", []byte("alice please look")).Save(db)
+	NewMessage("bob", "@alice", []byte("dm")).Save(db)
+
+	var buf bytes.Buffer
+	code, err := Check(&buf, db, st)
+	if err != nil || code != 0 {
+		t.Fatalf("check: code=%d err=%v", code, err)
+	}
+	all := buf.String()
+	if !strings.Contains(all, "1 #dev") || !strings.Contains(all, "1 #ops") || !strings.Contains(all, "1 @me") {
+		t.Fatalf("full check should list every target, got %q", all)
+	}
+
+	buf.Reset()
+	code, err = CheckActionable(&buf, db, st)
+	if err != nil || code != 0 {
+		t.Fatalf("actionable: code=%d err=%v", code, err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, "1 @me") {
+		t.Fatalf("DM must be actionable: %q", got)
+	}
+	if !strings.Contains(got, "1 #ops") {
+		t.Fatalf("mention must be actionable: %q", got)
+	}
+	if strings.Contains(got, "#dev") {
+		t.Fatalf("channel chatter must not be actionable: %q", got)
+	}
+}
+
+func TestCheckActionableIncludesReplyToMe(t *testing.T) {
+	db := newTestDB(t)
+	st := &State{Name: "alice", Follow: []string{"#dev"}}
+	mine, err := Send(db, "alice", "#dev", "starting parser", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Send(db, "bob", mine.ID, "looks good", "", false); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	code, err := CheckActionable(&buf, db, st)
+	if err != nil || code != 0 {
+		t.Fatalf("actionable: code=%d err=%v out=%q", code, err, buf.String())
+	}
+	if !strings.Contains(buf.String(), "1 #dev") {
+		t.Fatalf("reply to alice should be actionable: %q", buf.String())
+	}
+}
+
 func TestSendToChannel(t *testing.T) {
 	db := newTestDB(t)
 	if _, err := Send(db, "alice", "#dev", "hello", "", false); err != nil {

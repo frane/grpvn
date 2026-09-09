@@ -22,18 +22,26 @@ func targetsFor(name string, follow []string) []string {
 // positions in the cursors table, so a follow added today surfaces every
 // message in that channel (absent cursor reads as 0 = everything unread).
 func Check(w io.Writer, db *sql.DB, st *State) (int, error) {
+	return checkUnread(w, db, st, false)
+}
+
+// CheckActionable counts only unread that needs this agent: DMs, messages
+// that mention its name, and replies to its posts. Channel chatter on a
+// followed target is omitted — that's visible via Check, not a to-do.
+func CheckActionable(w io.Writer, db *sql.DB, st *State) (int, error) {
+	return checkUnread(w, db, st, true)
+}
+
+func checkUnread(w io.Writer, db *sql.DB, st *State, actionableOnly bool) (int, error) {
 	cursors, err := loadCursors(db, st.Name)
 	if err != nil {
 		return 0, err
 	}
 	counts := []string{}
 	total := 0
+	inbox := "@" + st.Name
 	for _, target := range targetsFor(st.Name, st.Follow) {
-		var n int
-		err := db.QueryRow(
-			"SELECT COUNT(*) FROM messages WHERE target = ? AND seq > ? AND sender != ?",
-			target, cursors[target], st.Name,
-		).Scan(&n)
+		n, err := countUnread(db, st.Name, target, cursors[target], actionableOnly && target != inbox)
 		if err != nil {
 			return 0, err
 		}
@@ -41,7 +49,7 @@ func Check(w io.Writer, db *sql.DB, st *State) (int, error) {
 			continue
 		}
 		label := target
-		if target == "@"+st.Name {
+		if target == inbox {
 			label = "@me"
 		}
 		counts = append(counts, fmt.Sprintf("%d %s", n, label))
@@ -54,12 +62,26 @@ func Check(w io.Writer, db *sql.DB, st *State) (int, error) {
 	return 0, nil
 }
 
-// Read prints unread across all followed targets in commit (seq) order.
-// Cursors are per-target rows in the cursors table: after a successful
-// render each target's cursor advances to the last seq rendered FOR THAT
-// TARGET, guarded to be monotonic. Delivery is at-least-once: two reads by
-// the same agent racing each other may both print a message, but the
-// commit-ordered seq guarantees neither can skip one.
+func countUnread(db *sql.DB, name, target string, cursor int64, actionableOnly bool) (int, error) {
+	var n int
+	var err error
+	if !actionableOnly {
+		err = db.QueryRow(
+			"SELECT COUNT(*) FROM messages WHERE target = ? AND seq > ? AND sender != ?",
+			target, cursor, name,
+		).Scan(&n)
+	} else {
+		err = db.QueryRow(
+			`SELECT COUNT(*) FROM messages m
+			 WHERE m.target = ? AND m.seq > ? AND m.sender != ?
+			   AND (instr(m.body, ?) > 0
+			     OR EXISTS (SELECT 1 FROM messages p WHERE p.id = m.parent_id AND p.sender = ?))`,
+			target, cursor, name, name, name,
+		).Scan(&n)
+	}
+	return n, err
+}
+
 // scanMessage reads one row into a Message. withSeq matches queries that
 // select seq as the leading column.
 func scanMessage(rows *sql.Rows, withSeq bool) (*Message, error) {
@@ -110,12 +132,64 @@ func AutoFollow(db *sql.DB, st *State, statePath, target string) (bool, error) {
 	return true, nil
 }
 
-func Read(w io.Writer, db *sql.DB, st *State, limit int, advance bool, ts bool, full bool, human bool, color string) (int, error) {
+// resolveReadTargets maps optional r/p arguments onto the agent's inbox.
+// Empty only means every followed channel plus @me. "@me" is the DM inbox.
+// A target this agent does not follow is an error — unread is not defined
+// for a channel with no cursor of ours, and guessing would dump history.
+func resolveReadTargets(st *State, only []string) ([]string, error) {
+	all := targetsFor(st.Name, st.Follow)
+	if len(only) == 0 {
+		return all, nil
+	}
+	allowed := make(map[string]bool, len(all))
+	for _, t := range all {
+		allowed[t] = true
+	}
+	out := make([]string, 0, len(only))
+	seen := map[string]bool{}
+	for _, raw := range only {
+		if raw == "" {
+			continue
+		}
+		t := raw
+		if t == "@me" {
+			t = "@" + st.Name
+		}
+		if !strings.HasPrefix(t, "#") && !strings.HasPrefix(t, "@") {
+			return nil, fmt.Errorf("invalid read target %q: pass a #channel or @me", raw)
+		}
+		if !allowed[t] {
+			return nil, fmt.Errorf("not following %s", raw)
+		}
+		if seen[t] {
+			continue
+		}
+		seen[t] = true
+		out = append(out, t)
+	}
+	if len(out) == 0 {
+		return all, nil
+	}
+	return out, nil
+}
+
+// Read prints unread across followed targets in commit (seq) order.
+// only, if non-empty, restricts the read to those targets (`#dev`, `@me`);
+// empty means every followed channel plus the DM inbox. Cursors are
+// per-target rows in the cursors table: after a successful render each
+// target's cursor advances to the last seq rendered FOR THAT TARGET,
+// guarded to be monotonic. Delivery is at-least-once: two reads by the
+// same agent racing each other may both print a message, but the
+// commit-ordered seq guarantees neither can skip one.
+func Read(w io.Writer, db *sql.DB, st *State, limit int, advance bool, ts bool, full bool, human bool, color string, only ...string) (int, error) {
 	cursors, err := loadCursors(db, st.Name)
 	if err != nil {
 		return 0, err
 	}
-	targets := targetsFor(st.Name, st.Follow)
+	targets, err := resolveReadTargets(st, only)
+	if err != nil {
+		return 0, err
+	}
 
 	var where strings.Builder
 	args := []interface{}{}

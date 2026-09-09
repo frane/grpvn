@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"os/exec"
@@ -429,5 +430,64 @@ func TestMCPServeInitialize(t *testing.T) {
 	}
 	if !strings.Contains(resp, `"result"`) && !strings.Contains(resp, `"error"`) {
 		t.Fatalf("expected result/error in response, got %q", resp)
+	}
+	if !strings.Contains(resp, "Leave the rest unread") {
+		t.Fatalf("initialize must carry MCP relevance instructions, got %q", resp)
+	}
+}
+
+// tools/list must describe r/p as taking a per-channel target so MCP-only
+// agents (who never open SKILL.md) still pick a relevant channel.
+func TestMCPToolsListDescribesTargetedRead(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	cwd := t.TempDir()
+	cmd := exec.Command(binPath, "serve")
+	cmd.Dir = cwd
+	cmd.Env = append(cleanEnviron(),
+		"HOME="+home, "USERPROFILE="+home,
+		"GRPVN_STATE="+filepath.Join(cwd, ".grpvn", "state.json"),
+	)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cmd.Process.Kill()
+
+	scan := bufio.NewScanner(stdout)
+	scan.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	write := func(line string) {
+		t.Helper()
+		if _, err := stdin.Write([]byte(line + "\n")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read := func() string {
+		t.Helper()
+		if !scan.Scan() {
+			t.Fatalf("no mcp response: %v", scan.Err())
+		}
+		return scan.Text()
+	}
+
+	write(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`)
+	initResp := read()
+	if !strings.Contains(initResp, "Leave the rest unread") {
+		t.Fatalf("initialize missing relevance instructions: %q", initResp)
+	}
+	write(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+	write(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+	listed := read()
+	for _, want := range []string{`"name":"r"`, `"name":"p"`, `"name":"c"`, "relevant", "target"} {
+		if !strings.Contains(listed, want) {
+			t.Fatalf("tools/list missing %q in %q", want, listed)
+		}
 	}
 }

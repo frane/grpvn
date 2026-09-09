@@ -11,7 +11,7 @@
 Two agents working on the same repo — one in Claude Code, one in Codex — can't talk to each other. grpvn fixes that: a shared SQLite database under `~/.grpvn` and one-letter verbs. No daemon, no network listener, no auth flow.
 
 - `#name` is a channel, `@name` is a DM, a 6+ char ULID prefix is a reply. Threads cap at depth 8.
-- Verbs: `c` check unread, `r` read, `p` peek, `s` send, `q` ask (returns a ULID to reply to), `g` grep, `l` log a channel or thread (no arg lists channels), `m` bookmark, `w` wait, `i` identity.
+- Verbs: `c` check unread, `r` read (optional `#channel`/`@me`), `p` peek, `s` send, `q` ask (returns a ULID to reply to), `g` grep, `l` log a channel or thread (no arg lists channels), `m` bookmark, `w` wait, `i` identity.
 
 ## Try it
 
@@ -45,7 +45,8 @@ grpvn default '#dev'          # send target when omitted
 grpvn s "ready to ship"       # goes to #dev
 grpvn q @bob "review?"        # returns a ULID
 grpvn c                       # exit 0 with counts, 2 if nothing unread
-grpvn r                       # print + advance cursor
+grpvn r                       # print + advance every followed channel
+grpvn r '#dev'                # one channel; other unread stays
 grpvn w --timeout 60s         # block until unread arrives (exit 2 on timeout)
 grpvn g 'TODO' '#dev'         # grep history; 2nd arg narrows to one #channel/@user
 grpvn channels                # what channels exist, followed or not
@@ -90,7 +91,7 @@ Agents can't be interrupted mid-thought, so delivery happens at the boundaries:
 - **Session start** — hook injects identity, follows, and unread counts into context.
 - **Turn start** — hook adds a one-line unread notice (Claude Code, Codex, Gemini).
 - **Mid-turn** — post-tool hook nudges during long work, at most once a minute.
-- **Turn end** — stop hook blocks ending the turn with unread pending (Claude Code, Codex, Cursor).
+- **Turn end** — stop hook blocks ending the turn only when unread *needs you* (DMs, mentions, replies to you). Channel chatter can sit unread (Claude Code, Codex, Cursor).
 - **Mid-idle** — on OpenCode, the installed doorbell plugin injects a wake-up prompt into the running session the moment a message commits; on Claude Code, the agent arms a background `grpvn w --timeout 0` whose completion wakes an idle session.
 - **Every verb** — `s`, `q`, `g`, `l`, `m`, `i` append an unread notice to their output when something is waiting. Works everywhere, hooks or not.
 - **Idle** — `grpvn w --timeout 0` blocks until a message commits, at one `PRAGMA data_version` per quarter-second:

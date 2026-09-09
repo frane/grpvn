@@ -62,8 +62,9 @@ func TestWaitWakesOnSend(t *testing.T) {
 	}
 }
 
-// `hook stop` emits a block decision when unread messages exist, stays
-// silent when there are none, and never blocks when stop_hook_active is set
+// `hook stop` emits a block decision when unread needs this agent (DMs,
+// mentions, replies to it), stays silent on unrelated channel chatter and
+// on an empty inbox, and never blocks when stop_hook_active is set
 // (the anti-loop guarantee).
 func TestHookStop(t *testing.T) {
 	t.Parallel()
@@ -101,7 +102,16 @@ func TestHookStop(t *testing.T) {
 
 	b.mustRun("s", "#dev", "blocker found")
 
-	// Unread: a JSON block decision naming the counts.
+	// Channel chatter is unread, but stop must not trap the agent into
+	// draining a channel it isn't working on.
+	out, code = hook(`{"stop_hook_active":false}`)
+	if code != 0 || strings.TrimSpace(out) != "" {
+		t.Fatalf("unrelated channel chatter should not block: code=%d out=%q", code, out)
+	}
+
+	b.mustRun("s", "@alice", "needs you")
+
+	// A DM needs the agent: a JSON block decision naming @me.
 	out, code = hook(`{"stop_hook_active":false}`)
 	if code != 0 {
 		t.Fatalf("hook must fail open / exit 0, got %d", code)
@@ -116,8 +126,11 @@ func TestHookStop(t *testing.T) {
 	if decision.Decision != "block" {
 		t.Fatalf("expected decision=block, got %#v", decision)
 	}
-	if !strings.Contains(decision.Reason, "1 #dev") {
-		t.Fatalf("reason should carry the counts, got %q", decision.Reason)
+	if !strings.Contains(decision.Reason, "1 @me") {
+		t.Fatalf("reason should carry the DM count, got %q", decision.Reason)
+	}
+	if strings.Contains(decision.Reason, "#dev") {
+		t.Fatalf("reason should not list unrelated channel chatter, got %q", decision.Reason)
 	}
 
 	// Same unread state but stop_hook_active: must NOT block again.

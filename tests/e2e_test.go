@@ -179,6 +179,56 @@ func TestReadSide(t *testing.T) {
 	}
 }
 
+func TestReadOneChannelLeavesOthers(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+
+	run := func(args ...string) (string, string, int) {
+		cmd := exec.Command(binPath, args...)
+		cmd.Dir = cwd
+		cmd.Env = append(cleanEnviron(), "HOME="+home, "USERPROFILE="+home, "GRPVN_STATE="+filepath.Join(cwd, ".grpvn", "state.json"))
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		exitCode := 0
+		if err != nil {
+			if exitError, ok := err.(*exec.ExitError); ok {
+				exitCode = exitError.ExitCode()
+			} else {
+				t.Fatalf("failed to run grpvn: %v", err)
+			}
+		}
+		return stdout.String(), stderr.String(), exitCode
+	}
+
+	run("init", "--as", "bob")
+	statePath := filepath.Join(cwd, ".grpvn", "state.json")
+	os.WriteFile(statePath, []byte(`{"name": "bob", "default_channel": "#dev", "follow": ["#dev", "#ops"]}`), 0644)
+
+	run("--as", "alice", "s", "#dev", "parser work")
+	run("--as", "alice", "s", "#ops", "deploy work")
+
+	stdout, stderr, code := run("r", "#dev")
+	if code != 0 {
+		t.Fatalf("r #dev failed: code=%d stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stdout, "parser work") {
+		t.Errorf("r #dev missing message: %q", stdout)
+	}
+	if strings.Contains(stdout, "deploy work") {
+		t.Errorf("r #dev must not print #ops: %q", stdout)
+	}
+
+	stdout, _, code = run("check")
+	if code != 0 {
+		t.Errorf("expected leftover #ops unread, got code %d", code)
+	}
+	if stdout != "1 #ops\n" {
+		t.Errorf("expected only #ops unread, got %q", stdout)
+	}
+}
+
 func TestAuxVerbs(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()

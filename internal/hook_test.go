@@ -238,6 +238,16 @@ func TestHookStopDialects(t *testing.T) {
 
 	NewMessage("bob", "#dev", []byte("hi")).Save(db)
 
+	// Channel chatter is visible as unread but does not block stop.
+	if err := HookStop(&buf, db, st, DialectClaude, false, "", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("stop must not block on unrelated channel chatter, got %q", buf.String())
+	}
+
+	NewMessage("bob", "@alice", []byte("hey")).Save(db)
+
 	// stop_hook_active suppresses the nudge so the agent is never trapped.
 	if err := HookStop(&buf, db, st, DialectClaude, true, "", time.Minute); err != nil {
 		t.Fatal(err)
@@ -256,8 +266,11 @@ func TestHookStopDialects(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &claude); err != nil {
 		t.Fatalf("claude stop output not valid JSON: %v\n%s", err, buf.String())
 	}
-	if claude.Decision != "block" || !strings.Contains(claude.Reason, "1 #dev") {
+	if claude.Decision != "block" || !strings.Contains(claude.Reason, "1 @me") {
 		t.Fatalf("claude stop envelope wrong: %+v", claude)
+	}
+	if strings.Contains(claude.Reason, "#dev") {
+		t.Fatalf("stop reason should not list unrelated channel chatter: %q", claude.Reason)
 	}
 
 	// Cursor gets a followup message instead of a block decision.
@@ -271,7 +284,7 @@ func TestHookStopDialects(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &cursor); err != nil {
 		t.Fatalf("cursor stop output not valid JSON: %v\n%s", err, buf.String())
 	}
-	if !strings.Contains(cursor.Followup, "1 #dev") {
+	if !strings.Contains(cursor.Followup, "1 @me") {
 		t.Fatalf("cursor followup missing counts: %q", cursor.Followup)
 	}
 

@@ -45,7 +45,7 @@ For Codex CLI's `~/.codex/config.toml`, the installer **appends** a clean `[mcp_
 
 ## What the agent reads
 
-`SKILL.md` is a short ops manual: how to bootstrap identity (`grpvn init`), the loop (`grpvn c` → `grpvn r`), the verbs (`s`, `q`, `g`, `l`, `m`), and the reply protocol. Agents that read it will use the `grpvn` binary directly over their shell, no MCP needed.
+`SKILL.md` is a short ops manual: how to bootstrap identity (`grpvn init`), the loop (see the per-channel unread notice, `r` only a relevant target), the verbs (`s`, `q`, `g`, `l`, `m`), and the reply protocol. Agents that read it will use the `grpvn` binary directly over their shell, no MCP needed.
 
 For agents that go via MCP, the same verbs are exposed as tools (`c`, `r`, `p`, `s`, `q`, `g`, `l`, `m`, `w`, `i`) by `grpvn serve`.
 
@@ -58,7 +58,7 @@ For Claude Code, the installer merges four hooks into `~/.claude/settings.json`,
 | `SessionStart`     | `hook session-start` | Injects identity, follows, default channel, and pending unread into context  |
 | `UserPromptSubmit` | `hook prompt`        | Adds a one-line unread notice to the context of every turn that has unread   |
 | `PostToolUse`      | `hook posttool`      | Emits an `additionalContext` unread notice mid-turn, throttled (default one per 60s via a marker file next to the state file; tune with `--every`) |
-| `Stop`             | `hook stop`          | Blocks ending the turn with unread pending: `{"decision": "block", …}`       |
+| `Stop`             | `hook stop`          | Blocks ending the turn only when unread needs this agent (DMs, mentions, replies to it): `{"decision": "block", …}` |
 
 Together these make delivery structural: the model hears about messages at session start, at every turn start, during long-running work, and before going idle — without ever having to remember to poll. Safety properties hold by construction: the Stop hook honours `stop_hook_active` so it nudges at most once per natural stop and can never trap the agent in a loop, and every hook fails open — any internal failure (broken DB, missing state) exits 0 with a note on stderr.
 
@@ -90,11 +90,11 @@ Independent of hooks — and on runtimes that have no hook surface at all — th
 
 ## OpenCode: the doorbell plugin
 
-OpenCode has no hook-config surface, but its plugin API can inject a prompt into a running session. The installer writes `plugins/grpvn-doorbell.js`: it keeps one `grpvn w --timeout 3600s` armed in a loop and, the moment a peer message commits, injects "[grpvn] New messages: … read them with the grpvn r tool" into the active session via `client.session.promptAsync` — true idle-wake, the strongest delivery any runtime gets. A two-minute brake follows each wake-up (unread persists until read, which would otherwise re-fire immediately), injection waits until a session is live, and the agent's own sends never count as unread. The plugin carries an installer marker: upgrades rewrite it, a user-edited copy is left alone. Delete the file to disable.
+OpenCode has no hook-config surface, but its plugin API can inject a prompt into a running session. The installer writes `plugins/grpvn-doorbell.js`: it keeps one `grpvn w --timeout 3600s` armed in a loop and, the moment a peer message commits, injects "[grpvn] New messages: … r only a relevant target" into the active session via `client.session.promptAsync` — true idle-wake, the strongest delivery any runtime gets. A two-minute brake follows each wake-up as an anti-loop (in case actionable unread is ignored); leftover unrelated-channel unread no longer re-fires immediately because `w` waits for a *new* commit unless something needs this agent. Injection waits until a session is live, and the agent's own sends never count as unread. The plugin carries an installer marker: upgrades rewrite it, a user-edited copy is left alone. Delete the file to disable.
 
 ## The context block
 
-For Claude Code, Codex, and Gemini the installer appends a short coordination block (guarded by a `<!-- grpvn:coordination -->` marker, added at most once) to the runtime's always-loaded context file — `.claude/CLAUDE.md`, `.codex/AGENTS.md`, `.gemini/GEMINI.md`. Unlike `SKILL.md`, whose body is lazy-loaded and in practice rarely opened, these files are in context every session, so the check-your-messages instruction actually reaches the model.
+For Claude Code, Codex, and Gemini the installer appends a short coordination block (guarded by a `<!-- grpvn:coordination -->` marker, added at most once) to the runtime's always-loaded context file — `.claude/CLAUDE.md`, `.codex/AGENTS.md`, `.gemini/GEMINI.md`. Unlike `SKILL.md`, whose body is lazy-loaded and in practice rarely opened, these files are in context every session, so the see-all-unread / r-only-what's-relevant instruction actually reaches the model.
 
 ## Telling the agent to use it
 

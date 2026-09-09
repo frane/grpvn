@@ -14,7 +14,7 @@ func waitLoader(st *State) func() (*State, error) {
 
 func TestWaitReturnsImmediatelyWhenUnread(t *testing.T) {
 	db := newTestDB(t)
-	NewMessage("bob", "#dev", []byte("hi")).Save(db)
+	NewMessage("bob", "@alice", []byte("hi")).Save(db)
 	st := &State{Name: "alice", Follow: []string{"#dev"}, Cursors: map[string]string{}}
 
 	var buf bytes.Buffer
@@ -26,11 +26,57 @@ func TestWaitReturnsImmediatelyWhenUnread(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected 0, got %d", code)
 	}
-	if !strings.Contains(buf.String(), "1 #dev") {
+	if !strings.Contains(buf.String(), "1 @me") {
 		t.Fatalf("expected counts in output, got %q", buf.String())
 	}
 	if time.Since(start) > 2*time.Second {
 		t.Fatalf("pre-existing unread should return without polling; took %v", time.Since(start))
+	}
+}
+
+func TestWaitDoesNotReturnImmediatelyOnChannelChatter(t *testing.T) {
+	db := newTestDB(t)
+	NewMessage("bob", "#dev", []byte("hi")).Save(db)
+	st := &State{Name: "alice", Follow: []string{"#dev"}, Cursors: map[string]string{}}
+
+	var buf bytes.Buffer
+	code, err := Wait(context.Background(), &buf, db, waitLoader(st), 300*time.Millisecond, 50*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 2 {
+		t.Fatalf("leftover channel chatter must not wake wait; code=%d out=%q", code, buf.String())
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("timeout should produce no output, got %q", buf.String())
+	}
+}
+
+func TestWaitWakesOnNewChatterDespiteLeftover(t *testing.T) {
+	db := newTestDB(t)
+	NewMessage("bob", "#dev", []byte("old")).Save(db)
+	writer, err := OpenDB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+
+	st := &State{Name: "alice", Follow: []string{"#dev"}, Cursors: map[string]string{}}
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		NewMessage("bob", "#dev", []byte("new")).Save(writer)
+	}()
+
+	var buf bytes.Buffer
+	code, err := Wait(context.Background(), &buf, db, waitLoader(st), 10*time.Second, 50*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 {
+		t.Fatalf("expected 0 after a new commit on a leftover channel, got %d", code)
+	}
+	if !strings.Contains(buf.String(), "#dev") {
+		t.Fatalf("expected #dev counts, got %q", buf.String())
 	}
 }
 

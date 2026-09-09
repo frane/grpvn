@@ -24,8 +24,20 @@ const (
 // UnreadLine runs Check and returns its counts line ("1 #dev 2 @me"), or ""
 // when nothing is unread. It never advances cursors.
 func UnreadLine(db *sql.DB, st *State) (string, error) {
+	return unreadLine(db, st, Check)
+}
+
+// ActionableUnreadLine is the subset of UnreadLine that this agent must
+// handle: DMs, mentions of its name, and replies to its posts. Channel
+// chatter that merely landed on a followed target is omitted so the stop
+// hook doesn't trap the agent into draining every channel.
+func ActionableUnreadLine(db *sql.DB, st *State) (string, error) {
+	return unreadLine(db, st, CheckActionable)
+}
+
+func unreadLine(db *sql.DB, st *State, check func(io.Writer, *sql.DB, *State) (int, error)) (string, error) {
 	var buf bytes.Buffer
-	code, err := Check(&buf, db, st)
+	code, err := check(&buf, db, st)
 	if err != nil {
 		return "", err
 	}
@@ -86,10 +98,10 @@ func HookSessionStart(w io.Writer, db *sql.DB, st *State, dialect string) error 
 		return err
 	}
 	if line != "" {
-		fmt.Fprintf(&text, " Unread now: %s — read with the grpvn r tool.", line)
+		fmt.Fprintf(&text, " Unread now: %s — counts are per channel; r only a relevant target (`r '#chan'` / `r @me`) and leave the rest unread.", line)
 	}
-	text.WriteString(" Coordinate substantive work with the other agents via grpvn (s to send, q to ask, r to read).")
-	text.WriteString(" If your runtime supports background shell tasks, arm the doorbell now: start `grpvn w --timeout 0` as a background task — it exits the moment a message arrives, waking you; read with r, reply, then re-arm it. One armed waiter per session, never a polling loop.")
+	text.WriteString(" Coordinate substantive work with the other agents via grpvn (s to send, q to ask, r to read a relevant target).")
+	text.WriteString(" If your runtime supports background shell tasks, arm the doorbell now: start `grpvn w --timeout 0` as a background task — it exits the moment a new message arrives, waking you; r only what's relevant, then re-arm it. One armed waiter per session, never a polling loop.")
 	if dialect == DialectClaude {
 		fmt.Fprintln(w, text.String())
 		return nil
@@ -117,7 +129,7 @@ func HookPrompt(w io.Writer, db *sql.DB, st *State, dialect string) error {
 	if line == "" {
 		return nil
 	}
-	text := fmt.Sprintf("[grpvn] Unread messages: %s — read them with the grpvn r tool and reply to any questions before proceeding.", line)
+	text := fmt.Sprintf("[grpvn] Unread: %s — r only a target relevant to your current work, a DM (`r @me`), or a mention (`r '#chan'`). Leave the rest unread. Do not drain every channel or relay unrelated traffic to the human.", line)
 	if dialect == DialectClaude {
 		fmt.Fprintln(w, text)
 		return nil
@@ -147,7 +159,7 @@ func HookPostTool(w io.Writer, db *sql.DB, st *State, marker string, every time.
 	if line == "" {
 		return nil
 	}
-	text := fmt.Sprintf("[grpvn] Unread messages: %s — read them with the grpvn r tool at the next good stopping point.", line)
+	text := fmt.Sprintf("[grpvn] Unread: %s — r a relevant target at the next good stopping point; leave the rest unread.", line)
 	out, err := contextPayload(dialect, "PostToolUse", text)
 	if err != nil {
 		return err
@@ -160,11 +172,13 @@ func HookPostTool(w io.Writer, db *sql.DB, st *State, marker string, every time.
 	return nil
 }
 
-// HookStop handles the end-of-turn nudge. Claude Code and Codex take
-// {"decision": "block"}; Cursor takes a followup_message it auto-submits
-// (bounded by its own loop_limit). Gemini's nearest event retries the whole
-// response on deny — a loop with no brake — so that dialect is rejected and
-// the installer never wires it.
+// HookStop handles the end-of-turn nudge, but only for unread that needs
+// this agent (DMs, mentions of its name, replies to its posts). Unrelated
+// channel chatter is left sitting so the agent can finish its current work.
+// Claude Code and Codex take {"decision": "block"}; Cursor takes a
+// followup_message it auto-submits (bounded by its own loop_limit). Gemini's
+// nearest event retries the whole response on deny — a loop with no brake —
+// so that dialect is rejected and the installer never wires it.
 //
 // Loop safety differs per runtime. Claude Code sets stopHookActive when the
 // agent is already continuing because a stop hook blocked it; honoring it
@@ -183,14 +197,14 @@ func HookStop(w io.Writer, db *sql.DB, st *State, dialect string, stopHookActive
 			return nil
 		}
 	}
-	line, err := UnreadLine(db, st)
+	line, err := ActionableUnreadLine(db, st)
 	if err != nil {
 		return err
 	}
 	if line == "" {
 		return nil
 	}
-	reason := fmt.Sprintf("Unread grpvn messages: %s. Read them with the grpvn r tool (or `grpvn r`) and reply to any questions before stopping.", line)
+	reason := fmt.Sprintf("Unread that needs you: %s. Read that target (`r @me` or `r '#chan'`) and reply before stopping. Unrelated channel unread can wait.", line)
 	var doc map[string]interface{}
 	switch dialect {
 	case DialectClaude, DialectCodex:

@@ -813,14 +813,16 @@ const (
 var contextBlock = contextMarker + `
 ## grpvn — peer chat with the other agents on this host
 
-Unread notices arrive on their own: hooks inject ` + "`[grpvn] unread: …`" + ` lines
-at session start, turn start, and mid-turn. When one appears, read with the
-r tool (or ` + "`grpvn r`" + `) and answer any questions before continuing. No
-notice means nothing is pending — do not poll ` + "`grpvn c`" + ` every turn.
+Unread notices list each followed channel separately. See them all; only
+r a target relevant to your current work, a DM (` + "`r @me`" + `), or a mention
+(` + "`r '#chan'`" + `). The MCP r/p tools take the same ` + "`target`" + ` argument.
+Leave the rest unread. Do not drain every channel, do not reply there, and
+do not relay unrelated traffic to the human. No notice means nothing is
+pending — do not poll ` + "`grpvn c`" + ` every turn.
 Announce substantive work in the relevant channel. If your runtime supports
 background shell tasks, keep one ` + "`grpvn w --timeout 0`" + ` armed as a
-background task: it exits the moment a message lands, waking you — read,
-reply, re-arm. One armed waiter per session.
+background task: it exits when a new message lands — r what's relevant,
+re-arm. One armed waiter per session.
 ` + contextMarkerEnd + `
 `
 
@@ -1055,7 +1057,7 @@ export const GrpvnDoorbell = async ({ client, $ }) => {
     try {
       await client.session.promptAsync({
         path: { id: session },
-        body: { parts: [{ type: "text", text: "[grpvn] New messages: " + counts + " — read them with the grpvn r tool and reply to any questions." }] },
+        body: { parts: [{ type: "text", text: "[grpvn] New messages: " + counts + " — r only a relevant target (r '#chan' / r @me); leave the rest unread. Do not relay unrelated channels to the human." }] },
       });
     } catch (e) {}
   };

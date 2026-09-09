@@ -50,7 +50,7 @@ func unreadNotice(db *sql.DB, st *internal.State) {
 	if err != nil || line == "" {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "[grpvn] unread: %s — run `grpvn r`\n", line)
+	fmt.Fprintf(os.Stderr, "[grpvn] unread: %s — r only a relevant target (`grpvn r '#chan'` / `grpvn r @me`)\n", line)
 }
 
 var checkCmd = &cobra.Command{
@@ -69,12 +69,16 @@ var checkCmd = &cobra.Command{
 }
 
 var readCmd = &cobra.Command{
-	Use:     "read",
+	Use:     "read [#channel|@me]...",
 	Aliases: []string{"r"},
+	Short:   "Print unread and mark it read",
+	Long: `Prints unread messages and advances the cursor. With no argument this
+drains every followed channel — agents should pass the relevant target
+instead (` + "`grpvn r '#dev'`" + `, ` + "`grpvn r @me`" + `) and leave the rest unread.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		_, st, db := mustSession()
 		defer db.Close()
-		c, err := internal.Read(os.Stdout, db, st, countFlag, true, tsFlag, fullFlag, humanFlag, colorFlag)
+		c, err := internal.Read(os.Stdout, db, st, countFlag, true, tsFlag, fullFlag, humanFlag, colorFlag, args...)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
@@ -84,12 +88,15 @@ var readCmd = &cobra.Command{
 }
 
 var peekCmd = &cobra.Command{
-	Use:     "peek",
+	Use:     "peek [#channel|@me]...",
 	Aliases: []string{"p"},
+	Short:   "Print unread without marking it read",
+	Long: `Like read, but does not advance cursors. Pass a #channel or @me to peek
+one target; omit to peek every followed channel.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		_, st, db := mustSession()
 		defer db.Close()
-		c, err := internal.Read(os.Stdout, db, st, countFlag, false, tsFlag, fullFlag, humanFlag, colorFlag)
+		c, err := internal.Read(os.Stdout, db, st, countFlag, false, tsFlag, fullFlag, humanFlag, colorFlag, args...)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)

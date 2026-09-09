@@ -39,8 +39,20 @@ type waitArgs struct {
 	Timeout float64 `json:"timeout"`
 }
 
+// MCPInstructions is returned in the MCP initialize handshake so hosts that
+// never open SKILL.md still get the relevance rule. Keep it in lockstep with
+// skills/grpvn/SKILL.md ("Read only what's relevant").
+const MCPInstructions = "Unread is listed per followed channel. See every channel's count; only r a target relevant to your current work, a DM (@me), or a mention. Leave the rest unread. Do not drain every channel, do not reply there, and do not relay unrelated traffic to the human. Pass target on r/p (#chan or @me). Bare r with no target dumps everything — don't unless every listed channel is yours right now."
+
+const (
+	mcpDescC = "Counts unread per followed channel, listed separately (e.g. 1 @me 2 #dev 5 #ops). This is a board, not a to-do: see every channel, do not r them all. Only read a target relevant to your current work, a DM (@me), or a mention."
+	mcpDescR = "Reads unread and advances the cursor. Pass target to read one #channel or @me; omit to read every followed channel — don't omit unless every listed channel is relevant to your current work. Leave unrelated channels unread. Do not reply there or relay them to the human. If a previous r call's response was lost by the transport, its messages were still marked read — recover them with l (full history, ignores read state). On a flaky connection prefer p (peek) first."
+	mcpDescP = "Peeks at unread without advancing. Pass target to peek one #channel or @me; omit to peek every followed channel. Prefer a relevant target — same rule as r. Leave unrelated channels alone."
+	mcpDescW = "Waits until unread arrives that needs you, or until a new message commits, then returns the per-channel counts. Leftover unread on unrelated channels does not wake a re-armed waiter. See the counts; r only a relevant target. Returns \"no unread messages (timeout)\" otherwise. To wait longer than your host allows a single tool call to run, call w again each time it times out — do not pass a timeout larger than your host's tool-call limit."
+)
+
 func ServeMCP(name, version string, b Bootstrap) error {
-	s := server.NewMCPServer(name, version)
+	s := server.NewMCPServer(name, version, server.WithInstructions(MCPInstructions))
 
 	tool := func(n, desc string, opts ...mcp.ToolOption) mcp.Tool {
 		return mcp.NewTool(n, append([]mcp.ToolOption{mcp.WithDescription(desc)}, opts...)...)
@@ -56,7 +68,7 @@ func ServeMCP(name, version string, b Bootstrap) error {
 		if err != nil || line == "" {
 			return text
 		}
-		return text + "\n[grpvn] unread: " + line + " — call the r tool"
+		return text + "\n[grpvn] unread: " + line + " — r only a relevant target (r with target #chan or @me); leave the rest. Do not relay unrelated channels to the human."
 	}
 
 	// open is the shared preamble: identity, DB, and the one-time move of
@@ -78,7 +90,7 @@ func ServeMCP(name, version string, b Bootstrap) error {
 		return n, st, db, nil
 	}
 
-	s.AddTool(tool("c", "Counts unread messages"), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.AddTool(tool("c", mcpDescC), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		_, st, db, err := open()
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
@@ -95,39 +107,59 @@ func ServeMCP(name, version string, b Bootstrap) error {
 		return mcp.NewToolResultText(buf.String()), nil
 	})
 
-	s.AddTool(tool("r", "Reads unread messages and advances the cursor. If a previous r call's response was lost by the transport, its messages were still marked read — recover them with l (full history, ignores read state). On a flaky connection prefer p (peek) first"), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		_, st, db, err := open()
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		defer db.Close()
-		var buf bytes.Buffer
-		code, err := Read(&buf, db, st, 0, true, false, false, false, "never")
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		if code == 2 {
-			return mcp.NewToolResultText("no unread messages"), nil
-		}
-		return mcp.NewToolResultText(buf.String()), nil
-	})
+	s.AddTool(tool("r", mcpDescR,
+		mcp.WithString("target", mcp.Description("One #channel or @me to read; empty = every followed channel (rarely what you want — pick a relevant target). Leave unrelated channels unread."))),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			var args targetArgs
+			if err := req.BindArguments(&args); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("invalid arguments: %v", err)), nil
+			}
+			_, st, db, err := open()
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			defer db.Close()
+			var buf bytes.Buffer
+			var only []string
+			if args.Target != "" {
+				only = []string{args.Target}
+			}
+			code, err := Read(&buf, db, st, 0, true, false, false, false, "never", only...)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if code == 2 {
+				return mcp.NewToolResultText("no unread messages"), nil
+			}
+			return mcp.NewToolResultText(buf.String()), nil
+		})
 
-	s.AddTool(tool("p", "Peeks at unread messages without advancing"), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		_, st, db, err := open()
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		defer db.Close()
-		var buf bytes.Buffer
-		code, err := Read(&buf, db, st, 0, false, false, false, false, "never")
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		if code == 2 {
-			return mcp.NewToolResultText("no unread messages"), nil
-		}
-		return mcp.NewToolResultText(buf.String()), nil
-	})
+	s.AddTool(tool("p", mcpDescP,
+		mcp.WithString("target", mcp.Description("One #channel or @me to peek; empty = every followed channel. Prefer a relevant target; same rule as r."))),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			var args targetArgs
+			if err := req.BindArguments(&args); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("invalid arguments: %v", err)), nil
+			}
+			_, st, db, err := open()
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			defer db.Close()
+			var buf bytes.Buffer
+			var only []string
+			if args.Target != "" {
+				only = []string{args.Target}
+			}
+			code, err := Read(&buf, db, st, 0, false, false, false, false, "never", only...)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if code == 2 {
+				return mcp.NewToolResultText("no unread messages"), nil
+			}
+			return mcp.NewToolResultText(buf.String()), nil
+		})
 
 	s.AddTool(tool("s", "Sends a message",
 		mcp.WithString("target", mcp.Description("Channel #name, @user, or parent ULID")),
@@ -194,8 +226,8 @@ func ServeMCP(name, version string, b Bootstrap) error {
 			return mcp.NewToolResultText(notice(db, st, buf.String())), nil
 		})
 
-	s.AddTool(tool("l", "Logs history of a target (#channel/@user) or thread (ULID prefix). With no target, lists every channel that exists — name, message count, age of the last message, and whether you follow it",
-		mcp.WithString("target", mcp.Description("#channel, @user, or message ULID prefix; empty = list the channels that exist"))),
+	s.AddTool(tool("l", "Logs history of a target (#channel/@user) or thread (ULID prefix). With no target, lists every channel that exists — name, message count, age of the last message, and whether you follow it. Listing channels is how you see the whole board; it does not mark anything read.",
+		mcp.WithString("target", mcp.Description("#channel, @user, or message ULID prefix; empty = list every channel that exists, followed or not"))),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var args targetArgs
 			if err := req.BindArguments(&args); err != nil {
@@ -242,7 +274,7 @@ func ServeMCP(name, version string, b Bootstrap) error {
 			return mcp.NewToolResultText(notice(db, st, buf.String())), nil
 		})
 
-	s.AddTool(tool("w", "Waits until unread messages arrive, then returns the counts; returns \"no unread messages (timeout)\" otherwise. To wait longer than your host allows a single tool call to run, call w again each time it times out — do not pass a timeout larger than your host's tool-call limit",
+	s.AddTool(tool("w", mcpDescW,
 		mcp.WithNumber("timeout", mcp.Description("Seconds to wait before giving up (default 45, max 240; keep at or below 45 if your MCP host kills long tool calls)"))),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var args waitArgs
