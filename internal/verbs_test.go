@@ -229,6 +229,74 @@ func TestCheckActionableIncludesReplyToMe(t *testing.T) {
 	}
 }
 
+func TestSendIdempotentRetriesReturnOriginal(t *testing.T) {
+	db := newTestDB(t)
+	first, replayed, err := SendIdempotent(db, "alice", "#dev", "hello", "", false, "recon-1")
+	if err != nil || replayed {
+		t.Fatalf("first send: replayed=%v err=%v", replayed, err)
+	}
+	second, replayed, err := SendIdempotent(db, "alice", "#dev", "hello again", "", false, "recon-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !replayed {
+		t.Fatal("second send with the same key must be a replay")
+	}
+	if second.ID != first.ID {
+		t.Fatalf("replayed id %s != original %s", second.ID, first.ID)
+	}
+	if string(second.Body) != "hello" {
+		t.Fatalf("replay must return the original body, got %q", second.Body)
+	}
+	var n int
+	db.QueryRow("SELECT COUNT(*) FROM messages WHERE target = '#dev'").Scan(&n)
+	if n != 1 {
+		t.Fatalf("store should still have 1 row, got %d", n)
+	}
+	other, replayed, err := SendIdempotent(db, "alice", "#dev", "other", "", false, "recon-2")
+	if err != nil || replayed {
+		t.Fatalf("different key should insert: replayed=%v err=%v", replayed, err)
+	}
+	if other.ID == first.ID {
+		t.Fatal("different key must be a new message")
+	}
+}
+
+func TestSendIdempotentIsPerSender(t *testing.T) {
+	db := newTestDB(t)
+	a, _, err := SendIdempotent(db, "alice", "#dev", "from alice", "", false, "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, replayed, err := SendIdempotent(db, "bob", "#dev", "from bob", "", false, "k")
+	if err != nil || replayed {
+		t.Fatalf("bob with alice's key should insert: replayed=%v err=%v", replayed, err)
+	}
+	if a.ID == b.ID {
+		t.Fatal("idempotency keys are per sender")
+	}
+}
+
+func TestLogLimitReturnsTail(t *testing.T) {
+	db := newTestDB(t)
+	for _, body := range []string{"one", "two", "three"} {
+		if _, err := Send(db, "a", "#dev", body, "", false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var buf bytes.Buffer
+	if err := Log(&buf, db, "alice", "#dev", 2, "", false, false, false, "never"); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "one") {
+		t.Fatalf("limit 2 should drop the oldest, got %q", out)
+	}
+	if !strings.Contains(out, "two") || !strings.Contains(out, "three") {
+		t.Fatalf("limit 2 should keep the tail, got %q", out)
+	}
+}
+
 func TestSendToChannel(t *testing.T) {
 	db := newTestDB(t)
 	if _, err := Send(db, "alice", "#dev", "hello", "", false); err != nil {

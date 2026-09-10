@@ -17,12 +17,18 @@ type Bootstrap func() (string, *State, error)
 func statePath() string { return ResolveStatePath("") }
 
 type sendArgs struct {
-	Target string `json:"target"`
-	Body   string `json:"body"`
+	Target         string `json:"target"`
+	Body           string `json:"body"`
+	IdempotencyKey string `json:"idempotency_key"`
 }
 
 type targetArgs struct {
 	Target string `json:"target"`
+}
+
+type logArgs struct {
+	Target string  `json:"target"`
+	Limit  float64 `json:"limit"`
 }
 
 type patternArgs struct {
@@ -45,10 +51,16 @@ type waitArgs struct {
 const MCPInstructions = "Unread is listed per followed channel. See every channel's count; only r a target relevant to your current work, a DM (@me), or a mention. Leave the rest unread. Do not drain every channel, do not reply there, and do not relay unrelated traffic to the human. Pass target on r/p (#chan or @me). Bare r with no target dumps everything — don't unless every listed channel is yours right now."
 
 const (
-	mcpDescC = "Counts unread per followed channel, listed separately (e.g. 1 @me 2 #dev 5 #ops). This is a board, not a to-do: see every channel, do not r them all. Only read a target relevant to your current work, a DM (@me), or a mention."
+	mcpDescC = "Counts unread per followed channel, listed separately (e.g. 1 @me 2 #dev 5 #ops). This is a board, not a to-do: see every channel, do not r them all. Only read a target relevant to your current work, a DM (@me), or a mention. Cheap health check: c does not write and should return instantly. If c works while s or l hang, the hang is per-call, not a dead server."
 	mcpDescR = "Reads unread and advances the cursor. Pass target to read one #channel or @me; omit to read every followed channel — don't omit unless every listed channel is relevant to your current work. Leave unrelated channels unread. Do not reply there or relay them to the human. If a previous r call's response was lost by the transport, its messages were still marked read — recover them with l (full history, ignores read state). On a flaky connection prefer p (peek) first."
 	mcpDescP = "Peeks at unread without advancing. Pass target to peek one #channel or @me; omit to peek every followed channel. Prefer a relevant target — same rule as r. Leave unrelated channels alone."
 	mcpDescW = "Waits until unread arrives that needs you, or until a new message commits, then returns the per-channel counts. Leftover unread on unrelated channels does not wake a re-armed waiter. See the counts; r only a relevant target. Returns \"no unread messages (timeout)\" otherwise. To wait longer than your host allows a single tool call to run, call w again each time it times out — do not pass a timeout larger than your host's tool-call limit."
+
+	// MCPLogDefault / MCPLogMax keep l responses inside a context window and
+	// off a 4-minute transport timeout. A busy channel dumped in full is how
+	// Claude Desktop's stdio bridge went silent; tail-50 is the safe default.
+	MCPLogDefault = 50
+	MCPLogMax     = 500
 )
 
 func ServeMCP(name, version string, b Bootstrap) error {
@@ -161,9 +173,10 @@ func ServeMCP(name, version string, b Bootstrap) error {
 			return mcp.NewToolResultText(buf.String()), nil
 		})
 
-	s.AddTool(tool("s", "Sends a message",
+	s.AddTool(tool("s", "Sends a message and returns \"<id> <target>\" so you can tell whether the write landed. Pass idempotency_key on anything you might retry: a second s with the same key is a no-op that returns the original id (marked replayed) instead of posting a duplicate. There is no delete, so a duplicate long post is permanent.",
 		mcp.WithString("target", mcp.Description("Channel #name, @user, or parent ULID")),
-		mcp.WithString("body", mcp.Description("Message content"), mcp.Required())),
+		mcp.WithString("body", mcp.Description("Message content"), mcp.Required()),
+		mcp.WithString("idempotency_key", mcp.Description("Retry key unique to this sender. Same key → same message, no duplicate. Use whenever the previous s may have timed out."))),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var args sendArgs
 			if err := req.BindArguments(&args); err != nil {
@@ -174,7 +187,7 @@ func ServeMCP(name, version string, b Bootstrap) error {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			defer db.Close()
-			m, err := Send(db, n, args.Target, args.Body, st.DefaultChannel, false)
+			m, replayed, err := SendIdempotent(db, n, args.Target, args.Body, st.DefaultChannel, false, args.IdempotencyKey)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
@@ -182,12 +195,13 @@ func ServeMCP(name, version string, b Bootstrap) error {
 			// message must be able to reach it. Fail open — the send is
 			// already committed.
 			_, _ = AutoFollow(db, st, statePath(), m.Target)
-			return mcp.NewToolResultText(notice(db, st, "sent")), nil
+			return mcp.NewToolResultText(notice(db, st, FormatSendAck(m, replayed))), nil
 		})
 
-	s.AddTool(tool("q", "Asks a question and returns a correlation ID",
+	s.AddTool(tool("q", "Asks a question and returns a correlation ID. Same idempotency_key behaviour as s.",
 		mcp.WithString("target", mcp.Description("Channel #name, @user, or parent ULID"), mcp.Required()),
-		mcp.WithString("body", mcp.Description("Message content"), mcp.Required())),
+		mcp.WithString("body", mcp.Description("Message content"), mcp.Required()),
+		mcp.WithString("idempotency_key", mcp.Description("Retry key unique to this sender. Same key → same question, no duplicate."))),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var args sendArgs
 			if err := req.BindArguments(&args); err != nil {
@@ -198,7 +212,7 @@ func ServeMCP(name, version string, b Bootstrap) error {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			defer db.Close()
-			m, err := Send(db, n, args.Target, args.Body, st.DefaultChannel, true)
+			m, _, err := SendIdempotent(db, n, args.Target, args.Body, st.DefaultChannel, true, args.IdempotencyKey)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
@@ -226,10 +240,11 @@ func ServeMCP(name, version string, b Bootstrap) error {
 			return mcp.NewToolResultText(notice(db, st, buf.String())), nil
 		})
 
-	s.AddTool(tool("l", "Logs history of a target (#channel/@user) or thread (ULID prefix). With no target, lists every channel that exists — name, message count, age of the last message, and whether you follow it. Listing channels is how you see the whole board; it does not mark anything read.",
-		mcp.WithString("target", mcp.Description("#channel, @user, or message ULID prefix; empty = list every channel that exists, followed or not"))),
+	s.AddTool(tool("l", "Logs history of a target (#channel/@user) or thread (ULID prefix). Defaults to the 50 most recent messages so a busy channel does not blow the context window or hang the transport; pass limit (max 500) for more, or use the CLI for the full log. With no target, lists every channel that exists — name, message count, age of the last message, and whether you follow it. Listing channels is how you see the whole board; it does not mark anything read.",
+		mcp.WithString("target", mcp.Description("#channel, @user, or message ULID prefix; empty = list every channel that exists, followed or not")),
+		mcp.WithNumber("limit", mcp.Description("Max messages to return, most recent. Default 50, cap 500. Omit for the default."))),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			var args targetArgs
+			var args logArgs
 			if err := req.BindArguments(&args); err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("invalid arguments: %v", err)), nil
 			}
@@ -245,7 +260,14 @@ func ServeMCP(name, version string, b Bootstrap) error {
 				}
 				return mcp.NewToolResultText(notice(db, st, buf.String())), nil
 			}
-			if err := Log(&buf, db, n, args.Target, 0, st.DefaultChannel, false, false, false, "never"); err != nil {
+			limit := MCPLogDefault
+			if args.Limit > 0 {
+				limit = int(args.Limit)
+			}
+			if limit > MCPLogMax {
+				limit = MCPLogMax
+			}
+			if err := Log(&buf, db, n, args.Target, limit, st.DefaultChannel, false, false, false, "never"); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			return mcp.NewToolResultText(notice(db, st, buf.String())), nil

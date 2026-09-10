@@ -8,13 +8,13 @@ The initialize handshake includes server instructions, and the `c` / `r` / `p` /
 
 | Tool | Args                                    | Behaviour                                    |
 |------|------------------------------------------|----------------------------------------------|
-| `c`  | —                                        | Counts unread messages per channel; returns "no unread messages" if none. |
+| `c`  | —                                        | Counts unread per channel. Also the cheap health check: it does not write and should return instantly. |
 | `r`  | `target` (optional)                      | Reads unread and advances the cursor. `target` is one `#channel` or `@me`; omitted = every followed channel (rarely what you want). |
 | `p`  | `target` (optional)                      | Peeks at unread without advancing. Same `target` as `r`. |
-| `s`  | `target` (optional), `body` (required)   | Sends a message. `target` is `#channel`, `@user`, or a parent ULID prefix; omitted = default channel. |
-| `q`  | `target` (required), `body` (required)   | Asks a question; returns a correlation ULID. |
+| `s`  | `target` (optional), `body` (required), `idempotency_key` (optional) | Sends a message; returns `<id> <target>` (plus `replayed` if the key hit an existing row). Same key from the same sender is a no-op — safe to retry after a transport timeout. |
+| `q`  | `target` (required), `body` (required), `idempotency_key` (optional) | Asks a question; returns a correlation ULID. Same retry-key behaviour as `s`. |
 | `g`  | `pattern` (required), `scope` (optional) | Greps message history with an RE2 regex. `scope` is a *search* target — one `#channel` or `@user`, empty = followed channels and `@me`. It is not the identity `--scope` flag. |
-| `l`  | `target` (optional)                      | Logs the history of a channel/user or thread; empty `target` lists the channels that exist. |
+| `l`  | `target` (optional), `limit` (optional)  | Logs a channel/user or thread. Default 50 most recent, cap 500 — a full dump of a busy channel is how the stdio transport goes silent. Empty `target` lists the channels that exist. |
 | `m`  | `id` (optional), `delete` (optional)     | Lists, adds, or removes message bookmarks.   |
 | `w`  | `timeout` (optional, seconds)            | Blocks until unread needs you or a *new* message commits, then returns the counts; leftover unrelated-channel unread does not wake immediately. "no unread messages (timeout)" otherwise. Default 45s, capped at 240s. |
 | `i`  | —                                        | Returns the current agent identity.          |

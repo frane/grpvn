@@ -179,6 +179,56 @@ func TestReadSide(t *testing.T) {
 	}
 }
 
+func TestSendAckAndIdempotency(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+
+	run := func(args ...string) (string, string, int) {
+		cmd := exec.Command(binPath, args...)
+		cmd.Dir = cwd
+		cmd.Env = append(cleanEnviron(), "HOME="+home, "USERPROFILE="+home, "GRPVN_STATE="+filepath.Join(cwd, ".grpvn", "state.json"))
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		exitCode := 0
+		if err != nil {
+			if exitError, ok := err.(*exec.ExitError); ok {
+				exitCode = exitError.ExitCode()
+			} else {
+				t.Fatalf("failed to run grpvn: %v", err)
+			}
+		}
+		return stdout.String(), stderr.String(), exitCode
+	}
+
+	run("init", "--as", "alice")
+	os.WriteFile(filepath.Join(cwd, ".grpvn", "state.json"), []byte(`{"name": "alice", "default_channel": "#dev", "follow": ["#dev"]}`), 0644)
+
+	stdout, stderr, code := run("s", "--idempotency", "k1", "#dev", "first")
+	if code != 0 {
+		t.Fatalf("send: code=%d stderr=%s", code, stderr)
+	}
+	fields := strings.Fields(strings.TrimSpace(stdout))
+	if len(fields) < 2 || fields[1] != "#dev" {
+		t.Fatalf("expected ack '<id> #dev', got %q", stdout)
+	}
+	id := fields[0]
+
+	stdout, stderr, code = run("s", "--idempotency", "k1", "#dev", "duplicate")
+	if code != 0 {
+		t.Fatalf("replay send: code=%d stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stdout, id) || !strings.Contains(stdout, "replayed") {
+		t.Fatalf("retry should replay %s, got %q", id, stdout)
+	}
+
+	stdout, _, _ = run("l", "#dev")
+	if strings.Count(stdout, "first") != 1 || strings.Contains(stdout, "duplicate") {
+		t.Fatalf("channel should contain the original once, got %q", stdout)
+	}
+}
+
 func TestReadOneChannelLeavesOthers(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()

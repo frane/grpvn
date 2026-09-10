@@ -105,6 +105,8 @@ one target; omit to peek every followed channel.`,
 	},
 }
 
+var idempotencyFlag string
+
 var sendCmd = &cobra.Command{
 	Use:     "send",
 	Aliases: []string{"s"},
@@ -120,11 +122,12 @@ var sendCmd = &cobra.Command{
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
-		m, err := internal.Send(db, n, t, b, st.DefaultChannel, false)
+		m, replayed, err := internal.SendIdempotent(db, n, t, b, st.DefaultChannel, false, idempotencyFlag)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
+		fmt.Println(internal.FormatSendAck(m, replayed))
 		autoFollow(db, st, m.Target)
 		unreadNotice(db, st)
 	},
@@ -145,7 +148,7 @@ var askCmd = &cobra.Command{
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
-		m, err := internal.Send(db, n, t, b, st.DefaultChannel, true)
+		m, _, err := internal.SendIdempotent(db, n, t, b, st.DefaultChannel, true, idempotencyFlag)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
@@ -461,6 +464,8 @@ func init() {
 	markCmd.Flags().BoolVarP(&deleteFlag, "delete", "d", false, "")
 	followCmd.Flags().BoolVarP(&deleteFlag, "delete", "d", false, "")
 	initCmd.Flags().BoolVarP(&forceFlag, "force", "f", false, "")
+	sendCmd.Flags().StringVar(&idempotencyFlag, "idempotency", "", "retry key: a second send with the same key returns the original message instead of posting a duplicate")
+	askCmd.Flags().StringVar(&idempotencyFlag, "idempotency", "", "retry key: a second ask with the same key returns the original question instead of posting a duplicate")
 	gcCmd.Flags().DurationVar(&gcOlderThanFlag, "older-than", 0, "prune messages older than this (e.g. 720h)")
 	gcCmd.Flags().BoolVar(&gcVacuumFlag, "vacuum", false, "compact the database file after pruning")
 	_ = gcCmd.MarkFlagRequired("older-than")

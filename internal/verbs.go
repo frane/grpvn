@@ -251,6 +251,61 @@ const MaxBodyBytes = 64 * 1024
 // `grpvn serve`, stdin is the MCP JSON-RPC transport and reading it here
 // would hang the server.
 func Send(db *sql.DB, sender string, targetArg string, bodyArg string, defaultChannel string, isAsk bool) (*Message, error) {
+	m, _, err := SendIdempotent(db, sender, targetArg, bodyArg, defaultChannel, isAsk, "")
+	return m, err
+}
+
+// MaxIdempotencyKeyBytes caps the retry key. Keys exist to make a lost
+// transport response safe to retry, not to store payloads.
+const MaxIdempotencyKeyBytes = 256
+
+// SendIdempotent is Send plus an optional retry key. A second call from the
+// same sender with the same non-empty key returns the original message and
+// does not insert another row. Empty key is a plain send. The lookup and
+// insert share a transaction so two retries racing each other cannot both
+// commit.
+func SendIdempotent(db *sql.DB, sender string, targetArg string, bodyArg string, defaultChannel string, isAsk bool, key string) (*Message, bool, error) {
+	if key == "" {
+		m, err := sendOnce(db, sender, targetArg, bodyArg, defaultChannel, isAsk)
+		return m, false, err
+	}
+	if len(key) > MaxIdempotencyKeyBytes {
+		return nil, false, fmt.Errorf("idempotency key too long: %d bytes (max %d)", len(key), MaxIdempotencyKeyBytes)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return nil, false, err
+	}
+	defer tx.Rollback()
+	var existing string
+	err = tx.QueryRow("SELECT message_id FROM idempotency WHERE agent_name = ? AND key = ?", sender, key).Scan(&existing)
+	switch {
+	case err == nil:
+		if err := tx.Commit(); err != nil {
+			return nil, false, err
+		}
+		m, err := findMessageByID(db, existing)
+		return m, true, err
+	case err != sql.ErrNoRows:
+		return nil, false, err
+	}
+	m, err := sendOnce(tx, sender, targetArg, bodyArg, defaultChannel, isAsk)
+	if err != nil {
+		return nil, false, err
+	}
+	if _, err := tx.Exec(
+		"INSERT INTO idempotency (agent_name, key, message_id, created_at) VALUES (?, ?, ?, ?)",
+		sender, key, m.ID, time.Now().UnixMilli(),
+	); err != nil {
+		return nil, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, false, err
+	}
+	return m, false, nil
+}
+
+func sendOnce(db dbtx, sender string, targetArg string, bodyArg string, defaultChannel string, isAsk bool) (*Message, error) {
 	if len(bodyArg) > MaxBodyBytes {
 		return nil, fmt.Errorf("body too large: %d bytes (max %d)", len(bodyArg), MaxBodyBytes)
 	}
@@ -270,10 +325,20 @@ func Send(db *sql.DB, sender string, targetArg string, bodyArg string, defaultCh
 	if isAsk {
 		m.Correlation = &m.ID
 	}
-	if err := m.Save(db); err != nil {
+	if err := m.save(db); err != nil {
 		return nil, err
 	}
 	return m, nil
+}
+
+// FormatSendAck is the stdout/MCP body for a successful send: the id a
+// caller can retry against, and the target it landed on. "replayed" means
+// the idempotency key hit an existing row — the store did not grow.
+func FormatSendAck(m *Message, replayed bool) string {
+	if replayed {
+		return fmt.Sprintf("%s %s replayed", m.ID, m.Target)
+	}
+	return fmt.Sprintf("%s %s", m.ID, m.Target)
 }
 
 // Gc prunes messages (and their marks) older than the cutoff. Retention is
@@ -287,6 +352,10 @@ func Gc(w io.Writer, db *sql.DB, olderThan time.Duration, vacuum bool) error {
 		return fmt.Errorf("--older-than must be positive")
 	}
 	cutoff := time.Now().Add(-olderThan).UnixMilli()
+	if _, err := db.Exec(
+		"DELETE FROM idempotency WHERE message_id IN (SELECT id FROM messages WHERE created_at < ?)", cutoff); err != nil {
+		return fmt.Errorf("prune idempotency: %w", err)
+	}
 	resMarks, err := db.Exec(
 		"DELETE FROM marks WHERE message_id IN (SELECT id FROM messages WHERE created_at < ?)", cutoff)
 	if err != nil {
@@ -373,7 +442,7 @@ func Log(w io.Writer, db *sql.DB, name string, arg string, limit int, defaultCha
 			q = "SELECT id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at FROM (SELECT id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at FROM messages WHERE target = ? ORDER BY id DESC LIMIT ?) ORDER BY id ASC"
 			args = append(args, limit)
 		} else {
-			q += " LIMIT ?"
+			q = "SELECT id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at FROM (SELECT id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at FROM messages WHERE chain_root = ? ORDER BY id DESC LIMIT ?) ORDER BY id ASC"
 			args = append(args, limit)
 		}
 	}

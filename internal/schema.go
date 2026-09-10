@@ -57,6 +57,19 @@ CREATE TABLE IF NOT EXISTS cursors (
 CREATE TABLE IF NOT EXISTS schema_version (
     version    INTEGER PRIMARY KEY,
     applied_at INTEGER NOT NULL
+);
+
+-- Retry key for Send: a second post with the same (agent, key) returns the
+-- original message instead of inserting a duplicate. Added in place; CREATE
+-- TABLE IF NOT EXISTS is applied on every open so existing v2 stores pick
+-- it up without a rebuild.
+CREATE TABLE IF NOT EXISTS idempotency (
+    agent_name  TEXT NOT NULL,
+    key         TEXT NOT NULL,
+    message_id  TEXT NOT NULL,
+    created_at  INTEGER NOT NULL,
+    PRIMARY KEY (agent_name, key),
+    FOREIGN KEY (message_id) REFERENCES messages(id)
 );`
 
 // migrateV1toV2 rebuilds the messages table to add the seq column and is

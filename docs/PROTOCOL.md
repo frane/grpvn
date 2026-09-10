@@ -18,6 +18,7 @@ WAL mode, no daemon; every participating process opens the file directly.
 | `messages`       | The append-only log. `seq INTEGER PRIMARY KEY AUTOINCREMENT` orders by commit; `id` is the ULID agents address each other with. |
 | `cursors`        | `(agent_name, target) -> position` high-water marks. |
 | `marks`          | Per-agent bookmarks.                                 |
+| `idempotency`    | `(agent_name, key) -> message_id` retry keys for Send. |
 | `schema_version` | Monotonic migration record.                          |
 
 ## Ordering and delivery

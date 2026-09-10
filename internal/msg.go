@@ -50,6 +50,10 @@ func NewMessage(sender, target string, body []byte) *Message {
 }
 
 func (m *Message) Save(db *sql.DB) error {
+	return m.save(db)
+}
+
+func (m *Message) save(db dbtx) error {
 	res, err := db.Exec("INSERT INTO messages (id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		m.ID, m.Sender, m.Target, m.Body, m.ChainRoot, m.ChainDepth, m.ParentID, m.Correlation, m.CreatedAt)
 	if err != nil {
@@ -61,9 +65,16 @@ func (m *Message) Save(db *sql.DB) error {
 	return nil
 }
 
+// dbtx is *sql.DB or *sql.Tx. Send uses a transaction when an idempotency
+// key is set so a retry cannot insert a second row.
+type dbtx interface {
+	Exec(query string, args ...interface{}) (sql.Result, error)
+	QueryRow(query string, args ...interface{}) *sql.Row
+}
+
 var ulidPrefixRegex = regexp.MustCompile("^[0-9A-HJKMNP-TV-Z]{6,26}$")
 
-func ResolveTarget(db *sql.DB, input string, defaultChannel string) (target string, parent *Message, err error) {
+func ResolveTarget(db dbtx, input string, defaultChannel string) (target string, parent *Message, err error) {
 	if input == "" {
 		if defaultChannel == "" {
 			return "", nil, errors.New("no target and no default")
@@ -82,9 +93,16 @@ func ResolveTarget(db *sql.DB, input string, defaultChannel string) (target stri
 	return "", nil, fmt.Errorf("invalid target: %s", input)
 }
 
-func FindMessageByPrefix(db *sql.DB, prefix string) (*Message, error) {
+func FindMessageByPrefix(db dbtx, prefix string) (*Message, error) {
 	prefix = strings.ToUpper(prefix)
-	row := db.QueryRow("SELECT id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at FROM messages WHERE id LIKE ?", prefix+"%")
+	return scanOneMessage(db.QueryRow("SELECT id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at FROM messages WHERE id LIKE ?", prefix+"%"))
+}
+
+func findMessageByID(db dbtx, id string) (*Message, error) {
+	return scanOneMessage(db.QueryRow("SELECT id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at FROM messages WHERE id = ?", id))
+}
+
+func scanOneMessage(row *sql.Row) (*Message, error) {
 	var m Message
 	var parentID, correlation sql.NullString
 	if err := row.Scan(&m.ID, &m.Sender, &m.Target, &m.Body, &m.ChainRoot, &m.ChainDepth, &parentID, &correlation, &m.CreatedAt); err != nil {
