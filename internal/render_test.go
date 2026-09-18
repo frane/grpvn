@@ -2,6 +2,7 @@ package internal
 
 import (
 	"bytes"
+	"database/sql"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -248,5 +249,60 @@ func TestFastForwardCursors(t *testing.T) {
 	NewMessage("bob", "#dev", []byte("fresh")).Save(db)
 	if line, _ := UnreadLine(db, st); line != "1 #dev" {
 		t.Fatalf("fresh traffic should be unread, got %q", line)
+	}
+}
+
+// saveWithID stores a message under an exact ULID so a test can control
+// which prefixes collide.
+func saveWithID(t *testing.T, db *sql.DB, id, sender, target string) *Message {
+	t.Helper()
+	m := &Message{ID: id, Sender: sender, Target: target, Body: []byte("x"), ChainRoot: id, CreatedAt: 1}
+	if err := m.Save(db); err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// A prefix that is unique inside the rendered batch is not necessarily
+// unique in the store: a read of #vibesurfer never sees #memoar, so the
+// batch cannot know what it collides with. Printing a batch-unique prefix is
+// what handed agents a reply target that resolved to another channel's
+// message, so a read must print prefixes that resolve against the store.
+func TestRenderedPrefixesResolveAgainstStore(t *testing.T) {
+	db := newTestDB(t)
+	a := saveWithID(t, db, "01M2SDA23456789ABCDEFGHJKM", "alice", "#vibesurfer")
+	b := saveWithID(t, db, "01M2SDB23456789ABCDEFGHJKM", "alice", "#vibesurfer")
+	// Not in the batch, shares 11 characters with a, and lives elsewhere.
+	saveWithID(t, db, "01M2SDA2345Z789ABCDEFGHJKM", "bob", "#memoar")
+
+	shown := []*Message{a, b}
+	if got := UniquePrefixLen(shown); got != 7 {
+		t.Fatalf("batch-unique length = %d, want 7", got)
+	}
+	plen := StorePrefixLen(db, shown)
+	if plen != 12 {
+		t.Fatalf("store-unique length = %d, want 12", plen)
+	}
+
+	var buf bytes.Buffer
+	RenderBatch(&buf, db, shown, "carol", "#llts", false, false, false, "never")
+	for _, m := range shown {
+		printed := m.ID[:plen]
+		if !strings.Contains(buf.String(), printed) {
+			t.Fatalf("render did not print %s of %s: %q", printed, m.ID, buf.String())
+		}
+		got, err := FindMessageByPrefix(db, printed)
+		if err != nil {
+			t.Fatalf("printed prefix %s does not resolve: %v", printed, err)
+		}
+		if got.ID != m.ID {
+			t.Fatalf("printed prefix %s resolved to %s (%s), want %s", printed, got.ID, got.Target, m.ID)
+		}
+	}
+
+	// The batch-unique prefix would have been ambiguous — the old behaviour
+	// resolved it to whichever row came back first.
+	if _, err := FindMessageByPrefix(db, a.ID[:7]); err == nil {
+		t.Fatal("7-char prefix should be ambiguous across the store")
 	}
 }

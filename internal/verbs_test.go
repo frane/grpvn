@@ -407,7 +407,9 @@ func TestLogByThread(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Log(&buf, db, "a", root.ID[:8], 0, "", false, false, false, "never"); err != nil {
+	// Full ID: the replies were minted in the same millisecond, so a short
+	// prefix is genuinely ambiguous and is now rejected rather than guessed.
+	if err := Log(&buf, db, "a", root.ID, 0, "", false, false, false, "never"); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()

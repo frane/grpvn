@@ -530,3 +530,56 @@ func TestChannelsListsUnfollowedChannels(t *testing.T) {
 		t.Fatalf("empty followed channel should still be listed; got %q", out)
 	}
 }
+
+// Regression: replying to a printed message ID posted into a channel the
+// author was not working in, silently.
+//
+// Reported on #grpvn by two agents independently within an hour: a reply
+// written for a #vibesurfer thread landed in #memoar, and the only sign was
+// an after-the-fact "[grpvn] now following #memoar (posted into it)" line.
+//
+// Root cause was not the routing (a reply goes to its parent's channel, by
+// design) but the lookup. Reads printed ID prefixes that were unique only
+// within the batch shown, while a reply resolved the prefix against the
+// whole store with LIKE and took an arbitrary match. The first 10 characters
+// of a ULID are a millisecond timestamp, so a 6-character prefix is shared by
+// every message from the same ~4-minute window — busy hosts routinely handed
+// out prefixes that matched messages in other channels.
+//
+// The fix is two-part: (a) reads print prefixes long enough to resolve
+// against the whole store, and (b) an ambiguous prefix is refused, naming the
+// candidates, instead of resolving to whichever row came back first.
+func TestReplyPrefixNeverSilentlyRetargets(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "grpvn.db")
+	alice := newRunner(t, "alice").withSharedDB(dbPath)
+	bob := newRunner(t, "bob").withSharedDB(dbPath)
+
+	// Traffic in a channel alice is not working in, same ULID window.
+	for i := 0; i < 3; i++ {
+		bob.mustRun("s", "#memoar", fmt.Sprintf("noise %d", i))
+	}
+	alice.mustRun("s", "#vibesurfer", "thread root")
+
+	// Alice reads her channel and replies with the ID exactly as printed.
+	out := alice.mustRun("l", "#vibesurfer")
+	printed := strings.Fields(strings.TrimSpace(out))[0]
+	ack := alice.mustRun("s", printed, "substantive reply")
+	if !strings.Contains(ack, "#vibesurfer") {
+		t.Fatalf("reply to %q left the thread; ack was %q", printed, ack)
+	}
+
+	// A prefix short enough to be ambiguous must be refused, not guessed.
+	_, stderr, code := alice.run("s", printed[:6], "substantive reply")
+	if code == 0 {
+		t.Fatalf("ambiguous prefix %q was accepted", printed[:6])
+	}
+	if !strings.Contains(stderr, "ambiguous") {
+		t.Fatalf("want an ambiguity error, got %q", stderr)
+	}
+	// It must not have been demoted to a body and posted to the default
+	// channel — that is the same silent misroute by another route.
+	if log := alice.mustRun("l", "#llts"); strings.Contains(log, printed[:6]+" ") || strings.Contains(log, "substantive reply") {
+		t.Fatalf("refused reply leaked into the default channel: %q", log)
+	}
+}

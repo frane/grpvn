@@ -1,10 +1,12 @@
 package internal
 
 import (
+	"database/sql"
 	"fmt"
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,9 +51,94 @@ func UniquePrefixLen(msgs []*Message) int {
 	return n
 }
 
-// RenderBatch prints a batch of messages through the selected renderer,
-// with AI-mode ID prefixes truncated to UniquePrefixLen of the batch.
-func RenderBatch(w io.Writer, msgs []*Message, selfName, defaultChannel string, ts, full, human bool, color string) {
+// commonPrefixLen returns how many leading characters a and b share.
+func commonPrefixLen(a, b string) int {
+	n := 0
+	for n < len(a) && n < len(b) && a[n] == b[n] {
+		n++
+	}
+	return n
+}
+
+// prefixLenAgainst returns the shortest prefix length (min 6) that tells
+// every id in ids apart from every *other* id in universe. universe is
+// expected to contain ids.
+func prefixLenAgainst(ids, universe []string) int {
+	n := 6
+	for _, id := range ids {
+		for _, other := range universe {
+			if other == id {
+				continue
+			}
+			if c := commonPrefixLen(id, other); c+1 > n {
+				n = c + 1
+			}
+		}
+	}
+	if n > 26 {
+		n = 26
+	}
+	return n
+}
+
+// StorePrefixLen returns the ID prefix length to print for this batch: long
+// enough that each prefix resolves to exactly one message in the *whole
+// store*, not merely within the batch. A batch-unique prefix is not enough,
+// because a reply is looked up against every message ever sent (see
+// FindMessageByPrefix) — printing one that matches several messages is what
+// let a reply land in a channel its author was not working in.
+//
+// Only messages sharing a batch prefix can collide, so this loads the few
+// rows in the same ULID timestamp buckets rather than scanning the store. A
+// query failure degrades to the batch-unique length: a prefix that may be
+// rejected as ambiguous, never one that silently resolves elsewhere.
+func StorePrefixLen(db *sql.DB, msgs []*Message) int {
+	batch := make([]string, 0, len(msgs))
+	seen := map[string]bool{}
+	var buckets []interface{}
+	for _, m := range msgs {
+		batch = append(batch, m.ID)
+		b := m.ID
+		if len(b) > storePrefixBucket {
+			b = b[:storePrefixBucket]
+		}
+		if !seen[b] {
+			seen[b] = true
+			buckets = append(buckets, b)
+		}
+	}
+	if len(buckets) == 0 {
+		return 6
+	}
+	q := "SELECT id FROM messages WHERE substr(id, 1, " + strconv.Itoa(storePrefixBucket) + ") IN (?" + strings.Repeat(", ?", len(buckets)-1) + ")"
+	rows, err := db.Query(q, buckets...)
+	if err != nil {
+		return UniquePrefixLen(msgs)
+	}
+	defer rows.Close()
+	universe := make([]string, 0, len(batch))
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return UniquePrefixLen(msgs)
+		}
+		universe = append(universe, id)
+	}
+	if err := rows.Err(); err != nil {
+		return UniquePrefixLen(msgs)
+	}
+	return prefixLenAgainst(batch, universe)
+}
+
+// storePrefixBucket is the shortest prefix a read ever prints. Two IDs that
+// differ within it can never collide, so it is also the grouping key for the
+// collision probe.
+const storePrefixBucket = 6
+
+// RenderBatch prints a batch of messages through the selected renderer, with
+// AI-mode ID prefixes truncated to the shortest length that still resolves
+// to a single message in the store.
+func RenderBatch(w io.Writer, db *sql.DB, msgs []*Message, selfName, defaultChannel string, ts, full, human bool, color string) {
 	if len(msgs) == 0 {
 		return
 	}
@@ -63,6 +150,9 @@ func RenderBatch(w io.Writer, msgs []*Message, selfName, defaultChannel string, 
 		return
 	}
 	plen := UniquePrefixLen(msgs)
+	if db != nil {
+		plen = StorePrefixLen(db, msgs)
+	}
 	for _, m := range msgs {
 		RenderAI(w, m, selfName, defaultChannel, ts, full, plen)
 	}

@@ -3,6 +3,7 @@ package internal
 import (
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -129,5 +130,64 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	}
 	if rows != 1 {
 		t.Fatalf("schema_version should have exactly 1 row, got %d", rows)
+	}
+}
+
+// The bug: the 6-char prefix a read prints is shared by every message from
+// the same ~4-minute ULID timestamp window, and the reply lookup scanned the
+// whole store and took an arbitrary match. A reply written for one channel's
+// thread was posted into whatever channel the other message lived in, with
+// no indication at send time.
+func TestReplyToAmbiguousPrefixIsRefusedNotMisrouted(t *testing.T) {
+	db := newTestDB(t)
+	other := NewMessage("bob", "#memoar", []byte("unrelated"))
+	if err := other.Save(db); err != nil {
+		t.Fatal(err)
+	}
+	thread := NewMessage("alice", "#vibesurfer", []byte("thread root"))
+	if err := thread.Save(db); err != nil {
+		t.Fatal(err)
+	}
+	if other.ID[:6] != thread.ID[:6] {
+		t.Skipf("ids straddle a prefix bucket: %s vs %s", other.ID, thread.ID)
+	}
+
+	_, parent, err := ResolveTarget(db, thread.ID[:6], "#llts")
+	if err == nil {
+		t.Fatalf("ambiguous prefix resolved to %s in %s instead of erroring", parent.ID, parent.Target)
+	}
+	if !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("want an ambiguity error naming the fix, got %v", err)
+	}
+	// The error must carry prefixes long enough to retry with.
+	for _, m := range []*Message{other, thread} {
+		if !strings.Contains(err.Error(), m.Target) {
+			t.Errorf("error should list candidate channel %s: %v", m.Target, err)
+		}
+	}
+}
+
+// An unambiguous prefix still resolves, and still routes to its channel.
+func TestReplyToUnambiguousPrefixResolves(t *testing.T) {
+	db := newTestDB(t)
+	thread := NewMessage("alice", "#vibesurfer", []byte("root"))
+	if err := thread.Save(db); err != nil {
+		t.Fatal(err)
+	}
+	target, parent, err := ResolveTarget(db, thread.ID[:6], "#llts")
+	if err != nil {
+		t.Fatalf("sole match should resolve: %v", err)
+	}
+	if parent.ID != thread.ID || target != "#vibesurfer" {
+		t.Fatalf("got %s in %s, want %s in #vibesurfer", parent.ID, target, thread.ID)
+	}
+}
+
+// A missing message is a bad target, not an ambiguity.
+func TestReplyToUnknownPrefixIsInvalidTarget(t *testing.T) {
+	db := newTestDB(t)
+	_, _, err := ResolveTarget(db, "ZZZZZZ", "#llts")
+	if err == nil || !strings.Contains(err.Error(), "invalid target") {
+		t.Fatalf("want invalid target, got %v", err)
 	}
 }

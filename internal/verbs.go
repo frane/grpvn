@@ -228,7 +228,7 @@ func Read(w io.Writer, db *sql.DB, st *State, limit int, advance bool, ts bool, 
 	if len(msgs) == 0 {
 		return 2, nil
 	}
-	RenderBatch(w, msgs, st.Name, st.DefaultChannel, ts, full, human, color)
+	RenderBatch(w, db, msgs, st.Name, st.DefaultChannel, ts, full, human, color)
 	if advance {
 		for target, pos := range newCursors {
 			if err := advanceCursor(db, st.Name, target, pos); err != nil {
@@ -419,7 +419,7 @@ func Grep(w io.Writer, db *sql.DB, name string, follow []string, pattern string,
 			break
 		}
 	}
-	RenderBatch(w, msgs, name, defaultChannel, ts, full, human, color)
+	RenderBatch(w, db, msgs, name, defaultChannel, ts, full, human, color)
 	return nil
 }
 
@@ -459,7 +459,7 @@ func Log(w io.Writer, db *sql.DB, name string, arg string, limit int, defaultCha
 		}
 		msgs = append(msgs, m)
 	}
-	RenderBatch(w, msgs, name, defaultChannel, ts, full, human, color)
+	RenderBatch(w, db, msgs, name, defaultChannel, ts, full, human, color)
 	return nil
 }
 
@@ -522,7 +522,7 @@ func Mark(w io.Writer, db *sql.DB, name string, msgArg string, delete bool, defa
 			}
 			msgs = append(msgs, m)
 		}
-		RenderBatch(w, msgs, name, defaultChannel, ts, full, human, color)
+		RenderBatch(w, db, msgs, name, defaultChannel, ts, full, human, color)
 		return nil
 	}
 	m, err := FindMessageByPrefix(db, msgArg)

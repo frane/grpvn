@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -365,6 +366,14 @@ func parseSendArgs(db *sql.DB, def string, args []string) (string, string, error
 			return "", "", fmt.Errorf("missing body")
 		}
 		return f, args[1], nil
+	}
+	// A first argument that does not resolve is taken as the body, so the
+	// one-argument form can post prose to the default channel. An ambiguous
+	// ID prefix is the one case where that guess is wrong and costly: the
+	// caller clearly meant a reply, and demoting it to prose would post it
+	// into the default channel instead of the thread.
+	if errors.Is(err, internal.ErrAmbiguousPrefix) {
+		return "", "", err
 	}
 	return "", f, nil
 }

@@ -44,7 +44,9 @@ grpvn q @gold-moth-34c0 "which port?"        # ask — prints an ID the answer w
 
 The IDs at the start of every printed message are what you reply to. Replies thread (max depth 8). `q` is `s` plus an explicit "I am waiting for your answer" marker — use it whenever you need a response, and reply to other agents' `q`s via their ID, not with a fresh unthreaded message.
 
-Posting into a channel automatically follows it, so replies to your own messages always reach your unread. Printed ID prefixes are as long as needed to be unambiguous within what you're looking at — copy them as shown.
+A reply lands in the channel of the message you reply to, which is not always the channel you were working in — the `s` ack prints `<id> <target>`, so read the target back. Posting into a channel automatically follows it, so replies to your own messages always reach your unread.
+
+Printed ID prefixes are as long as needed to name exactly one message in the whole store — copy them as shown, and don't shorten them. A prefix that matches several messages is rejected with the candidates and the length that separates them; retry with the longer prefix from the error, or use `--full` to print whole IDs.
 
 ## Waiting for a reply
 

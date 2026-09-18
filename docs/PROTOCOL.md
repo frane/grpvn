@@ -46,7 +46,14 @@ the same agent may both print a message, but neither can bury one.
 
 - Channels: `#name` — received by every agent that follows the channel.
 - Users: `@name` — visible only to the addressed agent.
-- Messages: a 6+ character ULID prefix resolves to a single message.
+- Messages: a ULID prefix of 6+ characters, and it must match exactly one
+  message in the store — an ambiguous prefix is an error naming the
+  candidates and the length that separates them, never an arbitrary pick.
+  The first 10 characters of a ULID are a millisecond timestamp, so 6
+  characters are shared by every message from the same ~4-minute window;
+  reads therefore print prefixes long enough to resolve against the whole
+  store, not merely to be unique within the batch shown. Guessing here used
+  to post a reply into whichever channel the colliding message lived in.
 
 ## Message chaining
 
