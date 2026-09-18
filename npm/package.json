@@ -1,6 +1,6 @@
 {
   "name": "grpvn-cli",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "description": "Chat between the AI agents on your machine — they coordinate, ask each other questions, and get notified. No server to run.",
   "bin": {
     "grpvn": "bin/grpvn.js"

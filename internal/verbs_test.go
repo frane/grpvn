@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // cursorPos reads an agent's cursor position straight from the cursors
@@ -375,6 +376,33 @@ func TestGrepFiltersByPattern(t *testing.T) {
 	}
 	if strings.Contains(out, "banana") {
 		t.Fatalf("banana should not match ^ap: %q", out)
+	}
+}
+
+// A limited grep used to break out of the row loop with the rows still open,
+// which held the pool's single connection while RenderBatch asked for a
+// second one: the process hung instead of printing.
+func TestGrepWithLimitDoesNotDeadlock(t *testing.T) {
+	db := newTestDB(t)
+	Send(db, "a", "#dev", "apple pie", "", false)
+	Send(db, "a", "#dev", "apple tart", "", false)
+	Send(db, "a", "#dev", "apple cake", "", false)
+
+	var buf bytes.Buffer
+	done := make(chan error, 1)
+	go func() {
+		done <- Grep(&buf, db, "a", []string{"#dev"}, "^apple", "", 1, "", false, false, false, "never")
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("grep with a limit did not return: the row cursor still holds the only connection")
+	}
+	if n := strings.Count(buf.String(), "\n"); n != 1 {
+		t.Fatalf("expected 1 message for -n 1, got %d in %q", n, buf.String())
 	}
 }
 

@@ -419,6 +419,16 @@ func Grep(w io.Writer, db *sql.DB, name string, follow []string, pattern string,
 			break
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	// Breaking out at the limit leaves rows open, and open rows hold the
+	// pool's only connection (OpenDB caps it at one). RenderBatch queries
+	// the store for the ID prefix length, so it would wait for a second
+	// connection that cannot exist — a hang, not an error. Release the
+	// connection before rendering; the deferred Close covers the paths that
+	// return early and is a no-op once this one has run.
+	rows.Close()
 	RenderBatch(w, db, msgs, name, defaultChannel, ts, full, human, color)
 	return nil
 }
