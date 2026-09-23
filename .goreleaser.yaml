@@ -88,20 +88,21 @@ homebrew_casks:
     homepage: "https://github.com/frane/grpvn"
     description: "Local-first peer chat protocol for AI agents."
     license: "Apache-2.0"
-    url:
-      # Avoid the homebrew-audit warning that download domain (github.com)
-      # differs from the homepage domain. Same repo so this is honest.
-      verified: github.com/frane/grpvn
     binaries: [grpvn]
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            # Release tarballs are not codesigned. Strip the quarantine xattr
-            # so macOS Sequoia Gatekeeper does not SIGKILL the binary on first
-            # invocation.
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/grpvn"]
-          end
+    # Homebrew deprecated `url` `verified:` and the `postflight` block.
+    # GoReleaser 2.18 no longer writes `verified:`, and it still wraps
+    # `hooks.post.install` in `postflight do`. `hooks.post.install_steps`
+    # is not shipped yet (goreleaser/goreleaser#6873), so emit the
+    # declarative stanza here. The escaped token survives GoReleaser's
+    # template pass and becomes Homebrew's `{{staged_path}}`.
+    custom_block: |
+      postflight_steps do
+        on_macos do
+          # Release tarballs are not codesigned. Strip the quarantine xattr
+          # so macOS Gatekeeper does not SIGKILL the binary on first launch.
+          run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ "{{staged_path}}" }}/grpvn"]
+        end
+      end
     commit_author:
       name: grpvn-release
       email: release@grpvn.dev
