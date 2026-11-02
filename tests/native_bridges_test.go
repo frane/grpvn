@@ -56,6 +56,7 @@ delete process.env.GRPVN_ACTIVATION_MODE;
 const execute=promisify(execFile);
 const run=async(...args)=>(await execute(binary,args,{env:process.env,timeout:10000})).stdout.trim();
 const seen=[];
+let rejectDelivery=false;
 const hooks=new Map();
 const mod=await import(pathToFileURL(plugin));
 let close;
@@ -64,7 +65,7 @@ if(runtime==="pi"){
  await hooks.get("session_start")({}, {cwd:process.cwd(),hasUI:false,sessionManager:{getSessionId:()=>"native-pi"}});
  close=()=>hooks.get("session_shutdown")({});
 }else{
- const api=await mod.GrpvnDoorbell({directory:process.cwd(),client:{session:{promptAsync:async(request)=>{seen.push(request);}}}});
+ const api=await mod.GrpvnDoorbell({directory:process.cwd(),client:{session:{promptAsync:async(request)=>{seen.push(request);return rejectDelivery?{error:{message:"session unavailable"}}:{data:undefined};}}}});
  await api.event({event:{type:"session.created",properties:{info:{id:"native-opencode"}}}});
  close=()=>api.event({event:{type:"server.instance.disposed"}});
 }
@@ -90,5 +91,12 @@ try{
   assert.equal(seen[1].options.deliverAs,"followUp");
  }else{assert.equal(seen[1].body.noReply,false);assert.equal(seen[1].path.id,"native-opencode");}
  await waitFor(async()=>(await run("ss","receipts")).split("\n").filter(line=>line.includes("status=accepted")).length===2);
+ if(runtime==="opencode"){
+  rejectDelivery=true;
+  await run("ss","mode",registry,"notify");
+  await run("--as","peer","s","@"+agent,"SDK returns an HTTP error");
+  await waitFor(async()=>(await run("ss","receipts")).includes("status=uncertain"));
+  assert.equal((await run("ss","receipts")).split("\n").filter(line=>line.includes("status=accepted")).length,2,"SDK rejection must not be acknowledged as accepted");
+ }
 }finally{await close();}
 `

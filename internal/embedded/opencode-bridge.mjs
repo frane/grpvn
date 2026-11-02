@@ -13,11 +13,12 @@ export const GrpvnDoorbell = async ({ client, directory }) => {
         bridge = createGrpvnBridge(STATE, {
           runtime: "opencode", cwd: directory || process.cwd(),
           deliver: async (delivery) => {
-            await client.session.promptAsync({ path: { id }, body: {
+            const result = await client.session.promptAsync({ path: { id }, body: {
               messageID: "msg_" + delivery.id,
               noReply: !delivery.events.some((event) => event.action === "activate"),
               parts: [{ type: "text", text: delivery.prompt }],
             } });
+            if (result?.error) throw new Error("OpenCode rejected grpvn delivery");
           },
         });
         bridges.set(id, bridge);
