@@ -1,0 +1,155 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grpvn
+spec:
+  replicas: 1
+  # SQLite WAL and its daemon must share one local volume on one node.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grpvn
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: grpvn
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 35
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Use the same public, checksum-verified release artifact as CLI
+        # installs. No private registry or cluster image-pull secret needed.
+        - name: install-release
+          image: curlimages/curl:8.23.0
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              ASSET="grpvn_${VERSION}_linux_x86_64.tar.gz"
+              BASE="https://github.com/frane/grpvn/releases/download/v${VERSION}"
+              curl --fail --silent --show-error --location --retry 3 --max-time 120 --output "$ASSET" "$BASE/$ASSET"
+              curl --fail --silent --show-error --location --retry 3 --max-time 120 --output checksums.txt "$BASE/checksums.txt"
+          workingDir: /tmp
+          env:
+            - name: VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: grpvn-release
+                  key: VERSION
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 200m, memory: 64Mi}
+          volumeMounts:
+            - {name: binary, mountPath: /opt/grpvn}
+            - {name: tmp, mountPath: /tmp}
+        - name: verify-release
+          image: busybox:1.37.0
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              ASSET="grpvn_${VERSION}_linux_x86_64.tar.gz"
+              awk -v asset="$ASSET" '$2 == asset {print}' checksums.txt | sha256sum -c -
+              tar -xzf "$ASSET" -C /opt/grpvn grpvn
+              chmod 0555 /opt/grpvn/grpvn
+          workingDir: /tmp
+          env:
+            - name: VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: grpvn-release
+                  key: VERSION
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 100m, memory: 32Mi}
+          volumeMounts:
+            - {name: binary, mountPath: /opt/grpvn}
+            - {name: tmp, mountPath: /tmp}
+      containers:
+        - name: coordinator
+          image: gcr.io/distroless/static-debian13:nonroot
+          command: [/opt/grpvn/grpvn]
+          args: [serve, --listen, "0.0.0.0:7331", --public-url, "https://grpvn.offbyte.com", --private]
+          env:
+            - {name: GRPVN_DB, value: /data/grpvn.db}
+            - {name: GRPVN_STATE, value: /data/state.json}
+            - {name: HOME, value: /data}
+          ports:
+            - {name: http, containerPort: 7331}
+          startupProbe:
+            httpGet: {path: /v1/info, port: http}
+            failureThreshold: 30
+            periodSeconds: 2
+          readinessProbe:
+            httpGet: {path: /v1/info, port: http}
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: {path: /v1/info, port: http}
+            periodSeconds: 30
+            timeoutSeconds: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          volumeMounts:
+            - {name: binary, mountPath: /opt/grpvn, readOnly: true}
+            - {name: data, mountPath: /data}
+            - {name: tmp, mountPath: /tmp}
+        - name: daemon
+          image: gcr.io/distroless/static-debian13:nonroot
+          command: [/opt/grpvn/grpvn]
+          args: [daemon, run]
+          env:
+            - {name: GRPVN_DB, value: /data/grpvn.db}
+            - {name: GRPVN_STATE, value: /data/state.json}
+            - {name: HOME, value: /data}
+          # Optional API/Workspace Agent credentials belong only in this
+          # worker, never in the public coordinator or source control.
+          envFrom:
+            - secretRef:
+                name: grpvn-agent-credentials
+                optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          volumeMounts:
+            - {name: binary, mountPath: /opt/grpvn, readOnly: true}
+            - {name: data, mountPath: /data}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: grpvn-data
+        - name: binary
+          emptyDir: {sizeLimit: 64Mi}
+        - name: tmp
+          emptyDir: {sizeLimit: 128Mi}

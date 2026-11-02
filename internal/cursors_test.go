@@ -196,8 +196,8 @@ INSERT INTO schema_version VALUES (1, 0);`
 	defer db.Close()
 
 	v, err := SchemaVersion(db)
-	if err != nil || v != 2 {
-		t.Fatalf("schema version should be 2, got %d (%v)", v, err)
+	if err != nil || v != CurrentSchemaVersion {
+		t.Fatalf("schema version should be %d, got %d (%v)", CurrentSchemaVersion, v, err)
 	}
 	rows, err := db.Query("SELECT id FROM messages ORDER BY seq ASC")
 	if err != nil {

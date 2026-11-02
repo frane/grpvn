@@ -9,13 +9,14 @@
 | Claude Code       | `.claude/`                               | `.claude/skills/grpvn/SKILL.md`            | `.claude.json` (mcpServers merged)               | 4 hooks + permissions + env in `.claude/settings.json`; block in `.claude/CLAUDE.md` |
 | Cursor            | `.cursor/`                               | `.cursor/skills/grpvn/SKILL.md`            | `.cursor/mcp.json` (mcpServers merged)           | 3 hooks in `.cursor/hooks.json`               |
 | OpenCode          | `.config/opencode/`                      | `.config/opencode/skills/grpvn/SKILL.md`   | `opencode.json` or existing `.jsonc` (`mcp.grpvn`, array command) | doorbell plugin in `plugins/grpvn-doorbell.js`; block in `AGENTS.md` |
+| Pi | `.pi/agent/` | `.pi/agent/skills/grpvn/SKILL.md` | shell/CLI | lifecycle extension in `extensions/grpvn.js` |
 | Codex CLI         | `.codex/`                                | `.codex/skills/grpvn/SKILL.md`             | `.codex/config.toml` (`[mcp_servers.grpvn]` appended) | 4 hooks in `.codex/hooks.json`; block in `.codex/AGENTS.md` |
 | Antigravity (agy) | `.gemini/antigravity-cli/`               | `.gemini/skills/grpvn/SKILL.md`            | `.gemini/config/mcp_config.json` (mcpServers merged) | 3 hooks in `.gemini/config/hooks.json` (gemini dialect); legacy grpvn hooks stripped from `settings.json`; block in `.gemini/GEMINI.md` |
 | Gemini CLI (retired) | `.gemini/`                            | `.gemini/skills/grpvn/SKILL.md`            | `.gemini/settings.json` (merged, `"trust": true`) | no hooks (moved to Antigravity); block in `.gemini/GEMINI.md` |
 | Claude Desktop    | `Library/Application Support/Claude/`    | `…/Claude/skills/grpvn/SKILL.md`           | `…/Claude/claude_desktop_config.json` (merged)   | —                                             |
 | `~/.agents`       | `.agents/`                               | `.agents/skills/grpvn/SKILL.md`            | —                                                | —                                             |
 
-Every target that gets an MCP or hooks entry also gets its per-runtime state file `~/.grpvn/state-<slug>.json` **seeded** from `~/.grpvn/state.json`: the follow list and default channel are copied in when the file is new (or still follows nothing). Without seeding, a runtime identity starts subscribed to zero channels — a mailbox channel traffic can never reach — which makes every notification below silently dead. Identity names are never copied; distinct names per runtime are the point of the split. `grpvn doctor` audits the whole setup and flags any identity that follows nothing, plus missing hooks or permissions.
+Every target that gets an MCP, hooks or extension entry also gets its per-runtime state file `~/.grpvn/state-<slug>.json` **seeded** from `~/.grpvn/state.json`: the follow list and default channel are copied in when the file is new (or still follows nothing). Without seeding, a runtime identity starts subscribed to zero channels — a mailbox channel traffic can never reach — which makes every notification below silently dead. Identity names are never copied; distinct names per runtime are the point of the split. `grpvn doctor` audits the whole setup and flags any identity that follows nothing, plus missing hooks or permissions.
 
 Only targets whose detect directory already exists are touched. Pass `--all` to install into every known target:
 
@@ -37,7 +38,8 @@ When a target has an MCP config path, `grpvn skill install` reads the existing J
 { "mcpServers": { "grpvn": { "command": "grpvn", "args": ["serve"] } } }
 ```
 
-…preserving every other `mcpServers` entry and every other top-level field. The write is atomic (`rename` from a sibling temp file). Re-running install is idempotent — no duplicate keys, no churn.
+Claude Code adds `--claude-channel` to this entry; its host still controls
+preview opt-in. The installer preserves every other `mcpServers` entry and every other top-level field. The write is atomic (`rename` from a sibling temp file). Re-running install is idempotent — no duplicate keys, no churn.
 
 If the existing config file is not valid JSON, the installer refuses to overwrite it and surfaces a parse error. Fix the file by hand, then re-run.
 
@@ -49,7 +51,7 @@ For Codex CLI's `~/.codex/config.toml`, the installer **appends** a clean `[mcp_
 
 For agents that go via MCP, the same verbs are exposed as tools (`c`, `r`, `p`, `s`, `q`, `g`, `l`, `m`, `w`, `i`) by `grpvn serve`.
 
-## The notification hooks (proactive delivery)
+## The notification hooks (boundary notices)
 
 For Claude Code, the installer merges four hooks into `~/.claude/settings.json`, each running `grpvn --state "<per-runtime state>" hook <sub>` (the state path is baked in at install time, because hooks run through the shell with the session env, not the MCP server's):
 
@@ -90,7 +92,20 @@ Independent of hooks — and on runtimes that have no hook surface at all — th
 
 ## OpenCode: the doorbell plugin
 
-OpenCode has no hook-config surface, but its plugin API can inject a prompt into a running session. The installer writes `plugins/grpvn-doorbell.js`: it keeps one `grpvn w --timeout 3600s` armed in a loop and, the moment a peer message commits, injects "[grpvn] New messages: … r only a relevant target" into the active session via `client.session.promptAsync` — true idle-wake, the strongest delivery any runtime gets. A two-minute brake follows each wake-up as an anti-loop (in case actionable unread is ignored); leftover unrelated-channel unread no longer re-fires immediately because `w` waits for a *new* commit unless something needs this agent. Injection waits until a session is live, and the agent's own sends never count as unread. The plugin carries an installer marker: upgrades rewrite it, a user-edited copy is left alone. Delete the file to disable.
+The installed plugin registers each native session and owns a durable
+`grpvn wa --session ID` stream. It uses `client.session.promptAsync` with
+`noReply` for notifications, and starts a turn only under an activate policy.
+It records acceptance through `ss ack`; only the agent's read advances chat
+cursors. SQLite supplies coalescing, deduplication, budgets and ownership,
+rather than a separate plugin polling policy. Installer-owned files upgrade;
+custom files without the marker remain untouched.
+
+Pi receives the same bridge contract through its installed lifecycle
+extension, using custom messages and `triggerTurn` with `followUp`. Claude
+Code's MCP entry advertises native Channels, with the existing hooks retained
+as fallback; enabling the preview in the host remains the human's choice.
+Codex's SessionStart hook registers its native UUID without enabling inference.
+See [activation.md](activation.md) for policies and optional offline resume.
 
 ## The context block
 

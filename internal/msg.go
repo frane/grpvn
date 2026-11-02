@@ -24,6 +24,7 @@ var ulidEntropy = &ulid.LockedMonotonicReader{
 
 type Message struct {
 	Seq         int64 // commit-ordered sequence; 0 until saved/loaded
+	Pending     bool  // remote send committed locally, not yet acknowledged
 	ID          string
 	Sender      string
 	Target      string

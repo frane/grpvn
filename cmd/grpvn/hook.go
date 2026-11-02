@@ -77,12 +77,29 @@ var hookSessionStartCmd = &cobra.Command{
 	Use:   "session-start",
 	Short: "SessionStart hook: inject identity and unread into context",
 	Run: func(cmd *cobra.Command, args []string) {
+		var payload struct {
+			SessionID string `json:"session_id"`
+		}
+		info, _ := os.Stdin.Stat()
+		if hookFormatFlag == internal.DialectCodex && (info == nil || info.Mode()&os.ModeCharDevice == 0) {
+			data, _ := io.ReadAll(io.LimitReader(os.Stdin, 64*1024))
+			_ = json.Unmarshal(data, &payload)
+		}
 		failOpen("session-start", func() error {
-			_, st, db, err := session()
+			name, st, db, err := session()
 			if err != nil {
 				return err
 			}
 			defer db.Close()
+			if payload.SessionID != "" {
+				path, err := filepath.Abs(internal.ResolveStatePath(statePathFlag))
+				if err != nil {
+					return err
+				}
+				if _, err := internal.RegisterSession(db, internal.AgentSession{Agent: name, Runtime: "codex", RuntimeSession: payload.SessionID, Project: internal.ProjectRoot(), StatePath: path, Channels: st.Follow, Mode: "notify", KeepPolicy: true}, false, false); err != nil {
+					return err
+				}
+			}
 			return internal.HookSessionStart(os.Stdout, db, st, hookFormatFlag)
 		})
 	},

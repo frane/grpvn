@@ -20,7 +20,7 @@ var skillInstallCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Install SKILL.md and wire MCP into detected agent configs",
 	Long: `Detects which agents are present under HOME (Claude Code, Cursor,
-Codex CLI, Gemini CLI, Claude Desktop on macOS, plus the generic ~/.agents)
+Codex CLI, OpenCode, Pi, Gemini CLI, Claude Desktop on macOS, plus ~/.agents)
 and writes SKILL.md plus an mcpServers.grpvn entry into each one. Pass --all
 to install into every known target regardless of detection.`,
 	Run: func(cmd *cobra.Command, args []string) {

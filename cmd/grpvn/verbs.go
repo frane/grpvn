@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -29,6 +30,9 @@ func session() (string, *internal.State, *sql.DB, error) {
 	if err := internal.MigrateLegacyCursors(db, st, internal.ResolveStatePath(statePathFlag)); err != nil {
 		db.Close()
 		return "", nil, nil, err
+	}
+	if _, err := internal.SyncAvailable(context.Background(), db); err != nil {
+		fmt.Fprintln(os.Stderr, "warn: remote sync:", internal.SyncErrorLine(err))
 	}
 	return n, st, db, nil
 }
@@ -123,7 +127,7 @@ var sendCmd = &cobra.Command{
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
-		m, replayed, err := internal.SendIdempotent(db, n, t, b, st.DefaultChannel, false, idempotencyFlag)
+		m, replayed, err := internal.SendSynced(cmd.Context(), db, n, t, b, st.DefaultChannel, false, idempotencyFlag)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
@@ -149,12 +153,16 @@ var askCmd = &cobra.Command{
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
-		m, _, err := internal.SendIdempotent(db, n, t, b, st.DefaultChannel, true, idempotencyFlag)
+		m, _, err := internal.SendSynced(cmd.Context(), db, n, t, b, st.DefaultChannel, true, idempotencyFlag)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
-		fmt.Println(m.ID)
+		if m.Pending {
+			fmt.Println(m.ID + " queued")
+		} else {
+			fmt.Println(m.ID)
+		}
 		autoFollow(db, st, m.Target)
 		unreadNotice(db, st)
 	},
@@ -405,6 +413,16 @@ var followCmd = &cobra.Command{
 				os.Exit(1)
 			}
 		default:
+			db, err := internal.OpenDB()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			defer db.Close()
+			if err := internal.JoinRemoteTargets(db, args...); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
 			for _, a := range args {
 				if !strings.HasPrefix(a, "#") {
 					fmt.Fprintln(os.Stderr, "follow targets must start with #")

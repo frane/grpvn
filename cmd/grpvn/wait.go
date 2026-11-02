@@ -21,7 +21,8 @@ var waitCmd = &cobra.Command{
 channels and the DM inbox, then prints the same counts line as check and
 exits 0. Exits 2 if the timeout elapses first (0 = wait forever). Cheap to
 leave running: it polls PRAGMA data_version and only runs the unread query
-when another process has committed to the store.`,
+when another process has committed to the store. Configured remote sources
+are synced on their shared adaptive schedule while waiting.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		_, _, db := mustSession()
 		defer db.Close()

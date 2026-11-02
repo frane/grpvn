@@ -11,10 +11,9 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// CurrentSchemaVersion is 2: messages gained an explicit seq INTEGER
-// PRIMARY KEY AUTOINCREMENT and read cursors moved from state.json into the
-// cursors table. See schema.go for why.
-const CurrentSchemaVersion = 2
+// v3 adds remote configuration, replication cursors, an outbox, and the
+// optional daemon lease without rebuilding the log or changing read positions.
+const CurrentSchemaVersion = 3
 
 func dbPath() (string, error) {
 	if env := os.Getenv("GRPVN_DB"); env != "" {

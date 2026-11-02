@@ -47,7 +47,7 @@ func advanceCursor(db *sql.DB, agent, target string, pos int64) error {
 	if err != nil {
 		return fmt.Errorf("advance cursor %s/%s: %w", agent, target, err)
 	}
-	return nil
+	return markActivationsConsumed(db, agent, target, pos)
 }
 
 // MigrateLegacyCursors moves pre-v2 cursors out of state.json into the

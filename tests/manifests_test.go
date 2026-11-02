@@ -23,6 +23,7 @@ func TestManifestsAreValidJSON(t *testing.T) {
 		{"plugin/.claude-plugin/plugin.json", []string{"name", "version", "license"}},
 		{"plugin/.codex-plugin/plugin.json", []string{"name", "version", "skills", "mcpServers", "interface"}},
 		{"plugin/.mcp.json", []string{"mcpServers"}},
+		{"plugin/.codex.mcp.json", []string{"mcpServers"}},
 		{"plugin/hooks/hooks.json", []string{"hooks"}},
 	}
 	for _, c := range cases {
@@ -75,33 +76,36 @@ func TestMarketplaceListsPluginSource(t *testing.T) {
 	}
 }
 
-// .mcp.json under plugin/ must declare grpvn as a server with command=grpvn
-// and args=["serve"]. Mismatches would silently break Codex/marketplace
-// installs.
+// Claude and Codex share chat tools, but only Claude advertises Channels.
 func TestPluginMCPManifestShape(t *testing.T) {
 	root := repoRoot(t)
-	data, err := os.ReadFile(filepath.Join(root, "plugin/.mcp.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var doc struct {
-		McpServers map[string]struct {
-			Command string   `json:"command"`
-			Args    []string `json:"args"`
-		} `json:"mcpServers"`
-	}
-	if err := json.Unmarshal(data, &doc); err != nil {
-		t.Fatal(err)
-	}
-	srv, ok := doc.McpServers["grpvn"]
-	if !ok {
-		t.Fatal("plugin/.mcp.json must define mcpServers.grpvn")
-	}
-	if srv.Command != "grpvn" {
-		t.Fatalf("expected command=grpvn, got %q", srv.Command)
-	}
-	if len(srv.Args) != 1 || srv.Args[0] != "serve" {
-		t.Fatalf("expected args=[\"serve\"], got %v", srv.Args)
+	for _, test := range []struct {
+		path string
+		args []string
+	}{{"plugin/.mcp.json", []string{"serve", "--claude-channel"}}, {"plugin/.codex.mcp.json", []string{"serve"}}} {
+		data, err := os.ReadFile(filepath.Join(root, test.path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			McpServers map[string]struct {
+				Command string   `json:"command"`
+				Args    []string `json:"args"`
+			} `json:"mcpServers"`
+		}
+		if err := json.Unmarshal(data, &doc); err != nil {
+			t.Fatal(err)
+		}
+		srv, ok := doc.McpServers["grpvn"]
+		if !ok {
+			t.Fatal("plugin/.mcp.json must define mcpServers.grpvn")
+		}
+		if srv.Command != "grpvn" {
+			t.Fatalf("expected command=grpvn, got %q", srv.Command)
+		}
+		if strings.Join(srv.Args, " ") != strings.Join(test.args, " ") {
+			t.Fatalf("%s: expected args %v, got %v", test.path, test.args, srv.Args)
+		}
 	}
 }
 

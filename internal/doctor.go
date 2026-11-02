@@ -76,6 +76,7 @@ func Doctor(w io.Writer, home, activeStatePath string) error {
 			default:
 				fmt.Fprintf(w, "ok    unread for %s: %s\n", st.Name, line)
 			}
+			doctorActivations(w, db)
 		}
 	}
 

@@ -885,7 +885,7 @@ func TestInstallSkillWiresOpenCode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plugin not written: %v", err)
 	}
-	for _, want := range []string{openCodePluginMarker, "state-opencode.json", "promptAsync", "--scope project"} {
+	for _, want := range []string{openCodePluginMarker, "state-opencode.json", "promptAsync", `"--scope", "project"`, `"wa", "--session"`, `"ss", "ack"`} {
 		if !strings.Contains(string(pdata), want) {
 			t.Fatalf("plugin missing %q:\n%s", want, pdata)
 		}

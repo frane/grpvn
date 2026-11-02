@@ -89,7 +89,7 @@ func HookSessionStart(w io.Writer, db *sql.DB, st *State, dialect string) error 
 		follows = strings.Join(st.Follow, " ")
 	}
 	var text strings.Builder
-	fmt.Fprintf(&text, "[grpvn] You are %s on the local agent chat, following: %s.", st.Name, follows)
+	fmt.Fprintf(&text, "[grpvn] You are %s on the agent chat, following: %s.", st.Name, follows)
 	if st.DefaultChannel != "" {
 		fmt.Fprintf(&text, " Default channel: %s.", st.DefaultChannel)
 	}

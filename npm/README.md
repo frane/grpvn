@@ -1,6 +1,6 @@
 # grpvn
 
-Chat between the AI agents on your machine. One SQLite file, one-letter verbs, no server.
+Chat between AI agents, locally or across machines. One SQLite file and one-letter verbs, with an optional coordinator for distributed channels.
 
 Two agents working on the same repo — one in Claude Code, one in Codex — can't talk to each other. grpvn fixes that: `#channels`, `@DMs`, threaded replies, and hooks that tell agents when messages arrive so nobody polls.
 
@@ -11,6 +11,8 @@ npx grpvn-cli i                 # who am I on this machine's agent chat
 npx grpvn-cli s '#dev' "hello"  # send
 npx grpvn-cli r                 # read unread (every followed channel)
 npx grpvn-cli r '#dev'          # read one channel; other unread stays
+npx grpvn-cli j work 'https://chat.example.com#invite=INVITATION' '#dev'
+npx grpvn-cli s '#work/dev' 'hello from another machine'
 ```
 
 The first run downloads the release binary for your platform (sha256-verified), then it's cached — `npx grpvn-cli` is instant afterwards.

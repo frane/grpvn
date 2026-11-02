@@ -1,7 +1,8 @@
 # grpvn Protocol
 
 grpvn is an append-only, local-first chat substrate. One SQLite database,
-WAL mode, no daemon; every participating process opens the file directly.
+WAL mode; processes on one host open the file directly. An optional HTTP
+coordinator replicates selected channels between hosts, each with its own DB.
 
 ## Storage
 
@@ -11,7 +12,7 @@ WAL mode, no daemon; every participating process opens the file directly.
 - Read cursors: the `cursors` table in the database, keyed by
   `(agent_name, target)`.
 
-## Schema (v2)
+## Schema (v3)
 
 | Table            | Purpose                                              |
 |------------------|------------------------------------------------------|
@@ -19,6 +20,11 @@ WAL mode, no daemon; every participating process opens the file directly.
 | `cursors`        | `(agent_name, target) -> position` high-water marks. |
 | `marks`          | Per-agent bookmarks.                                 |
 | `idempotency`    | `(agent_name, key) -> message_id` retry keys for Send. |
+| `remotes`        | Named coordinator URLs, member credentials, pinned server IDs, and sync status. |
+| `remote_channels` | Remote channel to local target mapping and durable download position. |
+| `remote_messages` | Remote/local ID mapping; a null remote sequence on an existing message is a pending outgoing send. Mappings survive retention. |
+| `server_meta`    | Persistent coordinator identity. |
+| `daemon_state`   | One renewable local sync-worker lease, heartbeat, and owner-scoped stop request per database. |
 | `schema_version` | Monotonic migration record.                          |
 
 ## Ordering and delivery
@@ -76,6 +82,27 @@ coordinates cooperating agents on one host; it does not defend against a
 malicious local user, and file permissions on `~/.grpvn` are the actual
 security boundary.
 
+For distributed channels, private is the default. A scoped invitation or
+administrator approval enrolls a person/device; that member registers its
+agents with separate credentials and channel read/write grants. Server-side
+credentials and invitations are hashed. Agent sender names are bound to
+the authenticated principal and qualified by its owner. Revoking a member
+also denies its agents on subsequent requests. Open channels allow public
+reads and automatic guest registration, without granting private rights.
+Public origins cannot activate inference unless explicitly allowed.
+
+Remote MCP uses OAuth approval, PKCE S256, expiring access tokens and
+rotating refresh tokens. It exposes chat tools only. CLI administration
+requires access to the server DB, whose local writers are trusted; isolate
+that DB from untrusted agents with OS permissions. Approval labels are
+operator-assigned, not verified email or SSO identities. Revocation cannot
+erase cached messages or already-started provider execution.
+
+Channel sync excludes DMs and other coordinators' caches. Remote MCP can
+read its own agent's inbox and send DMs when granted permission. HTTPS at a
+reverse proxy protects credentials and message traffic in transit. See
+[distributed.md](distributed.md) and [chatgpt.md](chatgpt.md).
+
 ## Retention
 
 The store is append-only from the agents' point of view: no edit, no
@@ -83,6 +110,10 @@ delete, and the MCP surface exposes neither. The operator can prune with
 `grpvn gc --older-than <duration>` (CLI only). `seq` is AUTOINCREMENT and
 never reused, so cursors and ordering survive pruning; thread parents that
 were pruned simply stop resolving.
+
+Pending outgoing messages are exempt from retention until acknowledged.
+Remote ID mappings remain after pruning so stale sync pages do not restore
+deleted cache entries and thread references keep stable local IDs.
 
 ## Migration
 
@@ -92,3 +123,20 @@ inside one transaction; concurrent openers race safely. Legacy cursors
 found in a state file are translated to seq positions on the agent's next
 store access — toward "unread" in any ambiguous case, never toward "lost" —
 then cleared from the file.
+
+v2→v3 adds the remote and coordinator tables without rebuilding messages
+or moving existing read cursors. Download positions are independent of
+read positions: syncing stores messages; only reading marks them read.
+
+The optional local daemon uses a 15-second renewable lease in SQLite.
+Foreground commands use the cache while its lease is live, and fall back
+to bounded direct sync otherwise. Daemon writes do not advance read cursors.
+
+Additional v3 tables hold membership/invite grants, hashed OAuth credentials,
+shared sync deadlines, runtime sessions and delivery owners, activation
+receipts, provider run IDs and conversation continuity. These are additive;
+existing message IDs and per-target read cursors remain intact. Activation
+scan positions are independent of read positions. Claims coalesce addressed
+messages and persist before invoking a runtime. A lost external
+acknowledgement is recorded as uncertain, never assumed exactly-once model
+execution. API reply writes use a durable idempotency key.

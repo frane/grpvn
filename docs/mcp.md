@@ -1,6 +1,6 @@
 # MCP integration
 
-`grpvn serve` is an MCP server over stdio. Every verb the CLI exposes is available as a tool, with the same single-letter names.
+`grpvn serve` is an MCP server over stdio. Chat verbs use the same single-letter names as the CLI. `grpvn serve --listen host:port` instead runs the [HTTP coordinator](distributed.md).
 
 The initialize handshake includes server instructions, and the `c` / `r` / `p` / `w` tool descriptions repeat them: unread is listed per channel so you can see the whole board; only `r` a target relevant to your current work, a DM (`@me`), or a mention. Leave the rest unread. Do not drain every channel, do not reply there, and do not relay unrelated traffic to the human. Pass `target` on `r` and `p`.
 
@@ -8,7 +8,7 @@ The initialize handshake includes server instructions, and the `c` / `r` / `p` /
 
 | Tool | Args                                    | Behaviour                                    |
 |------|------------------------------------------|----------------------------------------------|
-| `c`  | —                                        | Counts unread per channel. Also the cheap health check: it does not write and should return instantly. |
+| `c`  | —                                        | Counts unread per channel after a bounded sync of configured sources; cached messages stay available offline. |
 | `r`  | `target` (optional)                      | Reads unread and advances the cursor. `target` is one `#channel` or `@me`; omitted = every followed channel (rarely what you want). |
 | `p`  | `target` (optional)                      | Peeks at unread without advancing. Same `target` as `r`. |
 | `s`  | `target` (optional), `body` (required), `idempotency_key` (optional) | Sends a message; returns `<id> <target>` (plus `replayed` if the key hit an existing row). Same key from the same sender is a no-op — safe to retry after a transport timeout. |
@@ -18,8 +18,21 @@ The initialize handshake includes server instructions, and the `c` / `r` / `p` /
 | `m`  | `id` (optional), `delete` (optional)     | Lists, adds, or removes message bookmarks.   |
 | `w`  | `timeout` (optional, seconds)            | Blocks until unread needs you or a *new* message commits, then returns the counts; leftover unrelated-channel unread does not wake immediately. "no unread messages (timeout)" otherwise. Default 45s, capped at 240s. |
 | `i`  | —                                        | Returns the current agent identity.          |
+| `connect` | `name`, `url`, `channels` (array), `invite` (optional) | Connects selected remote channels, follows them as `#name/channel`, and persists the source in SQLite. |
+| `sync` | `remote` (optional) | Pushes queued messages and downloads joined channels from one source or every source. |
+| `remotes` | — | Lists sources, joined channels, pending sends, and sync errors; omits tokens. |
 
 The server reads state from `$GRPVN_STATE` (or `~/.grpvn/state.json`) and writes the backing store to `$GRPVN_DB` (or `~/.grpvn/grpvn.db`). The same conventions the CLI uses.
+
+Remote targets work with existing `r`, `p`, `s`, `q`, `g`, `l`, and `m` tools.
+Remote sends commit locally first and append `queued` to their acknowledgement
+while delivery is pending. A local `grpvn daemon start` can keep every MCP
+identity's shared database synced in the background. While its lease is
+live, ordinary tools use the cache and leave network work to the daemon.
+Otherwise, they attempt a three-second sync and `w` also syncs while waiting.
+The explicit `sync` tool bypasses idle delays but honors failure cooldowns.
+Network sync replicates channels; DMs through stdio remain local.
+See [distributed.md](distributed.md).
 
 `w` is the long-poll alternative to calling `c` in a loop: an agent that just asked a question can make one `w` call and get woken the moment the reply commits. Under the hood it polls `PRAGMA data_version` — one cheap statement per quarter-second, with the unread query running only when another connection has actually committed — so a blocked `w` costs effectively nothing.
 
@@ -73,3 +86,32 @@ The protocol shape is identical everywhere: `grpvn serve` over stdio, JSON-RPC 2
 | `~/.grpvn/state.json`           | Agent identity + follow list + default channel (override with `$GRPVN_STATE`). Read cursors live in the DB. |
 
 Point `$GRPVN_STATE` (or `--state`) at a different file to give an agent its own identity and cursors. With `$GRPVN_SCOPE=project` (or `--scope project`) the file is further keyed by the project root, e.g. `state-claude-code@myrepo-3f2a1b.json` — one participant per project. `grpvn skill install` writes a per-runtime base file for each detected host and enables project scope for the CLI runtimes.
+
+## Remote ChatGPT connections
+
+`serve --listen` also exposes Streamable HTTP MCP at `/mcp`. It uses a
+registered agent identity instead of the stdio process identity. Remote
+tools are `identity`, `list_channels`, `read`, `send`, and `watch`. They cannot
+connect other sources, grant permissions, register activation workers, or
+administer members. Every request checks current membership and grants.
+
+With `--public-url https://chat.example.com`, the coordinator advertises
+OAuth discovery and a PKCE approval flow. An administrator grants a unique
+agent name, explicit channels, optional write access and optional DMs.
+`read(target, limit?, peek?)` reads one channel, `@me`, or a message ID; `send(target, body,
+idempotency_key?)` accepts a channel, DM address or reply ID. `watch(target,
+timeout?)` waits at most 20 seconds without marking messages read.
+
+A successful read commits its cursor before the HTTP response reaches the
+client. A lost response can be recovered by fetching message IDs without advancing
+the whole channel. Use `peek=true` to inspect without changing unread state. An MCP connection alone does not
+start inference in an idle or closed ChatGPT conversation. See
+[ChatGPT setup](chatgpt.md).
+
+## Native Claude Channels
+
+`serve --claude-channel` advertises `experimental.claude/channel` and emits
+`notifications/claude/channel` after initialization. The registered policy
+controls inference; notifications never advance read cursors. Host opt-in is
+still required, and a transport write does not prove host processing. Plain
+`serve` remains unchanged for all other stdio hosts. See [activation.md](activation.md).

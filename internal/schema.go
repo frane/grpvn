@@ -70,6 +70,200 @@ CREATE TABLE IF NOT EXISTS idempotency (
     created_at  INTEGER NOT NULL,
     PRIMARY KEY (agent_name, key),
     FOREIGN KEY (message_id) REFERENCES messages(id)
+);
+
+-- Remote configuration, channel replication positions, and the durable
+-- outbox live alongside the log. An absent remote_seq means not yet sent.
+CREATE TABLE IF NOT EXISTS remotes (
+    name         TEXT PRIMARY KEY,
+    url          TEXT NOT NULL,
+    token        TEXT NOT NULL DEFAULT '',
+    server_id    TEXT NOT NULL,
+    last_sync    INTEGER NOT NULL DEFAULT 0,
+    last_error   TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS remote_channels (
+    remote_name  TEXT NOT NULL REFERENCES remotes(name),
+    channel      TEXT NOT NULL,
+    target       TEXT NOT NULL UNIQUE,
+    position     INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (remote_name, channel)
+);
+CREATE TABLE IF NOT EXISTS remote_messages (
+    remote_name  TEXT NOT NULL REFERENCES remotes(name),
+    remote_id    TEXT NOT NULL,
+    local_id     TEXT NOT NULL UNIQUE,
+    remote_seq   INTEGER,
+    PRIMARY KEY (remote_name, remote_id)
+);
+CREATE TABLE IF NOT EXISTS server_meta (
+    key          TEXT PRIMARY KEY,
+    value        TEXT NOT NULL
+);
+
+-- One renewable worker lease per database, shared by every local identity.
+-- Stop requests are owner-scoped; no PID signalling or PID reuse risk.
+CREATE TABLE IF NOT EXISTS daemon_state (
+    singleton    INTEGER PRIMARY KEY CHECK (singleton = 1),
+    owner        TEXT NOT NULL,
+    pid          INTEGER NOT NULL,
+    started_at   INTEGER NOT NULL,
+    heartbeat_at INTEGER NOT NULL,
+    interval_ms  INTEGER NOT NULL,
+    stop_requested INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS sync_schedule (
+    remote_name TEXT PRIMARY KEY REFERENCES remotes(name),
+    next_at INTEGER NOT NULL DEFAULT 0,
+    retry_at INTEGER NOT NULL DEFAULT 0,
+    idle_rounds INTEGER NOT NULL DEFAULT 0,
+    failures INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS sync_peers (
+    server_id TEXT PRIMARY KEY,
+    owner TEXT NOT NULL DEFAULT '',
+    lease_until INTEGER NOT NULL DEFAULT 0,
+    next_request_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS principals (
+    id TEXT PRIMARY KEY,
+    credential_hash TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    parent_id TEXT,
+    status TEXT NOT NULL,
+    approval_code TEXT NOT NULL UNIQUE,
+    requested TEXT NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS permissions (
+    principal_id TEXT NOT NULL REFERENCES principals(id),
+    channel TEXT NOT NULL,
+    can_read INTEGER NOT NULL DEFAULT 1,
+    can_write INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (principal_id, channel)
+);
+CREATE TABLE IF NOT EXISTS invites (
+    id TEXT PRIMARY KEY,
+    secret_hash TEXT NOT NULL UNIQUE,
+    person TEXT NOT NULL,
+    channels TEXT NOT NULL,
+    can_write INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    uses_left INTEGER NOT NULL,
+    revoked INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS local_credentials (
+    server_id TEXT NOT NULL,
+    agent_name TEXT NOT NULL,
+    credential TEXT NOT NULL,
+    principal_id TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'new',
+    approval_code TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (server_id, agent_name)
+);
+CREATE TABLE IF NOT EXISTS message_principals (
+    message_id TEXT PRIMARY KEY,
+    principal_id TEXT NOT NULL REFERENCES principals(id)
+);
+CREATE TABLE IF NOT EXISTS agent_sessions (
+    id TEXT PRIMARY KEY,
+    agent_name TEXT NOT NULL,
+    runtime TEXT NOT NULL,
+    runtime_session TEXT NOT NULL,
+    project TEXT NOT NULL DEFAULT '',
+    state_path TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'idle',
+    mode TEXT NOT NULL DEFAULT 'notify',
+    channels TEXT NOT NULL DEFAULT '[]',
+    endpoint TEXT NOT NULL DEFAULT '',
+    credential_env TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    supervise INTEGER NOT NULL DEFAULT 0,
+    activate_mentions INTEGER NOT NULL DEFAULT 0,
+    allow_senders TEXT NOT NULL DEFAULT '[]',
+    scan_position INTEGER NOT NULL DEFAULT 0,
+    heartbeat_at INTEGER NOT NULL,
+    UNIQUE (runtime,runtime_session)
+);
+CREATE TABLE IF NOT EXISTS activation_owners (
+    agent_name TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES agent_sessions(id)
+);
+CREATE TABLE IF NOT EXISTS activation_events (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES agent_sessions(id),
+    message_id TEXT NOT NULL,
+    message_seq INTEGER NOT NULL,
+    target TEXT NOT NULL,
+    thread_root TEXT NOT NULL,
+    action TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at INTEGER NOT NULL,
+    accepted_at INTEGER,
+    consumed_at INTEGER,
+    detail TEXT NOT NULL DEFAULT '',
+    UNIQUE (session_id,message_id)
+);
+CREATE TABLE IF NOT EXISTS activation_runs (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES agent_sessions(id),
+    thread_root TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    provider_id TEXT NOT NULL DEFAULT '',
+    conversation_url TEXT NOT NULL DEFAULT '',
+    detail TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS activation_run_events (
+    run_id TEXT NOT NULL REFERENCES activation_runs(id),
+    event_id TEXT NOT NULL UNIQUE REFERENCES activation_events(id),
+    PRIMARY KEY (run_id,event_id)
+);
+CREATE TABLE IF NOT EXISTS agent_conversations (
+    session_id TEXT NOT NULL,
+    thread_root TEXT NOT NULL,
+    response_id TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(session_id,thread_root)
+);
+CREATE TABLE IF NOT EXISTS automated_messages (
+    message_id TEXT PRIMARY KEY,
+    activation_id TEXT NOT NULL,
+    hops INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS principal_approvals (
+    principal_id TEXT PRIMARY KEY, approved INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS remote_attributions (
+    local_id TEXT PRIMARY KEY, principal_id TEXT NOT NULL, owner_id TEXT NOT NULL, approved INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS oauth_clients (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, redirects TEXT NOT NULL, created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS oauth_requests (
+    id TEXT PRIMARY KEY, client_id TEXT NOT NULL, principal_id TEXT NOT NULL,
+    ticket_hash TEXT NOT NULL, code_hash TEXT NOT NULL UNIQUE, redirect_uri TEXT NOT NULL,
+    state TEXT NOT NULL, challenge TEXT NOT NULL, scope TEXT NOT NULL, resource TEXT NOT NULL,
+    expires_at INTEGER NOT NULL, consumed INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS oauth_refresh (
+    secret_hash TEXT PRIMARY KEY, principal_id TEXT NOT NULL, client_id TEXT NOT NULL,
+    resource TEXT NOT NULL, scope TEXT NOT NULL, expires_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS oauth_access (
+    credential_hash TEXT PRIMARY KEY, scope TEXT NOT NULL, resource TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS credential_expiry (
+    credential_hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS provider_poll (
+    run_id TEXT PRIMARY KEY, next_at INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS bridge_leases (
+    session_id TEXT PRIMARY KEY REFERENCES agent_sessions(id),
+    owner TEXT NOT NULL, expires_at INTEGER NOT NULL
 );`
 
 // migrateV1toV2 rebuilds the messages table to add the seq column and is

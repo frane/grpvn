@@ -16,6 +16,15 @@ import (
 //go:embed embedded/SKILL.md
 var SkillContent []byte
 
+//go:embed embedded/runtime-bridge.mjs
+var nativeBridgeJS string
+
+//go:embed embedded/opencode-bridge.mjs
+var openCodePlugin string
+
+//go:embed embedded/pi-bridge.mjs
+var piExtension string
+
 // Target describes one supported agent surface. The skill installer writes
 // SKILL.md into Skill (always) and registers the grpvn MCP server in either
 // MCP (a JSON config) or MCPTOML (a TOML config that takes a
@@ -23,6 +32,7 @@ var SkillContent []byte
 // under HOME — this keeps the installer from littering directories for agents
 // the user hasn't installed.
 type Target struct {
+	Extension string // Pi lifecycle extension, empty for other runtimes
 	Name      string // human label printed on install
 	Slug      string // short, filesystem-safe id used for the per-agent state file (e.g. "claude-code")
 	DetectDir string // path under HOME that, when present, signals the agent is installed
@@ -117,6 +127,11 @@ func HomeTargets() []Target {
 			Scope:     true,
 		},
 		{
+			Name: "Pi", Slug: "pi", DetectDir: ".pi/agent",
+			Skill:     ".pi/agent/skills/grpvn/SKILL.md",
+			Extension: ".pi/agent/extensions/grpvn.js", Scope: true,
+		},
+		{
 			Name:      "agents (generic)",
 			Slug:      "agents",
 			DetectDir: ".agents",
@@ -199,7 +214,7 @@ func installSkillFromHome(w io.Writer, homeOverride string, forceAll bool) error
 		// runtime identity that follows no channels is a mailbox channel
 		// traffic can never reach — the notification hooks would guard an
 		// empty inbox forever.
-		if t.MCP != "" || t.MCPTOML != "" || t.Hooks != "" || t.HookFile != "" || t.MCPOC != "" {
+		if t.MCP != "" || t.MCPTOML != "" || t.Hooks != "" || t.HookFile != "" || t.MCPOC != "" || t.Extension != "" {
 			ok, err := seedRuntimeState(home, statePath)
 			if err != nil {
 				lastErr = err
@@ -215,7 +230,11 @@ func installSkillFromHome(w io.Writer, homeOverride string, forceAll bool) error
 			if t.Trust {
 				extra = map[string]interface{}{"trust": true}
 			}
-			if err := mergeMCP(mcpPath, "grpvn", "grpvn", []string{"serve"}, env, extra); err != nil {
+			args := []string{"serve"}
+			if t.Slug == "claude-code" {
+				args = append(args, "--claude-channel")
+			}
+			if err := mergeMCP(mcpPath, "grpvn", "grpvn", args, env, extra); err != nil {
 				lastErr = err
 				continue
 			}
@@ -250,6 +269,15 @@ func installSkillFromHome(w io.Writer, homeOverride string, forceAll bool) error
 			if added {
 				settingsAdded = append(settingsAdded, fmt.Sprintf("%s: %s", t.Name, pluginPath))
 			}
+		}
+		if t.Extension != "" {
+			path := filepath.Join(home, t.Extension)
+			content := fmt.Sprintf("// %s — delete this file to disable.\nconst STATE = %q;\n", openCodePluginMarker, statePath) + nativeBridgeJS + "\n" + piExtension
+			if err := writeOwnedExtension(path, content); err != nil {
+				lastErr = err
+				continue
+			}
+			settingsAdded = append(settingsAdded, fmt.Sprintf("%s: %s", t.Name, path))
 		}
 		if t.Hooks != "" {
 			hooksPath := filepath.Join(home, t.Hooks)
@@ -1038,60 +1066,10 @@ func mergeMCPTOML(path, name, command string, args []string, env map[string]stri
 // rewrite them and user-modified copies stay untouched.
 const openCodePluginMarker = "grpvn doorbell — installed by `grpvn skill install`"
 
-// openCodePlugin is the OpenCode push plugin: it arms a `grpvn w` waiter in
-// a loop and injects a wake-up prompt into the active session the moment a
-// peer message commits — the idle-wake OpenCode's hook events alone can't
-// express. The state path is baked in at install time because the plugin
-// runs in the OpenCode server's env, which carries no GRPVN_* variables.
-const openCodePlugin = `// %s — delete this file to disable.
-// Wakes the active session the moment a grpvn peer message commits,
-// instead of waiting for the next user prompt. One armed waiter, a
-// two-minute brake between wake-ups, and injection only when a session
-// is live. Own sends never count as unread, so replies can't re-trigger.
-export const GrpvnDoorbell = async ({ client, $ }) => {
-  const STATE = %q;
-  let session = null;
-  let pending = null;
-  const inject = async (counts) => {
-    if (!session) { pending = counts; return; }
-    try {
-      await client.session.promptAsync({
-        path: { id: session },
-        body: { parts: [{ type: "text", text: "[grpvn] New messages: " + counts + " — r only a relevant target (r '#chan' / r @me); leave the rest unread. Do not relay unrelated channels to the human." }] },
-      });
-    } catch (e) {}
-  };
-  (async () => {
-    while (true) {
-      try {
-        const res = await $` + "`grpvn --state ${STATE} --scope project w --timeout 3600s`" + `.quiet().nothrow();
-        if (res.exitCode === 0) {
-          await inject((res.text() || "").trim() || "unread");
-          // w returns immediately while unread persists; give the session
-          // time to read before the next wake-up.
-          await new Promise((r) => setTimeout(r, 120000));
-        }
-      } catch (e) {
-        await new Promise((r) => setTimeout(r, 60000));
-      }
-    }
-  })();
-  return {
-    event: async ({ event }) => {
-      const id = event?.properties?.sessionID || event?.properties?.info?.id;
-      if (id && (event?.type || "").startsWith("session")) {
-        session = id;
-        if (pending) { const c = pending; pending = null; await inject(c); }
-      }
-    },
-  };
-};
-`
-
 // writeOpenCodePlugin installs or upgrades the doorbell plugin. A file we
 // didn't write (no marker) is left alone.
 func writeOpenCodePlugin(path, statePath string) (bool, error) {
-	content := fmt.Sprintf(openCodePlugin, openCodePluginMarker, statePath)
+	content := fmt.Sprintf("// %s — delete this file to disable.\nconst STATE = %q;\n", openCodePluginMarker, statePath) + nativeBridgeJS + "\n" + openCodePlugin
 	existing, err := os.ReadFile(path)
 	switch {
 	case err == nil:

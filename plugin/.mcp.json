@@ -2,7 +2,7 @@
   "mcpServers": {
     "grpvn": {
       "command": "grpvn",
-      "args": ["serve"]
+      "args": ["serve", "--claude-channel"]
     }
   }
 }

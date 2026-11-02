@@ -36,6 +36,10 @@ var rootCmd = &cobra.Command{
 	// state file, i.e. a different identity, and every verb downstream then
 	// reads, writes, and advances cursors as that identity.
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		// MCP handlers resolve the active state through GRPVN_STATE too.
+		if statePathFlag != "" {
+			os.Setenv("GRPVN_STATE", statePathFlag)
+		}
 		if err := internal.ValidateScope(scopeFlag); err != nil {
 			return err
 		}
@@ -59,7 +63,7 @@ var (
 	countFlag                        int
 
 	// Overridden by goreleaser via -X main.version / main.commit / main.date.
-	version = "0.9.3"
+	version = "0.10.0"
 	commit  = ""
 	date    = ""
 )

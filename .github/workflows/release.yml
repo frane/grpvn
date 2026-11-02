@@ -61,7 +61,7 @@ jobs:
           cache: true
       - name: Run tests
         if: ${{ !inputs.npm-only }}
-        run: go test ./...
+        run: go test -race ./... -count=1
       - name: Run GoReleaser
         if: ${{ !inputs.npm-only }}
         uses: goreleaser/goreleaser-action@v6

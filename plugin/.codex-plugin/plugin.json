@@ -1,6 +1,6 @@
 {
   "name": "grpvn",
-  "version": "0.9.3",
+  "version": "0.10.0",
   "description": "Local-first peer chat protocol for AI agents.",
   "author": {
     "name": "Frane Bandov",
@@ -11,11 +11,11 @@
   "license": "Apache-2.0",
   "keywords": ["chat", "coordination", "mcp", "stateful", "sqlite", "local-first"],
   "skills": "./skills/",
-  "mcpServers": "./.mcp.json",
+  "mcpServers": "./.codex.mcp.json",
   "interface": {
     "displayName": "grpvn",
     "shortDescription": "Local-first peer chat for AI agents.",
-    "longDescription": "Append-only SQLite chat substrate over WAL. Agents coordinate via channels (#name), DMs (@name), and ULID-threaded replies. Zero daemon, single static binary, MCP server included. Requires the grpvn binary on PATH.",
+    "longDescription": "Append-only SQLite chat substrate over WAL. Agents coordinate via channels (#name), DMs (@name), and ULID-threaded replies. Local chat is daemonless; optional coordinator sync and runtime activation use the same static binary. Requires the grpvn binary on PATH.",
     "category": "Coordination",
     "websiteURL": "https://github.com/frane/grpvn"
   }

@@ -265,20 +265,19 @@ const MaxIdempotencyKeyBytes = 256
 // insert share a transaction so two retries racing each other cannot both
 // commit.
 func SendIdempotent(db *sql.DB, sender string, targetArg string, bodyArg string, defaultChannel string, isAsk bool, key string) (*Message, bool, error) {
-	if key == "" {
-		m, err := sendOnce(db, sender, targetArg, bodyArg, defaultChannel, isAsk)
-		return m, false, err
-	}
 	if len(key) > MaxIdempotencyKeyBytes {
 		return nil, false, fmt.Errorf("idempotency key too long: %d bytes (max %d)", len(key), MaxIdempotencyKeyBytes)
 	}
-	tx, err := db.Begin()
+	tx, err := beginWrite(db)
 	if err != nil {
 		return nil, false, err
 	}
 	defer tx.Rollback()
 	var existing string
-	err = tx.QueryRow("SELECT message_id FROM idempotency WHERE agent_name = ? AND key = ?", sender, key).Scan(&existing)
+	err = sql.ErrNoRows
+	if key != "" {
+		err = tx.QueryRow("SELECT message_id FROM idempotency WHERE agent_name = ? AND key = ?", sender, key).Scan(&existing)
+	}
 	switch {
 	case err == nil:
 		if err := tx.Commit(); err != nil {
@@ -293,11 +292,18 @@ func SendIdempotent(db *sql.DB, sender string, targetArg string, bodyArg string,
 	if err != nil {
 		return nil, false, err
 	}
-	if _, err := tx.Exec(
-		"INSERT INTO idempotency (agent_name, key, message_id, created_at) VALUES (?, ?, ?, ?)",
-		sender, key, m.ID, time.Now().UnixMilli(),
-	); err != nil {
-		return nil, false, err
+	if key != "" {
+		if _, err := tx.Exec(
+			"INSERT INTO idempotency (agent_name, key, message_id, created_at) VALUES (?, ?, ?, ?)",
+			sender, key, m.ID, time.Now().UnixMilli(),
+		); err != nil {
+			return nil, false, err
+		}
+	}
+	if strings.HasPrefix(key, "activation:") {
+		if _, err := tx.Exec("INSERT OR IGNORE INTO automated_messages(message_id,activation_id,hops) VALUES(?,?,1)", m.ID, strings.TrimPrefix(key, "activation:")); err != nil {
+			return nil, false, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, false, err
@@ -312,6 +318,9 @@ func sendOnce(db dbtx, sender string, targetArg string, bodyArg string, defaultC
 	target, parent, err := ResolveTarget(db, targetArg, defaultChannel)
 	if err != nil {
 		return nil, err
+	}
+	if parent != nil && strings.HasPrefix(parent.Target, "@") && parent.Sender != sender {
+		target = "@" + parent.Sender
 	}
 	m := NewMessage(sender, target, []byte(bodyArg))
 	if parent != nil {
@@ -328,6 +337,12 @@ func sendOnce(db dbtx, sender string, targetArg string, bodyArg string, defaultC
 	if err := m.save(db); err != nil {
 		return nil, err
 	}
+	if err := markAutomaticReply(db, m); err != nil {
+		return nil, err
+	}
+	if err := queueRemoteMessage(db, m); err != nil {
+		return nil, err
+	}
 	return m, nil
 }
 
@@ -335,10 +350,14 @@ func sendOnce(db dbtx, sender string, targetArg string, bodyArg string, defaultC
 // caller can retry against, and the target it landed on. "replayed" means
 // the idempotency key hit an existing row — the store did not grow.
 func FormatSendAck(m *Message, replayed bool) string {
-	if replayed {
-		return fmt.Sprintf("%s %s replayed", m.ID, m.Target)
+	suffix := ""
+	if m.Pending {
+		suffix = " queued"
 	}
-	return fmt.Sprintf("%s %s", m.ID, m.Target)
+	if replayed {
+		return fmt.Sprintf("%s %s replayed%s", m.ID, m.Target, suffix)
+	}
+	return fmt.Sprintf("%s %s%s", m.ID, m.Target, suffix)
 }
 
 // Gc prunes messages (and their marks) older than the cutoff. Retention is
@@ -352,18 +371,28 @@ func Gc(w io.Writer, db *sql.DB, olderThan time.Duration, vacuum bool) error {
 		return fmt.Errorf("--older-than must be positive")
 	}
 	cutoff := time.Now().Add(-olderThan).UnixMilli()
-	if _, err := db.Exec(
-		"DELETE FROM idempotency WHERE message_id IN (SELECT id FROM messages WHERE created_at < ?)", cutoff); err != nil {
+	tx, err := beginWrite(db)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	eligible := `SELECT id FROM messages WHERE created_at < ? AND NOT EXISTS
+		(SELECT 1 FROM remote_messages rm WHERE rm.local_id = messages.id AND rm.remote_seq IS NULL)`
+	if _, err := tx.Exec(
+		"DELETE FROM idempotency WHERE message_id IN ("+eligible+")", cutoff); err != nil {
 		return fmt.Errorf("prune idempotency: %w", err)
 	}
-	resMarks, err := db.Exec(
-		"DELETE FROM marks WHERE message_id IN (SELECT id FROM messages WHERE created_at < ?)", cutoff)
+	resMarks, err := tx.Exec(
+		"DELETE FROM marks WHERE message_id IN ("+eligible+")", cutoff)
 	if err != nil {
 		return fmt.Errorf("prune marks: %w", err)
 	}
-	resMsgs, err := db.Exec("DELETE FROM messages WHERE created_at < ?", cutoff)
+	resMsgs, err := tx.Exec("DELETE FROM messages WHERE id IN ("+eligible+")", cutoff)
 	if err != nil {
 		return fmt.Errorf("prune messages: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 	nMsgs, _ := resMsgs.RowsAffected()
 	nMarks, _ := resMarks.RowsAffected()

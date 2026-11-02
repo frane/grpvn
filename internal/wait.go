@@ -42,8 +42,19 @@ func Wait(ctx context.Context, w io.Writer, db *sql.DB, load func() (*State, err
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	prev := int64(-1) // sentinel: data_version is never negative, so the first check always runs
+	var seenSeq int64 = -1
 	first := true
+	var lastSync time.Time
 	for {
+		changed := false
+		// Establish the cached baseline before network work. A message that
+		// arrives during the first HTTP request is a new local commit, not
+		// pre-existing chatter to suppress on this wait's first check.
+		if !first && time.Since(lastSync) >= time.Second {
+			stats, _ := SyncAvailable(ctx, db)
+			changed = stats.Pulled > 0
+			lastSync = time.Now()
+		}
 		var dv int64
 		if err := db.QueryRowContext(ctx, "PRAGMA data_version").Scan(&dv); err != nil {
 			if ctx.Err() != nil {
@@ -51,8 +62,26 @@ func Wait(ctx context.Context, w io.Writer, db *sql.DB, load func() (*State, err
 			}
 			return 0, err
 		}
-		if dv != prev {
+		if dv != prev || changed {
 			prev = dv
+			// Daemon heartbeats, sync status, and cursor changes also commit.
+			// Only new messages may wake a re-armed waiter on old chatter.
+			var latest int64
+			if err := db.QueryRowContext(ctx, "SELECT COALESCE(MAX(seq), 0) FROM messages").Scan(&latest); err != nil {
+				if ctx.Err() != nil {
+					return 2, nil
+				}
+				return 0, err
+			}
+			if latest <= seenSeq {
+				select {
+				case <-ctx.Done():
+					return 2, nil
+				case <-ticker.C:
+					continue
+				}
+			}
+			seenSeq = latest
 			st, err := load()
 			if err != nil {
 				return 0, err
