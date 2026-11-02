@@ -124,8 +124,9 @@ func CoordinatorHandler(db *sql.DB, options CoordinatorOptions) (http.Handler, e
 		writeJSON(w, http.StatusOK, serverInfo{syncProtocol, id})
 	})
 	mux.HandleFunc("GET /v1/channels", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.QueryContext(r.Context(), `SELECT DISTINCT target FROM messages m WHERE target LIKE '#%'
-			AND NOT EXISTS (SELECT 1 FROM remote_messages rm WHERE rm.local_id = m.id) ORDER BY target`)
+		rows, err := db.QueryContext(r.Context(), `SELECT target FROM messages m WHERE target LIKE '#%'
+			AND NOT EXISTS (SELECT 1 FROM remote_messages rm WHERE rm.local_id = m.id)
+			UNION SELECT channel FROM permissions WHERE channel LIKE '#%' ORDER BY target`)
 		if err != nil {
 			apiError(w, http.StatusInternalServerError, "cannot list channels")
 			return
@@ -236,7 +237,7 @@ func CoordinatorHandler(db *sql.DB, options CoordinatorOptions) (http.Handler, e
 			return
 		}
 		principal := requestPrincipal(r)
-		if principal == nil || msg.Sender != principal.Name {
+		if principal == nil || !principalOwnsLocalName(principal, msg.Sender) {
 			apiError(w, 403, "sender must match the registered agent identity")
 			return
 		}
@@ -318,7 +319,13 @@ func acceptAttributedMessage(db *sql.DB, wire wireMessage, principal *Principal)
 		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM remote_messages WHERE local_id = ?)", wire.ID).Scan(&cached); err != nil {
 			return nil, fmt.Errorf("cannot inspect message")
 		}
-		if cached || !sameWire(attributedWire(tx, existing), wire) {
+		previous := attributedWire(tx, existing)
+		if principal != nil {
+			// Registered ownership is stable across a rename; a lost upload
+			// acknowledgement must still replay under its original sender name.
+			previous.Sender = wire.Sender
+		}
+		if cached || !sameWire(previous, wire) {
 			return nil, fmt.Errorf("message ID already belongs to another payload")
 		}
 		if err := tx.QueryRow("SELECT seq FROM messages WHERE id = ?", wire.ID).Scan(&existing.Seq); err != nil {

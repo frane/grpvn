@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-var approvalPage = template.Must(template.New("approval").Parse(`<!doctype html><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>grpvn connection approval</title><style>body{max-width:42rem;margin:4rem auto;padding:1rem;font:18px system-ui;background:#faf9f5;color:#222}code{font-size:1.3em}small{color:#666}</style><body data-request="{{.Request}}" data-ticket="{{.Ticket}}"><h1>Connect {{.Client}} to grpvn</h1><p>This connection needs an administrator's approval.</p><p>Approval code: <code>{{.Code}}</code></p><p>Ask the workspace administrator to review this request with <code>grpvn mb</code>, then grant the agent a name and explicit channel rights with <code>grpvn ap {{.Code}} --name chatgpt --channel '#team' --write</code>.</p><p id="status">Waiting for approval…</p><small>No access is granted by opening this page. This request expires in 10 minutes.</small><script>let delay=2500;async function poll(){try{const q=new URLSearchParams({request:document.body.dataset.request,ticket:document.body.dataset.ticket});const r=await fetch('/oauth/ready?'+q,{cache:'no-store'});const v=await r.json();if(v.redirect){location.replace(v.redirect);return}if(v.error){document.getElementById('status').textContent=v.error;return}delay=Math.min(delay*1.2,10000)}catch{delay=Math.min(delay*2,30000)}setTimeout(poll,delay+Math.random()*500)}poll()</script></body>`))
+var approvalPage = template.Must(template.New("approval").Parse(`<!doctype html><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>grpvn connection approval</title><style>body{max-width:42rem;margin:4rem auto;padding:1rem;font:18px system-ui;background:#faf9f5;color:#222}code{font-size:1.3em}small{color:#666}</style><body data-request="{{.Request}}" data-ticket="{{.Ticket}}"><h1>Connect {{.Client}} to grpvn</h1><p>This connection needs an administrator's approval.</p><p>Agent identity: <code>{{.Name}}</code>. The agent can choose another name after connecting.</p><p>Approval code: <code>{{.Code}}</code></p><p>Ask the workspace administrator to review this request with <code>grpvn mb</code>, then grant explicit channel rights, for example <code>grpvn ap {{.Code}} --channel '#general' --write</code>.</p><p id="status">Waiting for approval…</p><small>No access is granted by opening this page. This request expires in 10 minutes.</small><script>let delay=2500;async function poll(){try{const q=new URLSearchParams({request:document.body.dataset.request,ticket:document.body.dataset.ticket});const r=await fetch('/oauth/ready?'+q,{cache:'no-store'});const v=await r.json();if(v.redirect){location.replace(v.redirect);return}if(v.error){document.getElementById('status').textContent=v.error;return}delay=Math.min(delay*1.2,10000)}catch{delay=Math.min(delay*2,30000)}setTimeout(poll,delay+Math.random()*500)}poll()</script></body>`))
 
 func mountOAuth(mux *http.ServeMux, db *sql.DB, base string) error {
 	base = strings.TrimRight(base, "/")
@@ -96,20 +96,52 @@ func mountOAuth(mux *http.ServeMux, db *sql.DB, base string) error {
 		principalID := credentialHash(secret)[:32]
 		code := strings.ToUpper(id[18:])
 		redirect, _ := url.Parse(q.Get("redirect_uri"))
-		requested, _ := json.Marshal([]string{"oauth:" + scope, "redirect:" + redirect.Host})
+		requested, _ := json.Marshal([]string{"oauth:" + scope, "redirect:" + redirect.Host, "client:" + name})
 		tx, err := beginWrite(db)
 		if err != nil {
 			apiError(w, 500, "cannot create authorization")
 			return
 		}
 		defer tx.Rollback()
-		if _, err := tx.Exec("INSERT INTO principals(id,credential_hash,name,kind,status,approval_code,requested,created_at) VALUES(?,?,?,'agent','pending',?,?,?)", principalID, credentialHash(secret), "ChatGPT: "+name+" @ "+redirect.Host, code, string(requested), time.Now().UnixMilli()); err != nil {
-			apiError(w, 500, "cannot create authorization")
+		browserSecret, browserHash, appKey, err := browserProfile(r, name, q.Get("redirect_uri"))
+		if err != nil {
+			apiError(w, 500, "cannot remember profile")
 			return
+		}
+		profile, err := existingOAuthProfile(tx, browserHash, appKey)
+		if err != nil {
+			apiError(w, 500, "cannot find profile")
+			return
+		}
+		agentName := ""
+		if profile != nil {
+			if profile.Status == "revoked" {
+				oauthError(w, "access_denied")
+				return
+			}
+			principalID, agentName = profile.ID, profile.Name
+		} else {
+			agentName, err = generatedPrincipalName(tx)
+			if err != nil {
+				apiError(w, 500, "cannot assign identity")
+				return
+			}
+			if _, err := tx.Exec("INSERT INTO principals(id,credential_hash,name,kind,status,approval_code,requested,created_at) VALUES(?,?,?,'agent','pending',?,?,?)", principalID, credentialHash(secret), agentName, code, string(requested), time.Now().UnixMilli()); err != nil {
+				apiError(w, 500, "cannot create authorization")
+				return
+			}
+			if _, err := tx.Exec("INSERT INTO oauth_profiles(browser_hash,app_key,principal_id) VALUES(?,?,?)", browserHash, appKey, principalID); err != nil {
+				apiError(w, 500, "cannot remember profile")
+				return
+			}
 		}
 		authCode := credentialHash("code:" + ticket)
 		if _, err := tx.Exec("INSERT INTO oauth_requests(id,client_id,principal_id,ticket_hash,code_hash,redirect_uri,state,challenge,scope,resource,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)", id, q.Get("client_id"), principalID, credentialHash(ticket), credentialHash(authCode), q.Get("redirect_uri"), q.Get("state"), q.Get("code_challenge"), scope, resource, time.Now().Add(10*time.Minute).UnixMilli()); err != nil {
 			apiError(w, 500, "cannot create authorization")
+			return
+		}
+		if _, err := tx.Exec("INSERT INTO oauth_request_approvals(request_id,approval_code) VALUES(?,?)", id, code); err != nil {
+			apiError(w, 500, "cannot create approval")
 			return
 		}
 		if err := tx.Commit(); err != nil {
@@ -119,19 +151,21 @@ func mountOAuth(mux *http.ServeMux, db *sql.DB, base string) error {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		_ = approvalPage.Execute(w, map[string]string{"Request": id, "Ticket": ticket, "Client": name, "Code": code})
+		http.SetCookie(w, &http.Cookie{Name: "grpvn_profile", Value: browserSecret, Path: "/oauth", Secure: u.Scheme == "https", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 365 * 24 * 60 * 60})
+		_ = approvalPage.Execute(w, map[string]string{"Request": id, "Ticket": ticket, "Client": name, "Code": code, "Name": agentName})
 	})
 	mux.HandleFunc("GET /oauth/ready", func(w http.ResponseWriter, r *http.Request) {
 		var ticketHash, redirect, state, status string
 		var expires int64
 		var consumed bool
-		err := db.QueryRow("SELECT o.ticket_hash,o.redirect_uri,o.state,p.status,o.expires_at,o.consumed FROM oauth_requests o JOIN principals p ON p.id=o.principal_id WHERE o.id=?", r.URL.Query().Get("request")).Scan(&ticketHash, &redirect, &state, &status, &expires, &consumed)
+		var approved bool
+		err := db.QueryRow("SELECT o.ticket_hash,o.redirect_uri,o.state,p.status,o.expires_at,o.consumed,COALESCE(a.approved,1) FROM oauth_requests o JOIN principals p ON p.id=o.principal_id LEFT JOIN oauth_request_approvals a ON a.request_id=o.id WHERE o.id=?", r.URL.Query().Get("request")).Scan(&ticketHash, &redirect, &state, &status, &expires, &consumed, &approved)
 		ticket := r.URL.Query().Get("ticket")
 		if err != nil || credentialHash(ticket) != ticketHash || expires <= time.Now().UnixMilli() || consumed {
 			writeJSON(w, 400, map[string]string{"error": "Authorization request is invalid or expired."})
 			return
 		}
-		if status != "active" && status != "revoked" {
+		if status != "revoked" && (status != "active" || !approved) {
 			writeJSON(w, 200, map[string]string{"status": "pending"})
 			return
 		}
@@ -170,10 +204,11 @@ func mountOAuth(mux *http.ServeMux, db *sql.DB, base string) error {
 			var client, redirect, challenge, target string
 			var expires int64
 			var consumed bool
-			err := tx.QueryRow("SELECT client_id,principal_id,redirect_uri,challenge,scope,resource,expires_at,consumed FROM oauth_requests WHERE code_hash=?", credentialHash(f.Get("code"))).Scan(&client, &principalID, &redirect, &challenge, &scope, &target, &expires, &consumed)
+			var approved bool
+			err := tx.QueryRow("SELECT o.client_id,o.principal_id,o.redirect_uri,o.challenge,o.scope,o.resource,o.expires_at,o.consumed,COALESCE(a.approved,1) FROM oauth_requests o LEFT JOIN oauth_request_approvals a ON a.request_id=o.id WHERE o.code_hash=?", credentialHash(f.Get("code"))).Scan(&client, &principalID, &redirect, &challenge, &scope, &target, &expires, &consumed, &approved)
 			verifier := f.Get("code_verifier")
 			sum := sha256.Sum256([]byte(verifier))
-			if err != nil || consumed || expires <= time.Now().UnixMilli() || client != f.Get("client_id") || redirect != f.Get("redirect_uri") || len(verifier) < 43 || len(verifier) > 128 || base64.RawURLEncoding.EncodeToString(sum[:]) != challenge || target != resource {
+			if err != nil || !approved || consumed || expires <= time.Now().UnixMilli() || client != f.Get("client_id") || redirect != f.Get("redirect_uri") || len(verifier) < 43 || len(verifier) > 128 || base64.RawURLEncoding.EncodeToString(sum[:]) != challenge || target != resource {
 				oauthError(w, "invalid_grant")
 				return
 			}
@@ -213,6 +248,10 @@ func mountOAuth(mux *http.ServeMux, db *sql.DB, base string) error {
 			return
 		}
 		if _, err := tx.Exec("UPDATE principals SET credential_hash=? WHERE id=?", credentialHash(access), principalID); err != nil {
+			apiError(w, 500, "cannot issue token")
+			return
+		}
+		if _, err := tx.Exec("INSERT INTO oauth_credentials(credential_hash,principal_id) VALUES(?,?)", credentialHash(access), principalID); err != nil {
 			apiError(w, 500, "cannot issue token")
 			return
 		}

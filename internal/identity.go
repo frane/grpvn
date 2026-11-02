@@ -20,7 +20,10 @@ import (
 // attempts (a host would need dozens of identities to get there) the last
 // candidate wins.
 func GenerateIdentity() (string, error) {
-	used := hostUsedWords()
+	return generateIdentity(hostUsedWords())
+}
+
+func generateIdentity(used map[string]bool) (string, error) {
 	var name string
 	for i := 0; i < 40; i++ {
 		var err error

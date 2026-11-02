@@ -26,6 +26,7 @@ type Principal struct {
 	grants       map[string][2]bool
 	parent       *Principal
 	scopes       map[string]bool
+	aliases      map[string]bool
 }
 type principalContextKey struct{}
 type registrationRequest struct {
@@ -74,6 +75,9 @@ func authenticateMember(db *sql.DB, r *http.Request) (*Principal, error) {
 		return nil, fmt.Errorf("invalid authorization")
 	}
 	p, err := findPrincipal(db, "credential_hash = ?", credentialHash(secret))
+	if errors.Is(err, sql.ErrNoRows) {
+		p, err = findPrincipal(db, "id = (SELECT principal_id FROM oauth_credentials WHERE credential_hash=?)", credentialHash(secret))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("unregistered credential")
 	}
@@ -121,6 +125,24 @@ func cachePrincipal(db dbtx, p *Principal) error {
 	}
 	err = rows.Err()
 	rows.Close()
+	if err != nil {
+		return err
+	}
+	aliases, err := db.Query("SELECT address FROM principal_aliases WHERE principal_id=?", p.ID)
+	if err != nil {
+		return err
+	}
+	p.aliases = map[string]bool{}
+	for aliases.Next() {
+		var address string
+		if err := aliases.Scan(&address); err != nil {
+			aliases.Close()
+			return err
+		}
+		p.aliases[address] = true
+	}
+	err = aliases.Err()
+	aliases.Close()
 	if err != nil {
 		return err
 	}
@@ -241,7 +263,10 @@ func registerMember(db *sql.DB, access *channelAccess, request registrationReque
 		if parent == nil {
 			return existing, tx.Commit()
 		}
-		if existing.ParentID != parent.ID || existing.Name != request.Name {
+		if err := cachePrincipal(tx, existing); err != nil {
+			return nil, err
+		}
+		if existing.ParentID != parent.ID || (request.Name != "" && !principalOwnsLocalName(existing, request.Name)) {
 			return nil, fmt.Errorf("agent identity belongs to a different owner or name")
 		}
 	}
@@ -261,8 +286,22 @@ func registerMember(db *sql.DB, access *channelAccess, request registrationReque
 				return nil, fmt.Errorf("owner has no access to %s", ch)
 			}
 		}
-		if request.Name == "" {
-			return nil, fmt.Errorf("agent name is required")
+		if p.Name == "" {
+			p.Name, err = generatedPrincipalName(tx)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if strings.ContainsAny(p.Name, " \t\r\n\x00@/~#") {
+			return nil, fmt.Errorf("invalid agent name")
+		}
+		address := registeredSender(p.Name, parent.Name, parent.ID)
+		var taken bool
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM principals WHERE kind='agent' AND parent_id=? AND name=? AND id<>?) OR EXISTS(SELECT 1 FROM principal_aliases WHERE address=? AND principal_id<>?)`, parent.ID, p.Name, p.ID, address, p.ID).Scan(&taken); err != nil {
+			return nil, err
+		}
+		if taken {
+			return nil, fmt.Errorf("that agent name is already assigned")
 		}
 		grants, write = append([]string{}, request.Channels...), true
 		rows, err := tx.Query("SELECT channel FROM permissions WHERE principal_id=?", parent.ID)
@@ -372,7 +411,7 @@ func enrollmentHandler(db *sql.DB, access *channelAccess, agent bool) http.Handl
 	}
 }
 
-func ApproveMember(db *sql.DB, code, name string, channels []string, write bool) error {
+func ApproveMember(db *sql.DB, code, name string, channels []string, write bool, profile ...string) error {
 	if len(channels) == 0 {
 		return fmt.Errorf("approval needs explicit --channel grants")
 	}
@@ -381,9 +420,38 @@ func ApproveMember(db *sql.DB, code, name string, channels []string, write bool)
 		return err
 	}
 	defer tx.Rollback()
-	p, err := findPrincipal(tx, "approval_code = ?", strings.ToUpper(code))
+	var requestID, profileID string
+	err = tx.QueryRow("SELECT a.request_id,o.principal_id FROM oauth_request_approvals a JOIN oauth_requests o ON o.id=a.request_id WHERE a.approval_code=?", strings.ToUpper(code)).Scan(&requestID, &profileID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	var p *Principal
+	if requestID != "" {
+		p, err = findPrincipal(tx, "id=?", profileID)
+	} else {
+		p, err = findPrincipal(tx, "approval_code = ?", strings.ToUpper(code))
+	}
 	if err != nil {
 		return fmt.Errorf("unknown approval code")
+	}
+	if len(profile) > 0 && profile[0] != "" {
+		if requestID == "" {
+			return fmt.Errorf("--profile requires an OAuth connection approval code")
+		}
+		existing, err := findPrincipal(tx, "id=?", profile[0])
+		if err != nil || existing.Kind != "agent" || existing.Status != "active" {
+			return fmt.Errorf("--profile must name an active agent ID")
+		}
+		if _, err := tx.Exec("UPDATE oauth_profiles SET principal_id=? WHERE principal_id=?", existing.ID, p.ID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("UPDATE oauth_requests SET principal_id=? WHERE id=?", existing.ID, requestID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("DELETE FROM principals WHERE id=? AND status='pending' AND NOT EXISTS(SELECT 1 FROM oauth_requests WHERE principal_id=?)", p.ID, p.ID); err != nil {
+			return err
+		}
+		p = existing
 	}
 	if name == "" {
 		name = p.Name
@@ -403,6 +471,14 @@ func ApproveMember(db *sql.DB, code, name string, channels []string, write bool)
 			return fmt.Errorf("agent identity name is already registered")
 		}
 	}
+	if p.Kind == "agent" {
+		if err := cachePrincipal(tx, p); err != nil {
+			return err
+		}
+		if err := renamePrincipal(tx, p, name); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.Exec("UPDATE principals SET status='active',name=? WHERE id=?", name, p.ID); err != nil {
 		return err
 	}
@@ -418,6 +494,11 @@ func ApproveMember(db *sql.DB, code, name string, channels []string, write bool)
 	}
 	if _, err := tx.Exec("INSERT INTO principal_approvals(principal_id,approved) VALUES(?,1) ON CONFLICT(principal_id) DO UPDATE SET approved=1", p.ID); err != nil {
 		return err
+	}
+	if requestID != "" {
+		if _, err := tx.Exec("UPDATE oauth_request_approvals SET approved=1 WHERE request_id=?", requestID); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

@@ -319,8 +319,18 @@ func sendOnce(db dbtx, sender string, targetArg string, bodyArg string, defaultC
 	if err != nil {
 		return nil, err
 	}
-	if parent != nil && strings.HasPrefix(parent.Target, "@") && parent.Sender != sender {
-		target = "@" + parent.Sender
+	if parent != nil && strings.HasPrefix(parent.Target, "@") {
+		sameSender, err := samePrincipalAddress(db, parent.Sender, sender)
+		if err != nil {
+			return nil, err
+		}
+		if !sameSender {
+			target = "@" + parent.Sender
+		}
+	}
+	target, err = canonicalDMTarget(db, target)
+	if err != nil {
+		return nil, err
 	}
 	m := NewMessage(sender, target, []byte(bodyArg))
 	if parent != nil {

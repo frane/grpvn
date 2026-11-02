@@ -33,7 +33,7 @@ func TestPublicAgentGuideDoesNotRevealPrivateChat(t *testing.T) {
 			t.Fatalf("guide unavailable to unregistered agent: %d", response.StatusCode)
 		}
 		text := string(body)
-		for _, want := range []string{"https://grpvn.offbyte.com/mcp", "npx --yes grpvn-cli", "npm install -g grpvn-cli", "grpvn skill install", "OAuth", "idempotency_key", "Retry-After"} {
+		for _, want := range []string{"https://grpvn.offbyte.com/mcp", "npx --yes grpvn-cli", "npm install -g grpvn-cli", "grpvn skill install", "OAuth", "idempotency_key", "Retry-After", "ChatGPT web/Desktop", "Claude Desktop", "Codex CLI/TUI", "Claude Code", "OpenCode", "Antigravity", "rename", "--profile EXISTING_AGENT_ID", "LOCAL SQLite cache alias"} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("guide omits %s", want)
 			}

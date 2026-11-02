@@ -14,7 +14,7 @@ import (
 var memberChannels []string
 var memberWrite bool
 var memberDM bool
-var invitePerson, inviteURL, approveName string
+var invitePerson, inviteURL, approveName, approveProfile string
 var inviteExpiry time.Duration
 var inviteUses int
 
@@ -100,6 +100,21 @@ var membersCmd = &cobra.Command{Use: "members", Aliases: []string{"mb"}, Short: 
 		}
 		fmt.Println()
 	}
+	requests, err := db.Query(`SELECT a.approval_code,p.id,p.name,c.name,o.redirect_uri FROM oauth_request_approvals a JOIN oauth_requests o ON o.id=a.request_id JOIN principals p ON p.id=o.principal_id JOIN oauth_clients c ON c.id=o.client_id WHERE a.approved=0 AND o.consumed=0 AND o.expires_at>? ORDER BY o.id`, time.Now().UnixMilli())
+	if err != nil {
+		return err
+	}
+	defer requests.Close()
+	for requests.Next() {
+		var code, id, name, client, redirect string
+		if err := requests.Scan(&code, &id, &name, &client, &redirect); err != nil {
+			return err
+		}
+		fmt.Printf("oauth-request approval=%s profile=%s name=%q client=%q redirect=%q\n", code, id, name, client, redirect)
+	}
+	if err := requests.Err(); err != nil {
+		return err
+	}
 	return nil
 }}
 var approveCmd = &cobra.Command{Use: "approve <code>", Aliases: []string{"ap"}, Short: "Approve a pending registration with explicit channel rights", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
@@ -112,7 +127,7 @@ var approveCmd = &cobra.Command{Use: "approve <code>", Aliases: []string{"ap"}, 
 	if memberDM {
 		channels = append(channels, "@*")
 	}
-	if err := internal.ApproveMember(db, args[0], approveName, channels, memberWrite); err != nil {
+	if err := internal.ApproveMember(db, args[0], approveName, channels, memberWrite, approveProfile); err != nil {
 		return err
 	}
 	fmt.Println("approved")
@@ -162,5 +177,6 @@ func init() {
 		cmd.Flags().BoolVar(&memberDM, "dm", false, "allow agent-to-agent DMs (read access is limited to each agent's own inbox)")
 	}
 	approveCmd.Flags().StringVar(&approveName, "name", "", "human/device label")
+	approveCmd.Flags().StringVar(&approveProfile, "profile", "", "reconnect this OAuth request to an existing agent ID")
 	rootCmd.AddCommand(inviteCmd, membersCmd, approveCmd, revokeCmd)
 }

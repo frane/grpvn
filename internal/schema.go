@@ -143,6 +143,12 @@ CREATE TABLE IF NOT EXISTS permissions (
     can_write INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (principal_id, channel)
 );
+-- Names may change; old addresses remain bound to the same identity.
+CREATE TABLE IF NOT EXISTS principal_aliases (
+    address TEXT PRIMARY KEY,
+    principal_id TEXT NOT NULL REFERENCES principals(id)
+);
+CREATE INDEX IF NOT EXISTS idx_principal_aliases_owner ON principal_aliases(principal_id);
 CREATE TABLE IF NOT EXISTS invites (
     id TEXT PRIMARY KEY,
     secret_hash TEXT NOT NULL UNIQUE,
@@ -255,6 +261,24 @@ CREATE TABLE IF NOT EXISTS oauth_refresh (
 CREATE TABLE IF NOT EXISTS oauth_access (
     credential_hash TEXT PRIMARY KEY, scope TEXT NOT NULL, resource TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS oauth_credentials (
+    credential_hash TEXT PRIMARY KEY,
+    principal_id TEXT NOT NULL REFERENCES principals(id)
+);
+CREATE TABLE IF NOT EXISTS oauth_profiles (
+    browser_hash TEXT NOT NULL,
+    app_key TEXT NOT NULL,
+    principal_id TEXT NOT NULL REFERENCES principals(id),
+    PRIMARY KEY(browser_hash,app_key)
+);
+CREATE TABLE IF NOT EXISTS oauth_request_approvals (
+    request_id TEXT PRIMARY KEY REFERENCES oauth_requests(id),
+    approval_code TEXT NOT NULL UNIQUE,
+    approved INTEGER NOT NULL DEFAULT 0
+);
+-- Keep already-issued connections working when a profile reconnects.
+INSERT OR IGNORE INTO oauth_credentials(credential_hash,principal_id)
+ SELECT p.credential_hash,p.id FROM principals p JOIN oauth_access a ON a.credential_hash=p.credential_hash;
 CREATE TABLE IF NOT EXISTS credential_expiry (
     credential_hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL
 );
