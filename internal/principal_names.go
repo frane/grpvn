@@ -7,7 +7,7 @@ import (
 )
 
 func generatedPrincipalName(db dbtx) (string, error) {
-	rows, err := db.Query("SELECT name FROM principals UNION SELECT address FROM principal_aliases UNION SELECT sender FROM messages")
+	rows, err := db.Query("SELECT name FROM principals UNION SELECT address FROM principal_aliases UNION SELECT sender FROM messages UNION SELECT substr(target,2) FROM messages WHERE target LIKE '@%' UNION SELECT agent_name FROM agent_sessions")
 	if err != nil {
 		return "", err
 	}
@@ -108,6 +108,16 @@ func renamePrincipal(tx dbtx, p *Principal, name string) error {
 	}
 	if taken {
 		return fmt.Errorf("that name is already assigned; choose another")
+	}
+	if address != oldAddress && !p.aliases[address] {
+		// Trusted local identities may predate server registration. A remote
+		// rename must not claim their inboxes or runtime activation owners.
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM messages WHERE sender=? OR target=?) OR EXISTS(SELECT 1 FROM agent_sessions WHERE agent_name=?)`, address, "@"+address, address).Scan(&taken); err != nil {
+			return err
+		}
+		if taken {
+			return fmt.Errorf("that name is already used by a local identity; choose another")
+		}
 	}
 	for _, alias := range []string{oldAddress, address} {
 		if _, err := tx.Exec("INSERT INTO principal_aliases(address,principal_id) VALUES(?,?) ON CONFLICT(address) DO NOTHING", alias, p.ID); err != nil {

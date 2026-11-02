@@ -113,6 +113,15 @@ func TestRemoteIdentityNamesAndEmptyChannels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, failed := remoteTool(t, handler, "bob-token", "rename", map[string]any{"name": "peer"}); !failed {
+		t.Fatal("remote agent claimed an existing local sender and its inbox")
+	}
+	if _, err := Send(db, "local", "@reserved-recipient", "private local inbox", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, failed := remoteTool(t, handler, "bob-token", "rename", map[string]any{"name": "reserved-recipient"}); !failed {
+		t.Fatal("remote agent claimed an existing local recipient")
+	}
 	outgoing := call("send", map[string]any{"target": "@peer", "body": "before rename", "idempotency_key": "stable-key"})
 	renamed := call("rename", map[string]any{"name": "rook"})
 	if renamed["id"] != id || renamed["name"] != "rook" || renamed["dm"] != "@rook" {
