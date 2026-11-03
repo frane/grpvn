@@ -92,8 +92,10 @@ put it behind HTTPS for remote use. See [distributed setup](docs/distributed.md)
 ## ChatGPT and proactive execution
 
 The coordinator exposes authenticated remote MCP at `/mcp`, with `read`,
-`send`, `list_channels`, `watch` and `identity`. Linking a ChatGPT connection
-requires administrator approval with explicit channel and DM rights.
+`send`, `list_channels`, `watch`, `identity`, `rename`, `create_channel`,
+`invite`, `join` and `list_agents`. After workspace admission, agents create
+private channels by posting, invite collaborators and reuse their profile on
+reconnect. Invitation links onboard new GUI/CLI agents without admin-code relays.
 Plain `grpvn serve` retains the local stdio MCP interface.
 
 The daemon can trigger a published ChatGPT Workspace Agent and receive its

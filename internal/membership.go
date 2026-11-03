@@ -213,7 +213,7 @@ func localCredential(db *sql.DB, serverID, agent string) (credentialRecord, erro
 	return c, err
 }
 
-func CreateInvite(db *sql.DB, person string, channels []string, write bool, expires time.Duration, uses int) (string, string, error) {
+func CreateInvite(db dbtx, person string, channels []string, write bool, expires time.Duration, uses int) (string, string, error) {
 	if person == "" || len(person) > 100 || strings.ContainsAny(person, "\r\n\x00") {
 		return "", "", fmt.Errorf("pass a person or device label")
 	}
@@ -281,9 +281,14 @@ func registerMember(db *sql.DB, access *channelAccess, request registrationReque
 			return nil, fmt.Errorf("only an active member can register an agent")
 		}
 		p.Kind, p.ParentID, p.Status = "agent", parent.ID, "active"
+		prospective := map[string]bool{}
 		for _, ch := range request.Channels {
-			if !access.isServed(ch) || (!access.isOpen(ch) && !principalPermission(tx, parent, ch, false)) {
-				return nil, fmt.Errorf("owner has no access to %s", ch)
+			if !access.isServed(ch) || (!access.isOpenWith(tx, ch) && !principalPermission(tx, parent, ch, false)) {
+				if prospectiveChannel(tx, access, parent, ch) {
+					prospective[ch] = true
+				} else {
+					return nil, fmt.Errorf("owner has no access to %s", ch)
+				}
 			}
 		}
 		if p.Name == "" {
@@ -303,7 +308,12 @@ func registerMember(db *sql.DB, access *channelAccess, request registrationReque
 		if taken {
 			return nil, fmt.Errorf("that agent name is already assigned")
 		}
-		grants, write = append([]string{}, request.Channels...), true
+		write = true
+		for _, ch := range request.Channels {
+			if !prospective[ch] {
+				grants = append(grants, ch)
+			}
+		}
 		rows, err := tx.Query("SELECT channel FROM permissions WHERE principal_id=?", parent.ID)
 		if err != nil {
 			return nil, err
@@ -333,18 +343,31 @@ func registerMember(db *sql.DB, access *channelAccess, request registrationReque
 		if err := json.Unmarshal([]byte(encoded), &grants); err != nil {
 			return nil, err
 		}
+		var invitationID string
+		if err := tx.QueryRow("SELECT id FROM invites WHERE secret_hash=?", credentialHash(request.Invite)).Scan(&invitationID); err != nil {
+			return nil, err
+		}
+		if err := validateInvitationIssuer(tx, access, invitationID, grants, write); err != nil {
+			return nil, err
+		}
 		p.Name, p.Status = label, "active"
 		if _, err := tx.Exec("UPDATE invites SET uses_left = uses_left - 1 WHERE secret_hash = ?", credentialHash(request.Invite)); err != nil {
 			return nil, err
 		}
-	} else if access.hasAnonymousAccess() {
+	} else if access.hasAnonymousAccessWith(tx) {
 		p.Name, p.Status = "guest-"+p.ID[:8], "active"
 		for _, ch := range request.Channels {
-			if access.isServed(ch) && access.isOpen(ch) {
+			if access.isServed(ch) && access.isOpenWith(tx, ch) {
 				grants = append(grants, ch)
 			}
 		}
 		write = true
+	}
+	if p.Name == "" {
+		p.Name, err = generatedPrincipalName(tx)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if existing == nil {
 		encoded, _ := json.Marshal(request.Channels)
@@ -357,7 +380,7 @@ func registerMember(db *sql.DB, access *channelAccess, request registrationReque
 	}
 	for _, ch := range grants {
 		canWrite := write
-		if parent != nil && !access.isOpen(ch) {
+		if parent != nil && !access.isOpenWith(tx, ch) {
 			canWrite = principalPermission(tx, parent, ch, true)
 		}
 		if _, err := tx.Exec("INSERT INTO permissions (principal_id,channel,can_read,can_write) VALUES (?,?,1,?) ON CONFLICT(principal_id,channel) DO UPDATE SET can_read=1,can_write=excluded.can_write", p.ID, ch, canWrite); err != nil {

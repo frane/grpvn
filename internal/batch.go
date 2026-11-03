@@ -65,6 +65,10 @@ func batchHandler(db *sql.DB, access *channelAccess, serverID string) http.Handl
 				continue
 			}
 			if !access.canAccess(r, position.Channel) {
+				if prospectiveChannel(db, access, requestPrincipal(r), position.Channel) {
+					result.Pages[position.Channel] = messagePage{Messages: []wireMessage{}, Cursor: position.After}
+					continue
+				}
 				result.Errors = append(result.Errors, syncChannelError{position.Channel, 401, "private channel requires authorization"})
 				continue
 			}

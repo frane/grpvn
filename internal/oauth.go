@@ -12,13 +12,14 @@ import (
 	"time"
 )
 
-func mountOAuth(mux *http.ServeMux, db *sql.DB, base string) error {
+func mountOAuth(mux *http.ServeMux, db *sql.DB, base string, access *channelAccess) error {
 	base = strings.TrimRight(base, "/")
 	u, err := url.Parse(base)
 	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") || (u.Scheme != "https" && !(u.Scheme == "http" && (u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1"))) {
 		return fmt.Errorf("--public-url needs a root HTTPS origin (HTTP is supported only on loopback)")
 	}
 	mountOAuthWaitingPage(mux, db, base)
+	mountBrowserInvitations(mux, db, base)
 	resource := base + "/mcp"
 	mux.HandleFunc("GET /.well-known/oauth-protected-resource", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"resource": resource, "authorization_servers": []string{base}, "scopes_supported": []string{"grpvn.read", "grpvn.write"}})
@@ -112,6 +113,7 @@ func mountOAuth(mux *http.ServeMux, db *sql.DB, base string) error {
 			return
 		}
 		agentName := ""
+		alreadyActive := profile != nil && profile.Status == "active"
 		if profile != nil {
 			if profile.Status == "revoked" {
 				oauthError(w, "access_denied")
@@ -133,12 +135,35 @@ func mountOAuth(mux *http.ServeMux, db *sql.DB, base string) error {
 				return
 			}
 		}
+		invited := false
+		if invitation, err := r.Cookie("grpvn_invite"); err == nil {
+			if _, err := tx.Exec("SAVEPOINT accept_invitation"); err != nil {
+				apiError(w, 500, "cannot accept invitation")
+				return
+			}
+			if err := redeemOAuthInvitation(tx, access, principalID, invitation.Value); err != nil {
+				if _, rollbackErr := tx.Exec("ROLLBACK TO accept_invitation"); rollbackErr != nil {
+					apiError(w, 500, "cannot accept invitation")
+					return
+				}
+				if !alreadyActive {
+					oauthError(w, "invalid_invitation")
+					return
+				}
+			} else {
+				invited = !alreadyActive
+			}
+			if _, err := tx.Exec("RELEASE accept_invitation"); err != nil {
+				apiError(w, 500, "cannot accept invitation")
+				return
+			}
+		}
 		authCode := credentialHash("code:" + ticket)
 		if _, err := tx.Exec("INSERT INTO oauth_requests(id,client_id,principal_id,ticket_hash,code_hash,redirect_uri,state,challenge,scope,resource,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)", id, q.Get("client_id"), principalID, credentialHash(ticket), credentialHash(authCode), q.Get("redirect_uri"), q.Get("state"), q.Get("code_challenge"), scope, resource, time.Now().Add(10*time.Minute).UnixMilli()); err != nil {
 			apiError(w, 500, "cannot create authorization")
 			return
 		}
-		if _, err := tx.Exec("INSERT INTO oauth_request_approvals(request_id,approval_code) VALUES(?,?)", id, code); err != nil {
+		if _, err := tx.Exec("INSERT INTO oauth_request_approvals(request_id,approval_code,approved) VALUES(?,?,?)", id, code, invited); err != nil {
 			apiError(w, 500, "cannot create approval")
 			return
 		}
@@ -149,6 +174,9 @@ func mountOAuth(mux *http.ServeMux, db *sql.DB, base string) error {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		http.SetCookie(w, &http.Cookie{Name: "grpvn_profile", Value: browserSecret, Path: "/oauth", Secure: u.Scheme == "https", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 365 * 24 * 60 * 60})
+		if _, err := r.Cookie("grpvn_invite"); err == nil {
+			http.SetCookie(w, &http.Cookie{Name: "grpvn_invite", Value: "", Path: "/oauth", Secure: u.Scheme == "https", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: -1})
+		}
 		http.Redirect(w, r, oauthWaitURL(id, ticket), http.StatusSeeOther)
 	})
 	mux.HandleFunc("GET /oauth/ready", func(w http.ResponseWriter, r *http.Request) {

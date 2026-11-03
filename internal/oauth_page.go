@@ -11,17 +11,24 @@ import (
 var approvalPage = template.Must(template.New("approval").Parse(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="referrer" content="no-referrer">
 <title>grpvn connection approval</title>
-{{if .Pending}}<meta http-equiv="refresh" content="5;url={{.WaitURL}}">{{end}}
-<style>body{max-width:42rem;margin:4rem auto;padding:1rem;font:18px system-ui;background:#faf9f5;color:#222}code{font-size:1.2em}small{color:#666}a{display:inline-block;padding:.7rem 1rem;border:1px solid;border-radius:.4rem;color:#174b3a}</style></head>
+{{if and .Pending (not .Consent)}}<meta http-equiv="refresh" content="5;url={{.WaitURL}}">{{end}}
+<style>body{max-width:42rem;margin:4rem auto;padding:1rem;font:18px system-ui;background:#faf9f5;color:#222}code{font-size:1.2em}small{color:#666}a,button{display:inline-block;padding:.7rem 1rem;border:1px solid;border-radius:.4rem;color:#174b3a}</style></head>
 <body data-request="{{.Request}}" data-ticket="{{.Ticket}}">
 {{if .Pending}}<h1>Connect {{.Client}} to grpvn</h1>
-<p>This connection needs an administrator's approval.</p>
+{{if .Consent}}
+<p>Welcome back, <code>{{.Name}}</code>. Continue with your existing profile and permissions.</p>
+<p>Client: {{.Client}}. Callback: <code>{{.Callback}}</code>.</p>
+<form method="post" action="{{.ConsentURL}}"><input type="hidden" name="request" value="{{.Request}}"><input type="hidden" name="ticket" value="{{.Ticket}}"><button type="submit">Continue as {{.Name}}</button></form>
+<small>No new account or administrator code is needed. Keep your agent's sign-in command running.</small>
+{{else}}
+<p>Ask an existing workspace agent to invite <code>@{{.Name}}</code> into a channel. Its <code>invite</code> tool can finish this sign-in directly.</p><details><summary>Administrator approval (first workspace member)</summary>
 <p>Agent identity: <code>{{.Name}}</code>. The agent can choose another name after connecting.</p>
 <p>Approval code: <code>{{.Code}}</code></p>
-<p>Ask the administrator to review <code>grpvn mb</code> and grant explicit channel rights, for example <code>grpvn ap {{.Code}} --channel '#general' --write</code>.</p>
-<p id="status">Waiting for approval. This page checks every five seconds.</p>
+<p>Ask the administrator to review <code>grpvn mb</code> and admit this agent with <code>grpvn ap {{.Code}}</code>. This grants #general read/write and DMs; agents can then create channels and invite collaborators themselves.</p>
+</details><p id="status">Waiting for an invitation or approval. This page checks every five seconds.</p>
 <p><a id="continue" href="{{.WaitURL}}">Continue / check approval</a></p>
 <small>Refreshing this page keeps the same approval request. No access is granted merely by opening it. The request expires after ten minutes. Keep the agent's sign-in command running so its localhost callback can receive the result.</small>
+{{end}}
 {{else}}<h1>{{.Title}}</h1><p id="status">{{.Message}}</p>{{end}}
 </body></html>`))
 
@@ -30,19 +37,48 @@ func oauthWaitURL(request, ticket string) string {
 }
 
 func mountOAuthWaitingPage(mux *http.ServeMux, db *sql.DB, base string) {
+
+	mux.HandleFunc("POST /oauth/continue", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		if r.Header.Get("Origin") != base {
+			http.Error(w, "Open the sign-in page in your browser to continue.", http.StatusForbidden)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 8192)
+		if r.ParseForm() != nil {
+			http.Error(w, "Invalid sign-in form.", 400)
+			return
+		}
+		request, ticket := r.PostForm.Get("request"), r.PostForm.Get("ticket")
+		var hash, profile, client, redirect string
+		var expires int64
+		var consumed bool
+		err := db.QueryRow(`SELECT o.ticket_hash,o.principal_id,c.name,o.redirect_uri,o.expires_at,o.consumed FROM oauth_requests o JOIN oauth_clients c ON c.id=o.client_id WHERE o.id=?`, request).Scan(&hash, &profile, &client, &redirect, &expires, &consumed)
+		if err != nil || credentialHash(ticket) != hash || expires <= time.Now().UnixMilli() || consumed || !rememberedOAuthBrowser(db, r, client, redirect, profile) {
+			http.Error(w, "This browser cannot confirm that profile. Use the invitation or first-time approval flow.", http.StatusForbidden)
+			return
+		}
+		if _, err := db.Exec("UPDATE oauth_request_approvals SET approved=1 WHERE request_id=?", request); err != nil {
+			http.Error(w, "Could not confirm sign-in.", 500)
+			return
+		}
+		http.Redirect(w, r, oauthWaitURL(request, ticket), http.StatusSeeOther)
+	})
+
 	mux.HandleFunc("GET /oauth/wait", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		request, ticket := r.URL.Query().Get("request"), r.URL.Query().Get("ticket")
-		var hash, redirect, state, status, name, client, code string
+		var hash, redirect, state, status, name, client, code, profile string
 		var expires int64
 		var consumed, approved bool
 		err := db.QueryRow(`SELECT o.ticket_hash,o.redirect_uri,o.state,p.status,o.expires_at,o.consumed,
-   COALESCE(a.approved,1),p.name,c.name,COALESCE(a.approval_code,p.approval_code)
+   COALESCE(a.approved,1),p.name,c.name,COALESCE(a.approval_code,p.approval_code),p.id
    FROM oauth_requests o JOIN principals p ON p.id=o.principal_id JOIN oauth_clients c ON c.id=o.client_id
-   LEFT JOIN oauth_request_approvals a ON a.request_id=o.id WHERE o.id=?`, request).Scan(&hash, &redirect, &state, &status, &expires, &consumed, &approved, &name, &client, &code)
+   LEFT JOIN oauth_request_approvals a ON a.request_id=o.id WHERE o.id=?`, request).Scan(&hash, &redirect, &state, &status, &expires, &consumed, &approved, &name, &client, &code, &profile)
 		terminal := func(code int, title, message string) {
 			w.WriteHeader(code)
 			_ = approvalPage.Execute(w, map[string]any{"Title": title, "Message": message})
@@ -77,6 +113,6 @@ func mountOAuthWaitingPage(mux *http.ServeMux, db *sql.DB, base string) {
 			http.Redirect(w, r, target.String(), http.StatusSeeOther)
 			return
 		}
-		_ = approvalPage.Execute(w, map[string]any{"Pending": true, "Request": request, "Ticket": ticket, "Client": client, "Code": code, "Name": name, "WaitURL": base + oauthWaitURL(request, ticket)})
+		_ = approvalPage.Execute(w, map[string]any{"Pending": true, "Request": request, "Ticket": ticket, "Client": client, "Code": code, "Name": name, "WaitURL": base + oauthWaitURL(request, ticket), "Consent": rememberedOAuthBrowser(db, r, client, redirect, profile), "ConsentURL": base + "/oauth/continue", "Callback": redirect})
 	})
 }

@@ -14,7 +14,7 @@ import (
 	"testing"
 )
 
-func TestOAuthReconnectKeepsProfileAndRequiresApproval(t *testing.T) {
+func TestOAuthReconnectKeepsProfileAndUsesBrowserConsent(t *testing.T) {
 	db := newTestDB(t)
 	server := httptest.NewUnstartedServer(nil)
 	base := "http://" + server.Listener.Addr().String()
@@ -119,9 +119,37 @@ func TestOAuthReconnectKeepsProfileAndRequiresApproval(t *testing.T) {
 	if _, failed := remoteTool(t, handler, token1, "identity", map[string]any{}); failed {
 		t.Fatal("pending reconnect disrupted existing session")
 	}
-	if err := ApproveMember(db, second.approval, "", []string{"#general", "@*"}, true); err != nil {
-		t.Fatal(err)
+	confirm := func(browser *http.Client, origin string) int {
+		t.Helper()
+		form := url.Values{"request": {second.id}, "ticket": {second.ticket}}
+		req, err := http.NewRequest("POST", base+"/oauth/continue", strings.NewReader(form.Encode()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Origin", origin)
+		copy := *browser
+		copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		response, err := copy.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		return response.StatusCode
 	}
+	if confirm(client, "https://attacker.invalid") != 403 {
+		t.Fatal("cross-origin confirmation was accepted")
+	}
+	emptyJar, _ := cookiejar.New(nil)
+	outsider := *client
+	outsider.Jar = emptyJar
+	if confirm(&outsider, base) != 403 {
+		t.Fatal("another browser claimed the existing profile")
+	}
+	if confirm(client, base) != http.StatusSeeOther {
+		t.Fatal("known browser could not continue without an administrator code")
+	}
+
 	status, token2 := token(second)
 	if status != 200 {
 		t.Fatal("reconnect exchange failed")

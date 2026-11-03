@@ -58,8 +58,21 @@ func newChannelAccess(options CoordinatorOptions) (*channelAccess, error) {
 func (a *channelAccess) isServed(channel string) bool { return len(a.served) == 0 || a.served[channel] }
 
 func (a *channelAccess) isOpen(channel string) bool {
+	if a.db == nil {
+		return a.isOpenWith(nil, channel)
+	}
+	return a.isOpenWith(a.db, channel)
+}
+
+func (a *channelAccess) isOpenWith(db dbtx, channel string) bool {
 	if open, ok := a.overrides[channel]; ok {
 		return open
+	}
+	if db != nil {
+		var open bool
+		if db.QueryRow("SELECT is_open FROM workspace_channels WHERE channel=?", channel).Scan(&open) == nil {
+			return open
+		}
 	}
 	return a.open
 }
@@ -73,9 +86,16 @@ func (a *channelAccess) canAccess(r *http.Request, channel string) bool {
 }
 
 func (a *channelAccess) hasAnonymousAccess() bool {
+	if a.db == nil {
+		return a.hasAnonymousAccessWith(nil)
+	}
+	return a.hasAnonymousAccessWith(a.db)
+}
+
+func (a *channelAccess) hasAnonymousAccessWith(db dbtx) bool {
 	if len(a.served) > 0 {
 		for channel := range a.served {
-			if a.isOpen(channel) {
+			if a.isOpenWith(db, channel) {
 				return true
 			}
 		}
@@ -87,6 +107,25 @@ func (a *channelAccess) hasAnonymousAccess() bool {
 	for channel, open := range a.overrides {
 		if open && a.isServed(channel) {
 			return true
+		}
+	}
+	if db != nil {
+		rows, err := db.Query("SELECT channel FROM workspace_channels WHERE is_open=1")
+		if err != nil {
+			return false
+		}
+		var channels []string
+		for rows.Next() {
+			var channel string
+			if rows.Scan(&channel) == nil {
+				channels = append(channels, channel)
+			}
+		}
+		rows.Close()
+		for _, channel := range channels {
+			if a.isServed(channel) && a.isOpenWith(db, channel) {
+				return true
+			}
 		}
 	}
 	return false
@@ -108,6 +147,9 @@ func (a *channelAccess) authorize(w http.ResponseWriter, r *http.Request, channe
 		return false
 	}
 	if !a.isOpen(channel) && !principalPermission(a.db, p, channel, write) {
+		if write && ensureSendChannel(a.db, a, p, channel) {
+			return true
+		}
 		if p == nil {
 			authenticationRequired(w)
 		} else {

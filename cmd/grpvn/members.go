@@ -117,7 +117,7 @@ var membersCmd = &cobra.Command{Use: "members", Aliases: []string{"mb"}, Short: 
 	}
 	return nil
 }}
-var approveCmd = &cobra.Command{Use: "approve <code>", Aliases: []string{"ap"}, Short: "Approve a pending registration with explicit channel rights", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+var approveCmd = &cobra.Command{Use: "approve <code>", Aliases: []string{"ap"}, Short: "Admit a workspace member; defaults to #general, DMs and normal collaboration", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 	db, err := internal.OpenDB()
 	if err != nil {
 		return err
@@ -127,10 +127,31 @@ var approveCmd = &cobra.Command{Use: "approve <code>", Aliases: []string{"ap"}, 
 	if memberDM {
 		channels = append(channels, "@*")
 	}
-	if err := internal.ApproveMember(db, args[0], approveName, channels, memberWrite, approveProfile); err != nil {
+	write := memberWrite
+	if !cmd.Flags().Changed("channel") && !cmd.Flags().Changed("write") && !cmd.Flags().Changed("dm") {
+		channels = []string{"#general", "@*"}
+		write = true
+	}
+	if err := internal.ApproveMember(db, args[0], approveName, channels, write, approveProfile); err != nil {
 		return err
 	}
 	fmt.Println("approved")
+	return nil
+}}
+var grantCmd = &cobra.Command{Use: "grant <profile-id>", Aliases: []string{"gr"}, Short: "Grant channel rights to an existing profile; no sign-in code or reconnect needed", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	db, err := internal.OpenDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	channels := append([]string{}, memberChannels...)
+	if memberDM {
+		channels = append(channels, "@*")
+	}
+	if err := internal.GrantWorkspaceChannels(db, args[0], channels, memberWrite); err != nil {
+		return err
+	}
+	fmt.Println("granted; effective immediately")
 	return nil
 }}
 var revokeCmd = &cobra.Command{Use: "revoke <member-or-invite-id>", Aliases: []string{"rv"}, Short: "Revoke a member and its agents, or an invitation", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
@@ -171,12 +192,12 @@ func init() {
 	inviteCmd.Flags().StringVar(&inviteURL, "url", "", "coordinator URL; emit a shareable invite link")
 	inviteCmd.Flags().DurationVar(&inviteExpiry, "expires", 24*time.Hour, "invitation lifetime")
 	inviteCmd.Flags().IntVar(&inviteUses, "uses", 1, "number of device registrations allowed")
-	for _, cmd := range []*cobra.Command{inviteCmd, approveCmd} {
+	for _, cmd := range []*cobra.Command{inviteCmd, approveCmd, grantCmd} {
 		cmd.Flags().StringSliceVar(&memberChannels, "channel", nil, "explicit channel grants (repeat; * means all)")
 		cmd.Flags().BoolVar(&memberWrite, "write", false, "allow posting; default read-only")
 		cmd.Flags().BoolVar(&memberDM, "dm", false, "allow agent-to-agent DMs (read access is limited to each agent's own inbox)")
 	}
 	approveCmd.Flags().StringVar(&approveName, "name", "", "human/device label")
 	approveCmd.Flags().StringVar(&approveProfile, "profile", "", "reconnect this OAuth request to an existing agent ID")
-	rootCmd.AddCommand(inviteCmd, membersCmd, approveCmd, revokeCmd)
+	rootCmd.AddCommand(inviteCmd, membersCmd, approveCmd, revokeCmd, grantCmd)
 }

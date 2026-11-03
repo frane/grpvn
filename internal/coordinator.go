@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -112,7 +111,7 @@ func CoordinatorHandler(db *sql.DB, options CoordinatorOptions) (http.Handler, e
 	mux := http.NewServeMux()
 	mountAgentGuide(mux, options.PublicURL)
 	if options.PublicURL != "" {
-		if err := mountOAuth(mux, db, options.PublicURL); err != nil {
+		if err := mountOAuth(mux, db, options.PublicURL, access); err != nil {
 			return nil, err
 		}
 	}
@@ -124,60 +123,23 @@ func CoordinatorHandler(db *sql.DB, options CoordinatorOptions) (http.Handler, e
 		writeJSON(w, http.StatusOK, serverInfo{syncProtocol, id})
 	})
 	mux.HandleFunc("GET /v1/channels", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.QueryContext(r.Context(), `SELECT target FROM messages m WHERE target LIKE '#%'
-			AND NOT EXISTS (SELECT 1 FROM remote_messages rm WHERE rm.local_id = m.id)
-			UNION SELECT channel FROM permissions WHERE channel LIKE '#%' ORDER BY target`)
+		channels, err := channelCandidates(db, access)
 		if err != nil {
-			apiError(w, http.StatusInternalServerError, "cannot list channels")
+			apiError(w, 500, "cannot list channels")
 			return
 		}
-		defer rows.Close()
 		out := []string{}
-		for rows.Next() {
-			var ch string
-			if err := rows.Scan(&ch); err != nil {
-				apiError(w, http.StatusInternalServerError, "cannot read channels")
-				return
-			}
-			if access.canAccess(r, ch) {
-				out = append(out, ch)
+		for _, channel := range channels {
+			if access.canAccess(r, channel) {
+				out = append(out, channel)
 			}
 		}
-		if err := rows.Err(); err != nil {
-			apiError(w, http.StatusInternalServerError, "cannot read channels")
-			return
-		}
-		// Include configured empty channels, filtered by the same policy as
-		// populated channels. Anonymous discovery must not name private ones.
-		configured := make(map[string]bool)
-		for ch := range access.served {
-			configured[ch] = true
-		}
-		for ch := range access.overrides {
-			configured[ch] = true
-		}
-		for ch := range configured {
-			if !access.canAccess(r, ch) {
-				continue
-			}
-			found := false
-			for _, existing := range out {
-				found = found || ch == existing
-			}
-			if !found {
-				out = append(out, ch)
-			}
-		}
-		sort.Strings(out)
 		writeJSON(w, http.StatusOK, map[string]any{"channels": out})
 	})
 	mux.HandleFunc("GET /v1/messages", func(w http.ResponseWriter, r *http.Request) {
 		channel := r.URL.Query().Get("channel")
 		if err := validateChannel(channel); err != nil {
 			apiError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		if !access.authorize(w, r, channel) {
 			return
 		}
 		after := int64(0)
@@ -187,6 +149,13 @@ func CoordinatorHandler(db *sql.DB, options CoordinatorOptions) (http.Handler, e
 		}
 		if err != nil || after < 0 {
 			apiError(w, http.StatusBadRequest, "after must be a non-negative sequence")
+			return
+		}
+		if prospectiveChannel(db, access, requestPrincipal(r), channel) {
+			writeJSON(w, http.StatusOK, messagePage{Messages: []wireMessage{}, Cursor: after})
+			return
+		}
+		if !access.authorize(w, r, channel) {
 			return
 		}
 		rows, err := db.QueryContext(r.Context(), `SELECT seq, id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at
@@ -233,12 +202,16 @@ func CoordinatorHandler(db *sql.DB, options CoordinatorOptions) (http.Handler, e
 			apiError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if !access.authorize(w, r, msg.Target) {
+		principal := requestPrincipal(r)
+		if principal == nil {
+			apiError(w, http.StatusUnauthorized, "a registered agent identity is required to post")
 			return
 		}
-		principal := requestPrincipal(r)
-		if principal == nil || !principalOwnsLocalName(principal, msg.Sender) {
+		if !principalOwnsLocalName(principal, msg.Sender) {
 			apiError(w, 403, "sender must match the registered agent identity")
+			return
+		}
+		if !access.authorize(w, r, msg.Target) {
 			return
 		}
 		m, err := acceptAttributedMessage(db, msg, principal)
@@ -254,7 +227,7 @@ func CoordinatorHandler(db *sql.DB, options CoordinatorOptions) (http.Handler, e
 			apiError(w, 409, "coordinator identity changed")
 			return
 		}
-		if publicGuidePath(r.URL.Path) || r.URL.Path == "/v1/info" || r.URL.Path == "/v1/register" || r.URL.Path == "/mcp" || strings.HasPrefix(r.URL.Path, "/oauth/") || strings.HasPrefix(r.URL.Path, "/.well-known/") {
+		if publicGuidePath(r.URL.Path) || r.URL.Path == "/join" || r.URL.Path == "/v1/info" || r.URL.Path == "/v1/register" || r.URL.Path == "/mcp" || strings.HasPrefix(r.URL.Path, "/oauth/") || strings.HasPrefix(r.URL.Path, "/.well-known/") {
 			mux.ServeHTTP(w, r)
 			return
 		}

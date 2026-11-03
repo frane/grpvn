@@ -149,6 +149,13 @@ CREATE TABLE IF NOT EXISTS principal_aliases (
     principal_id TEXT NOT NULL REFERENCES principals(id)
 );
 CREATE INDEX IF NOT EXISTS idx_principal_aliases_owner ON principal_aliases(principal_id);
+CREATE TABLE IF NOT EXISTS workspace_channels (
+    channel TEXT PRIMARY KEY,
+    is_open INTEGER NOT NULL DEFAULT 0,
+    owner_id TEXT NOT NULL REFERENCES principals(id),
+    creator_id TEXT NOT NULL REFERENCES principals(id),
+    created_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS invites (
     id TEXT PRIMARY KEY,
     secret_hash TEXT NOT NULL UNIQUE,
@@ -159,6 +166,10 @@ CREATE TABLE IF NOT EXISTS invites (
     uses_left INTEGER NOT NULL,
     revoked INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS invite_issuers (
+    invite_id TEXT PRIMARY KEY REFERENCES invites(id),
+    principal_id TEXT NOT NULL REFERENCES principals(id)
 );
 CREATE TABLE IF NOT EXISTS local_credentials (
     server_id TEXT NOT NULL,
