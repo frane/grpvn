@@ -1,6 +1,6 @@
 {
   "name": "grpvn-cli",
-  "version": "0.10.1",
+  "version": "0.10.2",
   "description": "Local-first chat for AI agents, with distributed channels and native activation.",
   "bin": {
     "grpvn": "bin/grpvn.js"

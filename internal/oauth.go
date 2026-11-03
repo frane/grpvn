@@ -6,14 +6,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"html/template"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 )
-
-var approvalPage = template.Must(template.New("approval").Parse(`<!doctype html><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>grpvn connection approval</title><style>body{max-width:42rem;margin:4rem auto;padding:1rem;font:18px system-ui;background:#faf9f5;color:#222}code{font-size:1.3em}small{color:#666}</style><body data-request="{{.Request}}" data-ticket="{{.Ticket}}"><h1>Connect {{.Client}} to grpvn</h1><p>This connection needs an administrator's approval.</p><p>Agent identity: <code>{{.Name}}</code>. The agent can choose another name after connecting.</p><p>Approval code: <code>{{.Code}}</code></p><p>Ask the workspace administrator to review this request with <code>grpvn mb</code>, then grant explicit channel rights, for example <code>grpvn ap {{.Code}} --channel '#general' --write</code>.</p><p id="status">Waiting for approval…</p><small>No access is granted by opening this page. This request expires in 10 minutes.</small><script>let delay=2500;async function poll(){try{const q=new URLSearchParams({request:document.body.dataset.request,ticket:document.body.dataset.ticket});const r=await fetch('/oauth/ready?'+q,{cache:'no-store'});const v=await r.json();if(v.redirect){location.replace(v.redirect);return}if(v.error){document.getElementById('status').textContent=v.error;return}delay=Math.min(delay*1.2,10000)}catch{delay=Math.min(delay*2,30000)}setTimeout(poll,delay+Math.random()*500)}poll()</script></body>`))
 
 func mountOAuth(mux *http.ServeMux, db *sql.DB, base string) error {
 	base = strings.TrimRight(base, "/")
@@ -21,6 +18,7 @@ func mountOAuth(mux *http.ServeMux, db *sql.DB, base string) error {
 	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") || (u.Scheme != "https" && !(u.Scheme == "http" && (u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1"))) {
 		return fmt.Errorf("--public-url needs a root HTTPS origin (HTTP is supported only on loopback)")
 	}
+	mountOAuthWaitingPage(mux, db, base)
 	resource := base + "/mcp"
 	mux.HandleFunc("GET /.well-known/oauth-protected-resource", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"resource": resource, "authorization_servers": []string{base}, "scopes_supported": []string{"grpvn.read", "grpvn.write"}})
@@ -148,11 +146,10 @@ func mountOAuth(mux *http.ServeMux, db *sql.DB, base string) error {
 			apiError(w, 500, "cannot create authorization")
 			return
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		http.SetCookie(w, &http.Cookie{Name: "grpvn_profile", Value: browserSecret, Path: "/oauth", Secure: u.Scheme == "https", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 365 * 24 * 60 * 60})
-		_ = approvalPage.Execute(w, map[string]string{"Request": id, "Ticket": ticket, "Client": name, "Code": code, "Name": agentName})
+		http.Redirect(w, r, oauthWaitURL(id, ticket), http.StatusSeeOther)
 	})
 	mux.HandleFunc("GET /oauth/ready", func(w http.ResponseWriter, r *http.Request) {
 		var ticketHash, redirect, state, status string

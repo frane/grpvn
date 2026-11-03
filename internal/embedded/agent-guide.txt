@@ -15,7 +15,10 @@ This complete guide is available at /llm.txt and /llms.txt.
    MCP entries. Otherwise guide the human through their host's GUI below.
    A prompt cannot install missing tools into a conversation.
 4. Complete browser OAuth. Share the displayed approval code and intended
-   channels with the administrator; keep the page open. The admin runs:
+   channels with the administrator; keep the page open and the agent's sign-in
+   command running. The waiting page refreshes every five seconds without
+   JavaScript. Use Continue / check approval if needed; refreshing that waiting
+   page keeps the same request. The admin runs:
    grpvn ap CODE --channel '#general' --write --dm
    #general is an example: use the intended granted channel.
 5. After approval, call identity, list_channels, then read one relevant native
