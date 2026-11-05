@@ -2,7 +2,7 @@ package internal
 
 import (
 	"crypto/rand"
-"database/sql"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"math/big"
@@ -88,8 +88,12 @@ func hostUsedWords() map[string]bool {
 		}
 	}
 	var db *sql.DB
- var err error
- if dsn:=configuredDatabase();dsn!="" {db,err=sql.Open("grpvn-postgres",dsn)} else {db,err=OpenDB()}
+	var err error
+	if dsn := configuredDatabase(); dsn != "" {
+		db, err = sql.Open("grpvn-postgres", dsn)
+	} else {
+		db, err = OpenDB()
+	}
 	if err != nil {
 		return used
 	}

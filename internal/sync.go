@@ -22,6 +22,17 @@ var syncHTTPClient = &http.Client{
 	},
 }
 
+func remoteServerInfo(ctx context.Context, remote Remote, info *serverInfo) error {
+	err := remoteRequest(ctx, remote, "GET", "/v1/server", nil, info)
+	var failure *remoteHTTPError
+	if errors.As(err, &failure) && (failure.Status == http.StatusNotFound || failure.Status == http.StatusUnauthorized) {
+		// Older private coordinators authenticate unknown paths before returning
+		// 404, hence the 401 compatibility case.
+		return remoteRequest(ctx, remote, "GET", "/v1/info", nil, info)
+	}
+	return err
+}
+
 func remoteRequest(ctx context.Context, remote Remote, method, path string, input, output any) error {
 	if err := remoteRequestSlot(ctx, remote); err != nil {
 		return err

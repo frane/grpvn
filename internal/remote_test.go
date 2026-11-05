@@ -15,6 +15,26 @@ import (
 	"time"
 )
 
+func TestRemoteDiscoveryWithLegacyCoordinator(t *testing.T) {
+	for _, unknown := range []int{http.StatusUnauthorized, http.StatusNotFound} {
+		t.Run(fmt.Sprint(unknown), func(t *testing.T) {
+			id := NewMessage("", "", nil).ID
+			legacy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/v1/info" {
+					writeJSON(w, 200, serverInfo{Protocol: syncProtocol, ServerID: id})
+					return
+				}
+				w.WriteHeader(unknown)
+			}))
+			defer legacy.Close()
+			var info serverInfo
+			if err := remoteServerInfo(context.Background(), Remote{URL: legacy.URL}, &info); err != nil || info.ServerID != id {
+				t.Fatalf("cannot discover an installed legacy coordinator: %+v %v", info, err)
+			}
+		})
+	}
+}
+
 func testCoordinator(t *testing.T, db *sql.DB, token string, channels ...string) *httptest.Server {
 	t.Helper()
 	if token != "" {

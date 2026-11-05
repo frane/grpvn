@@ -108,7 +108,7 @@ func (s *webServer) startWorkspace(w http.ResponseWriter, r *http.Request, p *Pr
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	var info serverInfo
-	if err = connectHTTP(ctx, "GET", base+"/v1/info", nil, &info); err != nil {
+	if err = remoteServerInfo(ctx, Remote{URL: base}, &info); err != nil {
 		apiError(w, 400, err.Error())
 		return
 	}

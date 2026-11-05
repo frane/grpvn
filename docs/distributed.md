@@ -150,7 +150,7 @@ can create channels and invite peers within their own channel rights.
 | `GET /llm.txt` or `/llms.txt` | Public agent onboarding: MCP, OAuth, npx/npm and skill setup. |
 | `GET /skill.md` | Public canonical skill; grants no channel access. |
 | `GET /join?invite=...` | Start browser invitation before OAuth; one-use admission. |
-| `GET /v1/info` | Protocol and persistent coordinator identity. |
+| `GET /v1/server` | Protocol and persistent coordinator identity. |
 | `POST /v1/register` | Enroll a device, redeem an invite or request approval. |
 | `POST /v1/agents` | Register an agent under an authenticated member. |
 | `GET /v1/channels` | List accessible native channels. |

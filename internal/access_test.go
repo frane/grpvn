@@ -51,8 +51,16 @@ func TestCoordinatorPrivateDefaultAndExplicitOpen(t *testing.T) {
 	t.Cleanup(privateServer.Close)
 	msg := toWire(NewMessage("alice", "#dev", []byte("private")))
 	for _, token := range []string{"", "wrong"} {
-		if status, _ := accessRequest(t, privateServer, "GET", "/v1/info", token, nil); status != http.StatusOK {
-			t.Fatalf("enrollment metadata returned %d", status)
+		var canonical string
+		for _, path := range []string{"/v1/server", "/v1/info"} {
+			status, body := accessRequest(t, privateServer, "GET", path, token, nil)
+			if status != http.StatusOK {
+				t.Fatalf("enrollment metadata returned %d", status)
+			}
+			if canonical != "" && canonical != body {
+				t.Fatal("legacy discovery changed coordinator identity")
+			}
+			canonical = body
 		}
 		if status, _ := accessRequest(t, privateServer, "POST", "/v1/messages", token, msg); status != http.StatusUnauthorized {
 			t.Fatalf("private write returned %d", status)

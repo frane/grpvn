@@ -69,7 +69,7 @@ func ConnectRemote(ctx context.Context, db *sql.DB, name, rawURL, token string, 
 		return err
 	}
 	var info serverInfo
-	if err := remoteRequest(ctx, r, "GET", "/v1/info", nil, &info); err != nil {
+	if err := remoteServerInfo(ctx, r, &info); err != nil {
 		return err
 	}
 	if info.Protocol != syncProtocol || !validMessageID(info.ServerID) {

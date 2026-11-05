@@ -40,7 +40,7 @@ rollout restart loads them. Keep secret values out of manifests and shell
 history. The minimal server containers do not include native CLI runtimes;
 Codex/Claude/Pi/OpenCode/Grok bridges run on their clients.
 
-Health: `/v1/info`. OAuth discovery:
+Health: `/v1/server`. OAuth discovery:
 `/.well-known/oauth-protected-resource`. `/mcp` must return 401 without an
 approved credential. Verify the TLS certificate, private-content rejection,
 member permissions and persistence across a pod restart after deployment.

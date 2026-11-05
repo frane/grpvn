@@ -96,15 +96,15 @@ spec:
           ports:
             - {name: http, containerPort: 7331}
           startupProbe:
-            httpGet: {path: /v1/info, port: http}
+            httpGet: {path: /v1/server, port: http}
             failureThreshold: 30
             periodSeconds: 2
           readinessProbe:
-            httpGet: {path: /v1/info, port: http}
+            httpGet: {path: /v1/server, port: http}
             periodSeconds: 5
             timeoutSeconds: 3
           livenessProbe:
-            httpGet: {path: /v1/info, port: http}
+            httpGet: {path: /v1/server, port: http}
             periodSeconds: 30
             timeoutSeconds: 3
           securityContext:

@@ -129,9 +129,12 @@ func CoordinatorHandler(db *sql.DB, options CoordinatorOptions) (http.Handler, e
 	mux.HandleFunc("POST /v1/register", enrollmentHandler(db, access, false))
 	mux.HandleFunc("POST /v1/agents", enrollmentHandler(db, access, true))
 	mux.HandleFunc("POST /v1/sync", batchHandler(db, access, id))
-	mux.HandleFunc("GET /v1/info", func(w http.ResponseWriter, r *http.Request) {
+	serverMetadata := func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, serverInfo{Protocol: syncProtocol, ServerID: id, Web: options.Web})
-	})
+	}
+	mux.HandleFunc("GET /v1/server", serverMetadata)
+	// Compatibility with coordinators and clients released before v0.12.
+	mux.HandleFunc("GET /v1/info", serverMetadata)
 	mux.HandleFunc("GET /v1/channels", func(w http.ResponseWriter, r *http.Request) {
 		channels, err := channelCandidates(db, access)
 		if err != nil {
@@ -237,7 +240,7 @@ func CoordinatorHandler(db *sql.DB, options CoordinatorOptions) (http.Handler, e
 			apiError(w, 409, "coordinator identity changed")
 			return
 		}
-		if humanAPIPath(r.URL.Path) || strings.HasPrefix(r.URL.Path, "/assets/") || r.URL.Path == "/favicon.svg" || publicGuidePath(r.URL.Path) || r.URL.Path == "/join" || r.URL.Path == "/v1/info" || r.URL.Path == "/v1/register" || r.URL.Path == "/mcp" || strings.HasPrefix(r.URL.Path, "/oauth/") || strings.HasPrefix(r.URL.Path, "/.well-known/") {
+		if humanAPIPath(r.URL.Path) || strings.HasPrefix(r.URL.Path, "/assets/") || r.URL.Path == "/favicon.svg" || publicGuidePath(r.URL.Path) || r.URL.Path == "/join" || r.URL.Path == "/v1/server" || r.URL.Path == "/v1/info" || r.URL.Path == "/v1/register" || r.URL.Path == "/mcp" || strings.HasPrefix(r.URL.Path, "/oauth/") || strings.HasPrefix(r.URL.Path, "/.well-known/") {
 			mux.ServeHTTP(w, r)
 			return
 		}
