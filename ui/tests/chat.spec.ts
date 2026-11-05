@@ -1,0 +1,93 @@
+import { test, expect } from '@playwright/test';
+import { spawn, spawnSync, ChildProcess } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createServer } from 'node:net';
+
+let host:ChildProcess;let link:string;let root:string;let bin:string;let env:NodeJS.ProcessEnv;
+test.beforeAll(async()=>{
+  root=mkdtempSync(join(tmpdir(),'grpvn-ui-browser-'));bin=process.env.GRPVN_TEST_BIN||'/private/tmp/grpvn-ui-dev';
+  env={...process.env,GRPVN_DB:join(root,'grpvn.db'),GRPVN_STATE:join(root,'state.json'),GRPVN_DATABASE_URL:'',GRPVN_SCOPE:'host'};
+  const port=await new Promise<number>((resolve,reject)=>{const socket=createServer();socket.listen(0,'127.0.0.1',()=>{const port=(socket.address() as {port:number}).port;socket.close(()=>resolve(port));});socket.on('error',reject);});
+  const base='http://127.0.0.1:'+port;
+  const invited=spawnSync(bin,['iv','--to','Workspace owner','--channel','*','--write','--dm','--url',base],{env,encoding:'utf8',timeout:30000});
+  expect(invited.status,invited.stderr).toBe(0);link=invited.stdout.trim();
+  host=spawn(bin,['serve','--web','--listen','127.0.0.1:'+port,'--public-url',base],{env,stdio:['ignore','pipe','pipe']});
+  await new Promise<void>((resolve,reject)=>{let output='';const timeout=setTimeout(()=>reject(Error('Web coordinator did not start')),20000);host.stderr!.on('data',data=>{output+=data;if(output.includes('coordinator listening')){clearTimeout(timeout);resolve();}});host.on('exit',code=>reject(Error('Web coordinator exited '+code)));});
+});
+test.afterAll(async()=>{if(host){host.kill('SIGTERM');await new Promise<void>(r=>{host.once('exit',()=>r());setTimeout(r,7000);});}if(root)rmSync(root,{recursive:true,force:true});});
+
+test('human chat, threaded replies, invitations, browser continuity and mobile layout',async({page,browser})=>{
+  test.setTimeout(90000);
+  const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.goto(link);
+  await page.getByLabel('Your handle').fill('frane');
+  await page.getByLabel('Password',{exact:true}).fill('a good owner test password');
+  await page.getByRole('button',{name:'Join the workspace',exact:true}).first().click();
+  await expect(page.getByRole('button',{name:'Sign out'})).toBeVisible();
+  await expect(page.getByText('Connected',{exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Create channel',exact:true}).click();
+  await page.getByLabel('Channel name').fill('general');
+  await page.getByRole('dialog').getByRole('button',{name:'Create channel',exact:true}).click();
+  const compose=page.getByRole('textbox',{name:'Message #general'});
+  await compose.fill('A shared place for people and agents.');await compose.press('Enter');
+  await expect(page.locator('.message-body').filter({hasText:'A shared place for people and agents.'})).toHaveCount(1);
+  await page.locator('.message').first().hover();await page.getByRole('button',{name:'Reply to frane'}).click();
+  await page.getByRole('textbox',{name:'Reply in thread…'}).fill('Threaded context stays together.');
+  await page.getByRole('textbox',{name:'Reply in thread…'}).press('Enter');
+  await expect(page.locator('.thread .message-body').filter({hasText:'Threaded context stays together.'})).toBeVisible();
+  await page.getByRole('button',{name:'Close thread'}).click();
+  await page.getByRole('button',{name:'Invite',exact:true}).click();
+  await page.getByRole('button',{name:'Create invitation link'}).click();
+  const invitation=await page.getByLabel('Invitation link').inputValue();
+  await page.getByRole('button',{name:'Close dialog'}).click();
+  const context=await browser.newContext();const friend=await context.newPage();
+  await friend.goto(invitation);await friend.getByLabel('Your handle').fill('alex');await friend.getByLabel('Password',{exact:true}).fill('a good browser test password');
+  await friend.getByRole('button',{name:'Join the workspace',exact:true}).first().click();
+  await expect(friend.getByRole('textbox',{name:'Message #general'})).toBeVisible();
+  await expect(friend.locator('.message-body').filter({hasText:'A shared place for people and agents.'})).toBeVisible();
+  await friend.getByRole('textbox',{name:'Message #general'}).fill('Joined directly from the invitation.');await friend.getByRole('textbox',{name:'Message #general'}).press('Enter');
+  await expect(page.locator('.message-body').filter({hasText:'Joined directly from the invitation.'})).toBeVisible({timeout:10000});
+  await friend.reload();await expect(friend.getByRole('button',{name:'Sign out'})).toBeVisible();
+  await friend.getByRole('button',{name:'Sign out'}).click();await friend.getByLabel('Your handle').fill('alex');await friend.getByLabel('Password',{exact:true}).fill('a good browser test password');await friend.getByRole('button',{name:'Sign in',exact:true}).click();
+  await expect(friend.getByRole('textbox',{name:'Message #general'})).toBeVisible();
+  await page.getByRole('button',{name:'People & agents'}).click();
+  await expect(page.locator('.person-card').filter({hasText:'alex'})).toBeVisible();await page.locator('.person-card').filter({hasText:'alex'}).click();
+  await page.getByRole('textbox',{name:'Message alex'}).fill('A direct conversation.');await page.getByRole('textbox',{name:'Message alex'}).press('Enter');
+  await expect(page.locator('.message-body').filter({hasText:'A direct conversation.'})).toBeVisible();
+  await context.close();
+  await page.locator('button.channel').filter({hasText:'general'}).first().click();
+  // An external CLI write must arrive through the same live feed.
+  const sent=spawnSync(bin,['--as','reef-skua-df13','s','#general','Agent delivery is visible without refreshing.'],{env,encoding:'utf8',timeout:20000});expect(sent.status,sent.stderr).toBe(0);
+  await expect(page.locator('.message-body').filter({hasText:'Agent delivery is visible without refreshing.'})).toBeVisible({timeout:10000});
+  await page.screenshot({path:join(root,'desktop.png'),fullPage:true});
+  await page.screenshot({path:join(process.env.GRPVN_SCREENSHOT_DIR || tmpdir(),'grpvn-ui-desktop.png'),fullPage:true});
+  await page.setViewportSize({width:390,height:844});
+  await expect(page.getByRole('button',{name:'Open sidebar'})).toBeVisible();
+  await page.screenshot({path:join(process.env.GRPVN_SCREENSHOT_DIR || tmpdir(),'grpvn-ui-mobile.png'),fullPage:true});
+  // Exercise the same loopback host used by the standalone desktop app.
+  const nativeRoot=join(root,'desktop');
+  const native=spawn(process.env.GRPVN_TEST_UI_HOST||'/private/tmp/grpvn-ui-testhost',[],{env:{...env,GRPVN_DB:join(nativeRoot,'grpvn.db'),GRPVN_STATE:join(nativeRoot,'state.json')},stdio:['ignore','pipe','pipe']});
+  try {
+    const nativeURL=await new Promise<string>((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Desktop host did not start')),20000);native.stdout!.on('data',data=>{output+=data;if(output.includes('\n')){clearTimeout(timer);resolve(output.trim());}});native.on('exit',code=>reject(Error('Desktop host exited '+code)));});
+    const desktop=await page.context().newPage();await desktop.goto(nativeURL);
+    await desktop.getByLabel('Workspace address or invitation').fill(new URL(link).origin);
+    const popup=desktop.waitForEvent('popup');
+    await desktop.getByRole('button',{name:'Continue',exact:true}).click();
+    const signin=await popup;
+    await signin.getByRole('button',{name:'Continue as frane'}).click();
+    await expect(signin.getByText('Connected',{exact:true})).toBeVisible();
+    await expect(desktop.getByRole('textbox',{name:'Message #general'})).toBeVisible({timeout:15000});
+    await desktop.getByRole('textbox',{name:'Message #general'}).fill('Same profile from the desktop.');await desktop.getByRole('textbox',{name:'Message #general'}).press('Enter');
+    await expect(page.locator('.message-body').filter({hasText:'Same profile from the desktop.'})).toBeVisible({timeout:15000});
+    await expect(desktop.locator('.profile strong')).toHaveText('frane');
+    await desktop.getByRole('button',{name:'Add workspace',exact:true}).click();
+    await desktop.getByLabel('Workspace address or invitation').fill(new URL(link).origin);
+    await desktop.getByRole('button',{name:'Continue',exact:true}).click();
+    await expect(desktop.getByRole('dialog')).toHaveCount(0);
+    await desktop.reload();await expect(desktop.getByRole('textbox',{name:'Message #general'})).toBeVisible();
+    await desktop.close();await signin.close();
+  } finally { native.kill('SIGINT');await new Promise<void>(resolve=>{native.once('exit',()=>resolve());setTimeout(resolve,7000);}); }
+  expect(errors).toEqual([]);
+});

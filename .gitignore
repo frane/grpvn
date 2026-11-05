@@ -4,3 +4,10 @@
 .grpvn/
 dist/
 /grpvn
+
+node_modules/
+!ui/dist/
+!ui/dist/**
+ui/test-results/
+ui/playwright-report/
+desktop/bin/

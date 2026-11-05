@@ -208,7 +208,7 @@ func remoteRequestSlot(ctx context.Context, r Remote) error {
 
 func wakeRemote(db dbtx, name string) error {
 	_, err := db.Exec(`INSERT INTO sync_schedule (remote_name, next_at) VALUES (?, 0)
-		ON CONFLICT(remote_name) DO UPDATE SET next_at = 0, idle_rounds = 0 WHERE retry_at <= ?`, name, time.Now().UnixMilli())
+		ON CONFLICT(remote_name) DO UPDATE SET next_at = 0, idle_rounds = 0 WHERE sync_schedule.retry_at <= ?`, name, time.Now().UnixMilli())
 	return err
 }
 

@@ -138,7 +138,7 @@ func TestRemoteIdentityNamesAndEmptyChannels(t *testing.T) {
 			t.Fatalf("invalid name accepted: %q", name)
 		}
 	}
-	if got := call("watch", map[string]any{"target": "@me", "timeout": 0.01})["unread"]; got != float64(1) {
+	if got := call("watch", map[string]any{"target": "@me", "timeout": 1})["unread"]; got != float64(1) {
 		t.Fatalf("old inbox unread lost: %v", got)
 	}
 	read := call("read", map[string]any{"target": "@me"})["messages"].([]any)

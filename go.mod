@@ -3,6 +3,7 @@ module github.com/frane/grpvn
 go 1.26.2
 
 require (
+	github.com/lib/pq v1.12.3
 	github.com/mark3labs/mcp-go v0.54.1
 	github.com/mattn/go-isatty v0.0.22
 	github.com/oklog/ulid/v2 v2.1.1

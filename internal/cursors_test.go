@@ -139,6 +139,9 @@ func TestMigrateLegacyCursors(t *testing.T) {
 // must rebuild transparently on open: same messages, same order, marks
 // intact, version recorded as 2.
 func TestMigrateV1Database(t *testing.T) {
+	if configuredDatabase() != "" {
+		t.Skip("SQLite legacy schema migration")
+	}
 	path := filepath.Join(t.TempDir(), "v1.db")
 	t.Setenv("GRPVN_DB", path)
 

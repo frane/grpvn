@@ -5,11 +5,12 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
 var approvalPage = template.Must(template.New("approval").Parse(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="referrer" content="no-referrer">
+<html lang="en"><head><meta charset="utf-8"><meta name="referrer" content="same-origin">
 <title>grpvn connection approval</title>
 {{if and .Pending (not .Consent)}}<meta http-equiv="refresh" content="5;url={{.WaitURL}}">{{end}}
 <style>body{max-width:42rem;margin:4rem auto;padding:1rem;font:18px system-ui;background:#faf9f5;color:#222}code{font-size:1.2em}small{color:#666}a,button{display:inline-block;padding:.7rem 1rem;border:1px solid;border-radius:.4rem;color:#174b3a}</style></head>
@@ -19,7 +20,7 @@ var approvalPage = template.Must(template.New("approval").Parse(`<!doctype html>
 <p>Welcome back, <code>{{.Name}}</code>. Continue with your existing profile and permissions.</p>
 <p>Client: {{.Client}}. Callback: <code>{{.Callback}}</code>.</p>
 <form method="post" action="{{.ConsentURL}}"><input type="hidden" name="request" value="{{.Request}}"><input type="hidden" name="ticket" value="{{.Ticket}}"><button type="submit">Continue as {{.Name}}</button></form>
-<small>No new account or administrator code is needed. Keep your agent's sign-in command running.</small>
+<small>Your profile and permissions stay the same. Return to the app after connecting.</small>
 {{else}}
 <p>Ask an existing workspace agent to invite <code>@{{.Name}}</code> into a channel. Its <code>invite</code> tool can finish this sign-in directly.</p><details><summary>Administrator approval (first workspace member)</summary>
 <p>Agent identity: <code>{{.Name}}</code>. The agent can choose another name after connecting.</p>
@@ -55,7 +56,7 @@ func mountOAuthWaitingPage(mux *http.ServeMux, db *sql.DB, base string) {
 		var expires int64
 		var consumed bool
 		err := db.QueryRow(`SELECT o.ticket_hash,o.principal_id,c.name,o.redirect_uri,o.expires_at,o.consumed FROM oauth_requests o JOIN oauth_clients c ON c.id=o.client_id WHERE o.id=?`, request).Scan(&hash, &profile, &client, &redirect, &expires, &consumed)
-		if err != nil || credentialHash(ticket) != hash || expires <= time.Now().UnixMilli() || consumed || !rememberedOAuthBrowser(db, r, client, redirect, profile) {
+		if err != nil || credentialHash(ticket) != hash || expires <= time.Now().UnixMilli() || consumed || !(rememberedOAuthBrowser(db, r, client, redirect, profile) || humanConsent(db, r, profile)) {
 			http.Error(w, "This browser cannot confirm that profile. Use the invitation or first-time approval flow.", http.StatusForbidden)
 			return
 		}
@@ -68,7 +69,9 @@ func mountOAuthWaitingPage(mux *http.ServeMux, db *sql.DB, base string) {
 
 	mux.HandleFunc("GET /oauth/wait", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Referrer-Policy", "no-referrer")
+		// Keep the same-origin form's Origin header while withholding the
+		// authorization URL from external callbacks.
+		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		request, ticket := r.URL.Query().Get("request"), r.URL.Query().Get("ticket")
@@ -95,6 +98,11 @@ func mountOAuthWaitingPage(mux *http.ServeMux, db *sql.DB, base string) {
 			terminal(http.StatusGone, "Authorization expired", "Start sign-in again from your agent and keep its sign-in command running. Your existing grpvn profile is retained.")
 			return
 		}
+		// Browsers apply form-action to the whole POST redirect chain,
+		// including the registered OAuth callback after consent.
+		if callback, err := url.Parse(redirect); err == nil && !strings.ContainsAny(callback.Host, "; \t\r\n") {
+			w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' "+callback.Scheme+"://"+callback.Host)
+		}
 		if status == "revoked" || (status == "active" && approved) {
 			target, err := url.Parse(redirect)
 			if err != nil {
@@ -113,6 +121,6 @@ func mountOAuthWaitingPage(mux *http.ServeMux, db *sql.DB, base string) {
 			http.Redirect(w, r, target.String(), http.StatusSeeOther)
 			return
 		}
-		_ = approvalPage.Execute(w, map[string]any{"Pending": true, "Request": request, "Ticket": ticket, "Client": client, "Code": code, "Name": name, "WaitURL": base + oauthWaitURL(request, ticket), "Consent": rememberedOAuthBrowser(db, r, client, redirect, profile), "ConsentURL": base + "/oauth/continue", "Callback": redirect})
+		_ = approvalPage.Execute(w, map[string]any{"Pending": true, "Request": request, "Ticket": ticket, "Client": client, "Code": code, "Name": name, "WaitURL": base + oauthWaitURL(request, ticket), "Consent": rememberedOAuthBrowser(db, r, client, redirect, profile) || humanConsent(db, r, profile), "ConsentURL": base + "/oauth/continue", "Callback": redirect})
 	})
 }

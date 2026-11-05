@@ -55,8 +55,8 @@ func Wait(ctx context.Context, w io.Writer, db *sql.DB, load func() (*State, err
 			changed = stats.Pulled > 0
 			lastSync = time.Now()
 		}
-		var dv int64
-		if err := db.QueryRowContext(ctx, "PRAGMA data_version").Scan(&dv); err != nil {
+		dv, err := databaseVersion(ctx, db)
+		if err != nil {
 			if ctx.Err() != nil {
 				return 2, nil
 			}

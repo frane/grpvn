@@ -55,15 +55,8 @@ func (m *Message) Save(db *sql.DB) error {
 }
 
 func (m *Message) save(db dbtx) error {
-	res, err := db.Exec("INSERT INTO messages (id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		m.ID, m.Sender, m.Target, m.Body, m.ChainRoot, m.ChainDepth, m.ParentID, m.Correlation, m.CreatedAt)
-	if err != nil {
-		return err
-	}
-	if seq, err := res.LastInsertId(); err == nil {
-		m.Seq = seq
-	}
-	return nil
+	return db.QueryRow("INSERT INTO messages (id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq",
+		m.ID, m.Sender, m.Target, m.Body, m.ChainRoot, m.ChainDepth, m.ParentID, m.Correlation, m.CreatedAt).Scan(&m.Seq)
 }
 
 // dbtx is *sql.DB or *sql.Tx. Send uses a transaction when an idempotency

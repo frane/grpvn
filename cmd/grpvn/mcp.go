@@ -23,6 +23,7 @@ var serveOpenFlag, servePrivateFlag bool
 var serveOpenChannelsFlag, servePrivateChannelsFlag []string
 var servePublicURLFlag string
 var serveClaudeChannel bool
+var serveWeb bool
 var serveSession, serveActivationMode string
 
 var serveCmd = &cobra.Command{
@@ -37,7 +38,7 @@ var serveCmd = &cobra.Command{
 		if serveActivationMode != "passive" && serveActivationMode != "notify" && serveActivationMode != "activate" {
 			return fmt.Errorf("--activation must be passive, notify or activate")
 		}
-		if listenFlag == "" && (cmd.Flags().Changed("open") || cmd.Flags().Changed("private") || cmd.Flags().Changed("open-channel") || cmd.Flags().Changed("private-channel") || cmd.Flags().Changed("public-url") || cmd.Flags().Changed("channel") || cmd.Flags().Changed("token")) {
+		if listenFlag == "" && (cmd.Flags().Changed("web") || cmd.Flags().Changed("open") || cmd.Flags().Changed("private") || cmd.Flags().Changed("open-channel") || cmd.Flags().Changed("private-channel") || cmd.Flags().Changed("public-url") || cmd.Flags().Changed("channel") || cmd.Flags().Changed("token")) {
 			return fmt.Errorf("HTTP coordinator options require --listen")
 		}
 		return nil
@@ -78,6 +79,7 @@ func serveCoordinator(ctx context.Context) error {
 	defer db.Close()
 	handler, err := internal.CoordinatorHandler(db, internal.CoordinatorOptions{
 		PublicURL: servePublicURLFlag,
+		Web:       serveWeb,
 		Channels:  serveChannelsFlag, Open: serveOpenFlag,
 		OpenChannels: serveOpenChannelsFlag, PrivateChannels: servePrivateChannelsFlag,
 	})
@@ -117,6 +119,7 @@ func serveCoordinator(ctx context.Context) error {
 }
 
 func init() {
+	serveCmd.Flags().BoolVar(&serveWeb, "web", false, "serve the human web app alongside the coordinator (requires --listen)")
 	serveCmd.Flags().BoolVar(&serveClaudeChannel, "claude-channel", false, "expose native Claude Channel notifications (requires host opt-in)")
 	serveCmd.Flags().StringVar(&serveSession, "session", "", "stable native session ID for the Claude Channel bridge")
 	serveCmd.Flags().StringVar(&serveActivationMode, "activation", "notify", "initial channel activation policy: passive, notify or activate")

@@ -124,9 +124,17 @@ func mountBrowserInvitations(mux *http.ServeMux, db *sql.DB, base string) {
 			http.Error(w, "This invitation is invalid, expired or already used. Ask a channel member for another link.", http.StatusGone)
 			return
 		}
+		http.SetCookie(w, &http.Cookie{Name: "grpvn_invite", Path: "/oauth", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 		origin, _ := url.Parse(base)
-		http.SetCookie(w, &http.Cookie{Name: "grpvn_invite", Value: secret, Path: "/oauth", Secure: origin.Scheme == "https", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 3600})
-		http.Redirect(w, r, "/llm.txt#invited", http.StatusSeeOther)
+		http.SetCookie(w, &http.Cookie{Name: "grpvn_invite", Value: secret, Path: "/", Secure: origin.Scheme == "https", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 3600})
+		target := "/?invited=1"
+		if next := r.URL.Query().Get("next"); strings.HasPrefix(next, "/oauth/authorize?") {
+			u, err := url.Parse(next)
+			if err == nil && u.Host == "" && u.Query().Get("actor") == "human" {
+				target += "&" + url.Values{"next": {next}}.Encode()
+			}
+		}
+		http.Redirect(w, r, target, http.StatusSeeOther)
 	})
 }
 

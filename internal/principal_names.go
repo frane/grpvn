@@ -72,7 +72,7 @@ func RenamePrincipal(db *sql.DB, id, name string) (*Principal, error) {
 	}
 	defer tx.Rollback()
 	p, err := findPrincipal(tx, "id=?", id)
-	if err != nil || p.Kind != "agent" || p.Status != "active" {
+	if err != nil || !isChatParticipant(p) || p.Status != "active" {
 		return nil, fmt.Errorf("an active agent identity is required")
 	}
 	if err := cachePrincipal(tx, p); err != nil {
@@ -102,7 +102,7 @@ func renamePrincipal(tx dbtx, p *Principal, name string) error {
 	p.Name = name
 	address := principalAddress(p)
 	var taken bool
-	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM principals WHERE kind='agent' AND name=? AND COALESCE(parent_id,'')=? AND id<>?)
+	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM principals WHERE kind IN ('agent','human') AND name=? AND COALESCE(parent_id,'')=? AND id<>?)
  OR EXISTS(SELECT 1 FROM principal_aliases WHERE address=? AND principal_id<>?)`, name, p.ParentID, p.ID, address, p.ID).Scan(&taken); err != nil {
 		return err
 	}
@@ -136,7 +136,7 @@ func renamePrincipal(tx dbtx, p *Principal, name string) error {
 		}
 		if _, err := tx.Exec(`INSERT INTO cursors(agent_name,target,position,updated_at)
  SELECT ?,target,position,updated_at FROM cursors WHERE agent_name=?
- ON CONFLICT(agent_name,target) DO UPDATE SET position=MAX(position,excluded.position)`, address, oldAddress); err != nil {
+ ON CONFLICT(agent_name,target) DO UPDATE SET position=MAX(cursors.position,excluded.position)`, address, oldAddress); err != nil {
 			return err
 		}
 	}

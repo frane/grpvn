@@ -81,6 +81,14 @@ func mountOAuth(mux *http.ServeMux, db *sql.DB, base string, access *channelAcce
 				return
 			}
 		}
+		var humanProfile *Principal
+		if q.Get("actor") == "human" {
+			humanProfile = browserHuman(db, r)
+			if humanProfile == nil {
+				http.Redirect(w, r, "/?"+url.Values{"next": {r.URL.RequestURI()}}.Encode(), http.StatusSeeOther)
+				return
+			}
+		}
 		secret, err := newCredential()
 		if err != nil {
 			apiError(w, 500, "cannot create authorization")
@@ -107,7 +115,12 @@ func mountOAuth(mux *http.ServeMux, db *sql.DB, base string, access *channelAcce
 			apiError(w, 500, "cannot remember profile")
 			return
 		}
-		profile, err := existingOAuthProfile(tx, browserHash, appKey)
+		var profile *Principal
+		if humanProfile != nil {
+			profile, err = findPrincipal(tx, "id=?", humanProfile.ID)
+		} else {
+			profile, err = existingOAuthProfile(tx, browserHash, appKey)
+		}
 		if err != nil {
 			apiError(w, 500, "cannot find profile")
 			return
@@ -173,9 +186,10 @@ func mountOAuth(mux *http.ServeMux, db *sql.DB, base string, access *channelAcce
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		http.SetCookie(w, &http.Cookie{Name: "grpvn_profile", Value: browserSecret, Path: "/oauth", Secure: u.Scheme == "https", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 365 * 24 * 60 * 60})
+		http.SetCookie(w, &http.Cookie{Name: "grpvn_profile", Value: browserSecret, Path: "/", Secure: u.Scheme == "https", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 365 * 24 * 60 * 60})
 		if _, err := r.Cookie("grpvn_invite"); err == nil {
-			http.SetCookie(w, &http.Cookie{Name: "grpvn_invite", Value: "", Path: "/oauth", Secure: u.Scheme == "https", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: -1})
+			http.SetCookie(w, &http.Cookie{Name: "grpvn_invite", Path: "/oauth", MaxAge: -1, HttpOnly: true, Secure: u.Scheme == "https", SameSite: http.SameSiteLaxMode})
+			http.SetCookie(w, &http.Cookie{Name: "grpvn_invite", Value: "", Path: "/", Secure: u.Scheme == "https", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: -1})
 		}
 		http.Redirect(w, r, oauthWaitURL(id, ticket), http.StatusSeeOther)
 	})
@@ -288,7 +302,7 @@ func mountOAuth(mux *http.ServeMux, db *sql.DB, base string, access *channelAcce
 			apiError(w, 500, "cannot issue token")
 			return
 		}
-		if _, err := tx.Exec("INSERT OR REPLACE INTO oauth_access(credential_hash,scope,resource) VALUES(?,?,?)", credentialHash(access), scope, resource); err != nil {
+		if _, err := tx.Exec("INSERT INTO oauth_access(credential_hash,scope,resource) VALUES(?,?,?) ON CONFLICT(credential_hash) DO UPDATE SET scope=excluded.scope,resource=excluded.resource", credentialHash(access), scope, resource); err != nil {
 			apiError(w, 500, "cannot issue token")
 			return
 		}

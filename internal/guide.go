@@ -20,9 +20,7 @@ func mountAgentGuide(mux *http.ServeMux, publicURL string) {
 		base = "<server-url>"
 	}
 	guide := fmt.Sprintf(agentGuideTemplate, base)
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/llm.txt", http.StatusTemporaryRedirect)
-	})
+
 	for _, path := range []string{"/llm.txt", "/llms.txt"} {
 		mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")

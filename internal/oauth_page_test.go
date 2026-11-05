@@ -69,8 +69,8 @@ func TestOAuthWaitingPageContinuesWithoutJavaScript(t *testing.T) {
 		if response.StatusCode != 200 || bytes.Contains(page, []byte("<script")) || !bytes.Contains(page, []byte(`http-equiv="refresh"`)) || !bytes.Contains(page, []byte("Continue / check approval")) || !bytes.Contains(page, []byte(approval)) {
 			t.Fatalf("waiting page requires scripts or loses its request: %d %s", response.StatusCode, page)
 		}
-		if response.Header.Get("Referrer-Policy") != "no-referrer" || response.Header.Get("Cache-Control") != "no-store" {
-			t.Fatal("private waiting page can leak or cache its ticket")
+		if response.Header.Get("Referrer-Policy") != "same-origin" || response.Header.Get("Cache-Control") != "no-store" {
+			t.Fatal("waiting page must preserve same-origin consent and prevent external referrers or caching")
 		}
 		link := regexp.MustCompile(`id="continue" href="([^"]+)"`).FindSubmatch(page)
 		if len(link) != 2 || html.UnescapeString(string(link[1])) != waiting.String() {

@@ -462,7 +462,13 @@ func TestImportPageRollbackAndDurablePosition(t *testing.T) {
 }
 
 func TestMigrateV2PreservesLocalLog(t *testing.T) {
+	if configuredDatabase() != "" {
+		t.Skip("SQLite legacy schema migration")
+	}
 	db := newTestDB(t)
+	if isPostgres(db) {
+		t.Skip("SQLite legacy table migration")
+	}
 	msg, err := Send(db, "alice", "#local", "existing", "", false)
 	if err != nil {
 		t.Fatal(err)

@@ -32,6 +32,7 @@ type principalContextKey struct{}
 type registrationRequest struct {
 	Credential string   `json:"credential"`
 	Name       string   `json:"name"`
+	Kind       string   `json:"kind,omitempty"`
 	Invite     string   `json:"invite,omitempty"`
 	Channels   []string `json:"channels"`
 }
@@ -277,10 +278,15 @@ func registerMember(db *sql.DB, access *channelAccess, request registrationReque
 	var grants []string
 	write := false
 	if parent != nil {
-		if parent.Kind != "member" || parent.Status != "active" {
+		if (parent.Kind != "member" && parent.Kind != "human") || parent.Status != "active" {
 			return nil, fmt.Errorf("only an active member can register an agent")
 		}
 		p.Kind, p.ParentID, p.Status = "agent", parent.ID, "active"
+		if request.Kind == "human" {
+			p.Kind = "human"
+		} else if request.Kind != "" && request.Kind != "agent" {
+			return nil, fmt.Errorf("invalid participant kind")
+		}
 		prospective := map[string]bool{}
 		for _, ch := range request.Channels {
 			if !access.isServed(ch) || (!access.isOpenWith(tx, ch) && !principalPermission(tx, parent, ch, false)) {
@@ -302,7 +308,7 @@ func registerMember(db *sql.DB, access *channelAccess, request registrationReque
 		}
 		address := registeredSender(p.Name, parent.Name, parent.ID)
 		var taken bool
-		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM principals WHERE kind='agent' AND parent_id=? AND name=? AND id<>?) OR EXISTS(SELECT 1 FROM principal_aliases WHERE address=? AND principal_id<>?)`, parent.ID, p.Name, p.ID, address, p.ID).Scan(&taken); err != nil {
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM principals WHERE kind IN ('agent','human') AND parent_id=? AND name=? AND id<>?) OR EXISTS(SELECT 1 FROM principal_aliases WHERE address=? AND principal_id<>?)`, parent.ID, p.Name, p.ID, address, p.ID).Scan(&taken); err != nil {
 			return nil, err
 		}
 		if taken {
@@ -543,13 +549,27 @@ func registerRemote(ctx context.Context, db *sql.DB, remote *Remote, invite stri
 }
 
 func agentRemote(ctx context.Context, db *sql.DB, remote Remote, name, channel string) (Remote, error) {
+	var humanName string
+	if db.QueryRow("SELECT name FROM remote_human_sessions WHERE server_id=?", remote.ServerID).Scan(&humanName) == nil && name == humanName {
+		return remote, nil
+	}
+
 	key, err := localCredential(db, remote.ServerID, name)
 	if err != nil {
 		return remote, err
 	}
 	if key.Status != "active" {
 		var p Principal
-		if err := remoteRequest(ctx, remote, "POST", "/v1/agents", registrationRequest{Credential: key.Secret, Name: name, Channels: []string{channel}}, &p); err != nil {
+		registration := registrationRequest{Credential: key.Secret, Name: name, Kind: localActorKind(db, name), Channels: []string{channel}}
+		err := remoteRequest(ctx, remote, "POST", "/v1/agents", registration, &p)
+		var failure *remoteHTTPError
+		if registration.Kind == "human" && errors.As(err, &failure) && failure.Status == 400 {
+			// Older coordinators do not understand the optional actor-kind
+			// field. Preserve their existing owner-scoped participant flow.
+			registration.Kind = ""
+			err = remoteRequest(ctx, remote, "POST", "/v1/agents", registration, &p)
+		}
+		if err != nil {
 			return remote, err
 		}
 		if _, err := db.Exec("UPDATE local_credentials SET principal_id=?,status=? WHERE server_id=? AND agent_name=?", p.ID, p.Status, remote.ServerID, name); err != nil {
@@ -558,4 +578,10 @@ func agentRemote(ctx context.Context, db *sql.DB, remote Remote, name, channel s
 	}
 	remote.Token = key.Secret
 	return remote, nil
+}
+
+func localActorKind(db *sql.DB, name string) string {
+	var kind string
+	_ = db.QueryRow("SELECT kind FROM principals WHERE name=? AND kind='human' AND status='active'", name).Scan(&kind)
+	return kind
 }

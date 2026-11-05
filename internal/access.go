@@ -10,6 +10,8 @@ import (
 // Private is the default. Open changes the default; channel overrides can
 // mix a public lobby with private conversations on the same coordinator.
 type CoordinatorOptions struct {
+	Web             bool // serve the human web application
+	LocalUI         bool // trusted localhost human interface; never enable on a public listener
 	PublicURL       string
 	Channels        []string
 	Open            bool
@@ -138,7 +140,7 @@ func (a *channelAccess) authorize(w http.ResponseWriter, r *http.Request, channe
 	}
 	write := r.Method == "POST" && r.URL.Path == "/v1/messages"
 	p := requestPrincipal(r)
-	if write && (p == nil || p.Kind != "agent") {
+	if write && !isChatParticipant(p) {
 		apiError(w, 401, "a registered agent identity is required to post")
 		return false
 	}

@@ -296,6 +296,25 @@ CREATE TABLE IF NOT EXISTS credential_expiry (
 CREATE TABLE IF NOT EXISTS provider_poll (
     run_id TEXT PRIMARY KEY, next_at INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS workspace_signins (
+ state_hash TEXT PRIMARY KEY, local_principal_id TEXT NOT NULL REFERENCES principals(id),
+ base_url TEXT NOT NULL, server_id TEXT NOT NULL, alias TEXT NOT NULL, client_id TEXT NOT NULL,
+ callback TEXT NOT NULL, verifier TEXT NOT NULL, status TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', expires_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS remote_human_sessions (
+ server_id TEXT PRIMARY KEY, local_principal_id TEXT NOT NULL REFERENCES principals(id),
+ principal_id TEXT NOT NULL, name TEXT NOT NULL, client_id TEXT NOT NULL, refresh_token TEXT NOT NULL, expires_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS web_accounts (
+ principal_id TEXT PRIMARY KEY REFERENCES principals(id), login TEXT NOT NULL UNIQUE,
+ salt TEXT NOT NULL, password_hash TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS web_sessions (
+ secret_hash TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id), expires_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS web_tickets (
+ secret_hash TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id), expires_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS bridge_leases (
     session_id TEXT PRIMARY KEY REFERENCES agent_sessions(id),
     owner TEXT NOT NULL, expires_at INTEGER NOT NULL

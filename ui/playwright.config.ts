@@ -1,0 +1,2 @@
+import { chromium, defineConfig } from '@playwright/test';
+export default defineConfig({testDir:'tests',workers:1,timeout:45000,use:{headless:true,viewport:{width:1280,height:850},launchOptions:{executablePath:process.env.GRPVN_CHROME || (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : chromium.executablePath())},trace:'retain-on-failure'},reporter:'list'});

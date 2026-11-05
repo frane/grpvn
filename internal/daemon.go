@@ -42,6 +42,9 @@ func DaemonRunning(ctx context.Context, db *sql.DB) (bool, error) {
 }
 
 func DaemonLogPath(db *sql.DB) (string, error) {
+	if isPostgres(db) {
+		return postgresLogPath()
+	}
 	var seq int
 	var name, path string
 	if err := db.QueryRow("PRAGMA database_list").Scan(&seq, &name, &path); err != nil {

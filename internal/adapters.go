@@ -294,7 +294,7 @@ func PollAgentRuns(ctx context.Context, db *sql.DB) error {
 		// delays the next GET; it never repeats a model creation request.
 		now := time.Now()
 		claim, err := db.Exec(`INSERT INTO provider_poll(run_id,next_at,failures) VALUES(?,?,?)
-		ON CONFLICT(run_id) DO UPDATE SET next_at=excluded.next_at WHERE next_at<=?`, r.id, now.Add(time.Minute).UnixMilli(), r.rounds, now.UnixMilli())
+		ON CONFLICT(run_id) DO UPDATE SET next_at=excluded.next_at WHERE provider_poll.next_at<=?`, r.id, now.Add(time.Minute).UnixMilli(), r.rounds, now.UnixMilli())
 		if err != nil {
 			return err
 		}

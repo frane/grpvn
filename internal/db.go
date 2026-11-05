@@ -33,8 +33,15 @@ func dbPath() (string, error) {
 	return filepath.Join(dir, "grpvn.db"), nil
 }
 
-func OpenDB() (*sql.DB, error) {
-	path, err := dbPath()
+func OpenDB() (*sql.DB, error) { return OpenDatabase(configuredDatabase()) }
+
+func openSQLite(path string) (*sql.DB, error) {
+	var err error
+	if path == "" {
+		path, err = dbPath()
+	} else {
+		err = os.MkdirAll(filepath.Dir(path), 0755)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -58,6 +65,9 @@ func OpenDB() (*sql.DB, error) {
 }
 
 func Migrate(db *sql.DB) error {
+	if isPostgres(db) {
+		return migratePostgres(db)
+	}
 	// Retry SQLITE_BUSY on the schema apply. The DSN busy_timeout covers
 	// row-level contention but the journal_mode=WAL transition wants an
 	// exclusive lock that Windows file-locking will occasionally bounce

@@ -2,6 +2,7 @@ package internal
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +12,10 @@ import (
 
 func newTestDB(t *testing.T) *sql.DB {
 	t.Helper()
+	if dsn := os.Getenv("GRPVN_TEST_POSTGRES"); dsn != "" {
+		return newPostgresTestDB(t, dsn)
+	}
+	t.Setenv("GRPVN_DATABASE_URL", "")
 	path := filepath.Join(t.TempDir(), "grpvn.db")
 	t.Setenv("GRPVN_DB", path)
 	db, err := OpenDB()

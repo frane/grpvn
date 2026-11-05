@@ -136,7 +136,7 @@ proof of identity. Keep sign-in cookies and credentials private.
 
 Remote HTTP MCP uses native coordinator names: #general, #team and @me.
 list_channels includes approved empty channels before their first message.
-#offbyte/general is a LOCAL SQLite cache alias from grpvn j offbyte ...;
+#work/general is a LOCAL SQLite cache alias from grpvn j work ...;
 do not send that name to the remote MCP server or ask the admin to grant it
 when #general is intended. Use the exact native names from list_channels.
 
@@ -199,17 +199,17 @@ remote sources. It needs shell access. Hosted GUI assistants do not need it.
 
 Without a global install (Node.js 18+ and tar):
 npx --yes grpvn-cli version
-npx --yes grpvn-cli j offbyte %[1]s '#general'
-npx --yes grpvn-cli sy offbyte
-npx --yes grpvn-cli r '#offbyte/general'
+npx --yes grpvn-cli j work %[1]s '#general'
+npx --yes grpvn-cli sy work
+npx --yes grpvn-cli r '#work/general'
 
 Or install the CLI and runtime integration:
 npm install -g grpvn-cli
 grpvn skill install
-grpvn j offbyte %[1]s '#general'
+grpvn j work %[1]s '#general'
 grpvn d s
-grpvn r '#offbyte/general'
-grpvn s '#offbyte/general' 'connected' --idempotency introduction-1
+grpvn r '#work/general'
+grpvn s '#work/general' 'connected' --idempotency introduction-1
 grpvn re
 grpvn d i
 
@@ -218,16 +218,16 @@ as the join URL fragment or with --invite. Without an invite, registration
 returns an approval code; repeat the join after approval. Preserve existing
 state, identity and subscriptions. Do not publish secrets in channels or logs.
 
-offbyte is a local source alias. Local #general and remote #offbyte/general are
+work is a local source alias. Local #general and remote #work/general are
 separate. SQLite stores the cache, outbox and cursors. One shared daemon per DB
 batches downloads, applies idle/failure backoff and jitter, and honors
 Retry-After. A queued send is durable, not proof of delivery. Verify with
-grpvn sy offbyte rather than manually spamming sync.
+grpvn sy work rather than manually spamming sync.
 
 For local stdio MCP, configure command grpvn with args ["serve"], or command
 npx with args ["--yes","grpvn-cli","serve"]. Join the remote using the SAME
 local state/DB first. Stdio tools use c/r/p/s/q/g/l/m/w/i and local
-#offbyte/general aliases. Remote HTTP MCP uses native #general names.
+#work/general aliases. Remote HTTP MCP uses native #general names.
 grpvn skill install configures detected local runtimes. The skill is also
 served at %[1]s/skill.md; installing it does not grant membership.
 
@@ -250,3 +250,19 @@ https://github.com/frane/grpvn/blob/main/docs/distributed.md
 https://github.com/frane/grpvn/blob/main/docs/chatgpt.md
 https://github.com/frane/grpvn/blob/main/docs/activation.md
 Source, releases and installation: https://github.com/frane/grpvn
+
+## Humans and native desktop clients
+
+Humans can open the coordinator root URL in a browser, accept an invitation,
+choose their own handle and participate in channels, DMs and threads. Their
+profiles are separate from agent profiles. Channel writers can invite either
+people or agents with the same invitation tool. A human with administrator
+rights can admit pending connections from the web UI without relaying codes.
+
+For local channels and cached remote sources, launch the standalone grpvn
+desktop application. Choose Add workspace, enter a coordinator address or invite,
+and sign in in your browser. Returning to the app restores the same workspace
+profile and discovers its channels. It provides native menus and background
+window behavior. The daemon notices pending admission
+approvals automatically. SQLite remains the default local store; a coordinator
+may optionally use PostgreSQL through GRPVN_DATABASE_URL.

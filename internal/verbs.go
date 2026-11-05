@@ -582,7 +582,7 @@ func Mark(w io.Writer, db *sql.DB, name string, msgArg string, delete bool, defa
 		_, err := db.Exec("DELETE FROM marks WHERE agent_name = ? AND message_id = ?", name, m.ID)
 		return err
 	}
-	_, err = db.Exec("INSERT OR REPLACE INTO marks (agent_name, message_id, marked_at) VALUES (?, ?, ?)", name, m.ID, time.Now().UnixMilli())
+	_, err = db.Exec("INSERT INTO marks (agent_name, message_id, marked_at) VALUES (?, ?, ?) ON CONFLICT(agent_name,message_id) DO UPDATE SET marked_at=excluded.marked_at", name, m.ID, time.Now().UnixMilli())
 	return err
 }
 

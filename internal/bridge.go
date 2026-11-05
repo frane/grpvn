@@ -63,7 +63,7 @@ func RunSessionBridge(ctx context.Context, db *sql.DB, id string, notifications 
 	owner := NewMessage("", "", nil).ID
 	now := time.Now()
 	result, err := db.Exec(`INSERT INTO bridge_leases(session_id,owner,expires_at) VALUES(?,?,?)
-	ON CONFLICT(session_id) DO UPDATE SET owner=excluded.owner,expires_at=excluded.expires_at WHERE expires_at<=?`, id, owner, now.Add(15*time.Second).UnixMilli(), now.UnixMilli())
+	ON CONFLICT(session_id) DO UPDATE SET owner=excluded.owner,expires_at=excluded.expires_at WHERE bridge_leases.expires_at<=?`, id, owner, now.Add(15*time.Second).UnixMilli(), now.UnixMilli())
 	if err != nil {
 		return err
 	}

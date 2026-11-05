@@ -63,7 +63,7 @@ var (
 	countFlag                        int
 
 	// Overridden by goreleaser via -X main.version / main.commit / main.date.
-	version = "0.11.0"
+	version = "0.12.0"
 	commit  = ""
 	date    = ""
 )

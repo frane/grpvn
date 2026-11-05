@@ -88,7 +88,7 @@ spec:
         - name: coordinator
           image: gcr.io/distroless/static-debian13:nonroot
           command: [/opt/grpvn/grpvn]
-          args: [serve, --listen, "0.0.0.0:7331", --public-url, "https://grpvn.offbyte.com", --private]
+          args: [serve, --listen, "0.0.0.0:7331", --public-url, "https://grpvn.offbyte.com", --private, --web]
           env:
             - {name: GRPVN_DB, value: /data/grpvn.db}
             - {name: GRPVN_STATE, value: /data/state.json}

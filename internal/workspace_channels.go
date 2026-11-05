@@ -17,7 +17,7 @@ type WorkspaceChannel struct {
 }
 
 func trustedParticipant(db dbtx, p *Principal) bool {
-	return p != nil && p.Kind == "agent" && trustedWorkspaceIdentity(db, p)
+	return isChatParticipant(p) && trustedWorkspaceIdentity(db, p)
 }
 
 func trustedWorkspaceIdentity(db dbtx, p *Principal) bool {
@@ -92,7 +92,7 @@ func channelGrant(db dbtx, p *Principal, channel string, write bool) error {
 			continue
 		}
 		if _, err := db.Exec(`INSERT INTO permissions(principal_id,channel,can_read,can_write) VALUES(?,?,1,?)
-   ON CONFLICT(principal_id,channel) DO UPDATE SET can_read=1,can_write=MAX(can_write,excluded.can_write)`, id, channel, write); err != nil {
+   ON CONFLICT(principal_id,channel) DO UPDATE SET can_read=1,can_write=MAX(permissions.can_write,excluded.can_write)`, id, channel, write); err != nil {
 			return err
 		}
 	}
@@ -186,7 +186,7 @@ func ensureSendChannel(db *sql.DB, access *channelAccess, p *Principal, channel 
 func participantByAddress(db dbtx, address string) (*Principal, error) {
 	address = strings.TrimPrefix(address, "@")
 	p, err := findPrincipal(db, "id=?", address)
-	if err == nil && p.Kind == "agent" {
+	if err == nil && isChatParticipant(p) {
 		return p, nil
 	}
 	var id string
@@ -194,7 +194,7 @@ func participantByAddress(db dbtx, address string) (*Principal, error) {
 	if err == nil {
 		return findPrincipal(db, "id=?", id)
 	}
-	rows, err := db.Query("SELECT id,name,COALESCE(parent_id,'') FROM principals WHERE kind='agent' AND status IN ('active','pending')")
+	rows, err := db.Query("SELECT id,name,COALESCE(parent_id,'') FROM principals WHERE kind IN ('agent','human') AND status IN ('active','pending')")
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +256,7 @@ func InviteWorkspaceAgent(db *sql.DB, access *channelAccess, inviter *Principal,
 	if err != nil {
 		return nil, err
 	}
-	if recipient.Status == "revoked" || recipient.Kind != "agent" {
+	if recipient.Status == "revoked" || !isChatParticipant(recipient) {
 		return nil, fmt.Errorf("this agent cannot be invited")
 	}
 	if recipient.ParentID != "" {

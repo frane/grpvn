@@ -21,6 +21,7 @@ const syncPageSize = 100
 type serverInfo struct {
 	Protocol int    `json:"protocol"`
 	ServerID string `json:"server_id"`
+	Web      bool   `json:"web,omitempty"`
 }
 
 // wireMessage uses the coordinator's IDs and commit sequence. Each client
@@ -110,17 +111,26 @@ func CoordinatorHandler(db *sql.DB, options CoordinatorOptions) (http.Handler, e
 	}
 	mux := http.NewServeMux()
 	mountAgentGuide(mux, options.PublicURL)
+	if options.Web || options.LocalUI {
+		mountWeb(mux, db, access, options.PublicURL, options.LocalUI)
+	} else {
+		mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/llm.txt", http.StatusTemporaryRedirect)
+		})
+	}
 	if options.PublicURL != "" {
 		if err := mountOAuth(mux, db, options.PublicURL, access); err != nil {
 			return nil, err
 		}
+	} else {
+		mountBrowserInvitations(mux, db, "")
 	}
 	mux.Handle("/mcp", remoteMCPHandler(db, access, options.PublicURL))
 	mux.HandleFunc("POST /v1/register", enrollmentHandler(db, access, false))
 	mux.HandleFunc("POST /v1/agents", enrollmentHandler(db, access, true))
 	mux.HandleFunc("POST /v1/sync", batchHandler(db, access, id))
 	mux.HandleFunc("GET /v1/info", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, serverInfo{syncProtocol, id})
+		writeJSON(w, http.StatusOK, serverInfo{Protocol: syncProtocol, ServerID: id, Web: options.Web})
 	})
 	mux.HandleFunc("GET /v1/channels", func(w http.ResponseWriter, r *http.Request) {
 		channels, err := channelCandidates(db, access)
@@ -227,7 +237,7 @@ func CoordinatorHandler(db *sql.DB, options CoordinatorOptions) (http.Handler, e
 			apiError(w, 409, "coordinator identity changed")
 			return
 		}
-		if publicGuidePath(r.URL.Path) || r.URL.Path == "/join" || r.URL.Path == "/v1/info" || r.URL.Path == "/v1/register" || r.URL.Path == "/mcp" || strings.HasPrefix(r.URL.Path, "/oauth/") || strings.HasPrefix(r.URL.Path, "/.well-known/") {
+		if humanAPIPath(r.URL.Path) || strings.HasPrefix(r.URL.Path, "/assets/") || r.URL.Path == "/favicon.svg" || publicGuidePath(r.URL.Path) || r.URL.Path == "/join" || r.URL.Path == "/v1/info" || r.URL.Path == "/v1/register" || r.URL.Path == "/mcp" || strings.HasPrefix(r.URL.Path, "/oauth/") || strings.HasPrefix(r.URL.Path, "/.well-known/") {
 			mux.ServeHTTP(w, r)
 			return
 		}
@@ -329,6 +339,9 @@ func acceptAttributedMessage(db *sql.DB, wire wireMessage, principal *Principal)
 			owner = parent
 		}
 		m.Sender = registeredSender(principal.Name, owner.Name, owner.ID)
+		if principal.Kind == "human" && principal.ParentID == "" {
+			m.Sender = principal.Name
+		}
 	}
 	if err := m.save(tx); err != nil {
 		return nil, fmt.Errorf("cannot save message")

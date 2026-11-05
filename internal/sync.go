@@ -45,6 +45,9 @@ func remoteRequest(ctx context.Context, remote Remote, method, path string, inpu
 		req.Header.Set("X-Grpvn-Server", remote.ServerID)
 	}
 	req.Header.Set("Accept", "application/json")
+	if path == "/mcp" {
+		req.Header.Set("Accept", "application/json, text/event-stream")
+	}
 	if input != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -164,8 +167,31 @@ func SyncAvailable(ctx context.Context, db *sql.DB) (SyncStats, error) {
 
 func syncRemote(ctx context.Context, db *sql.DB, remote Remote) (SyncStats, error) {
 	var stats SyncStats
+	if err := refreshHumanRemote(ctx, db, &remote); err != nil {
+		return stats, err
+	}
+	credential, err := localCredential(db, remote.ServerID, "")
+	if err != nil {
+		return stats, err
+	}
+	if credential.Status == "pending" {
+		channels, err := RemoteChannels(db, remote.Name)
+		if err != nil {
+			return stats, err
+		}
+		var requested []string
+		for _, channel := range channels {
+			requested = append(requested, channel.Channel)
+		}
+		p, err := registerRemote(ctx, db, &remote, "", requested)
+		if err != nil {
+			return stats, err
+		}
+		if p.Status != "active" {
+			return stats, &remoteHTTPError{Status: 403, Message: "Waiting for workspace admission"}
+		}
+	}
 	var failures []error
-	var err error
 	stats.Pushed, err = pushOutgoing(ctx, db, remote)
 	if err != nil {
 		failures = append(failures, err)
@@ -173,6 +199,14 @@ func syncRemote(ctx context.Context, db *sql.DB, remote Remote) (SyncStats, erro
 	channels, err := RemoteChannels(db, remote.Name)
 	if err != nil {
 		return stats, errors.Join(append(failures, err)...)
+	}
+	if len(channels) == 0 {
+		var human bool
+		_ = db.QueryRow("SELECT EXISTS(SELECT 1 FROM remote_human_sessions WHERE server_id=?)", remote.ServerID).Scan(&human)
+		if human {
+			_ = discoverWorkspaceChannels(ctx, db, remote)
+			channels, _ = RemoteChannels(db, remote.Name)
+		}
 	}
 	stats.Pulled, err = pullBatch(remote, db, func(request syncBatchRequest, response *syncBatchResponse) error {
 		return remoteRequest(ctx, remote, "POST", "/v1/sync", request, response)
@@ -201,6 +235,10 @@ func pushOutgoing(ctx context.Context, db *sql.DB, remote Remote) (int, error) {
 		}
 		if err := remoteRequest(ctx, agent, "POST", "/v1/messages", wire, &ack); err != nil {
 			return pushed, err
+		}
+		var humanID string
+		if db.QueryRow("SELECT principal_id FROM remote_human_sessions WHERE server_id=?", remote.ServerID).Scan(&humanID) == nil && ack.PrincipalID == humanID {
+			wire.Sender = ack.Sender
 		}
 		if ack.Seq <= 0 || !sameWire(*wire, ack) {
 			return pushed, fmt.Errorf("coordinator acknowledged a different message")
@@ -357,7 +395,7 @@ func importPage(db *sql.DB, remote string, channel RemoteChannel, page messagePa
 			if own != wire.OwnerID {
 				m.Sender = registeredSender(wire.Sender, wire.OwnerName, wire.OwnerID)
 			}
-			if _, err := tx.Exec("INSERT OR REPLACE INTO remote_attributions(local_id,principal_id,owner_id,approved) VALUES(?,?,?,?)", id, wire.PrincipalID, wire.OwnerID, wire.OwnerApproved); err != nil {
+			if _, err := tx.Exec("INSERT INTO remote_attributions(local_id,principal_id,owner_id,approved) VALUES(?,?,?,?) ON CONFLICT(local_id) DO UPDATE SET principal_id=excluded.principal_id,owner_id=excluded.owner_id,approved=excluded.approved", id, wire.PrincipalID, wire.OwnerID, wire.OwnerApproved); err != nil {
 				return 0, err
 			}
 		}
