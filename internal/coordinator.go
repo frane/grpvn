@@ -110,6 +110,7 @@ func CoordinatorHandler(db *sql.DB, options CoordinatorOptions) (http.Handler, e
 		return nil, err
 	}
 	mux := http.NewServeMux()
+	mountFiles(mux, db, access, options.PublicURL, options.LocalUI)
 	mountAgentGuide(mux, options.PublicURL)
 	if options.Web || options.LocalUI {
 		mountWeb(mux, db, access, options.PublicURL, options.LocalUI)
@@ -277,6 +278,9 @@ func acceptRemoteMessage(db *sql.DB, wire wireMessage) (*Message, error) {
 }
 
 func acceptAttributedMessage(db *sql.DB, wire wireMessage, principal *Principal) (*Message, error) {
+	if channelArchived(db, wire.Target) {
+		return nil, fmt.Errorf("channel is archived")
+	}
 	tx, err := beginWrite(db)
 	if err != nil {
 		return nil, fmt.Errorf("cannot write log")

@@ -125,6 +125,13 @@ func TestDesktopWorkspaceSignInReusesHumanProfile(t *testing.T) {
 	if !strings.HasSuffix(target, "/general") {
 		t.Fatal("accessible channels were not discovered", state)
 	}
+	status, file := uploadTestFile(t, browser, local.URL, target, "", "desktop.go", []byte("package main\nfunc main() {}\n"))
+	if status != 201 {
+		t.Fatal("desktop upload", status, file)
+	}
+	if remoteFile, err := loadChatFile(remoteDB, file["id"].(string), "#general"); err != nil || remoteFile.Name != "desktop.go" {
+		t.Fatal("desktop upload was not stored by the coordinator", err)
+	}
 	call("POST", local.URL+"/v1/chat/messages", local.URL, map[string]string{"Target": target, "Body": "From the desktop, same human", "IdempotencyKey": "native-human-profile"})
 	var alias string
 	_ = localDB.QueryRow("SELECT name FROM remotes").Scan(&alias)
@@ -144,6 +151,39 @@ func TestDesktopWorkspaceSignInReusesHumanProfile(t *testing.T) {
 	call("POST", local.URL+"/v1/chat/messages", local.URL, map[string]string{"Target": created, "Body": "Created from the desktop", "IdempotencyKey": "native-human-create"})
 	mustSync(t, localDB, alias)
 	messageIn(t, remoteDB, "#desktop-project", "Created from the desktop")
+	management := local.URL + "/v1/chat/channels?workspace=" + url.QueryEscape(alias)
+	call("POST", local.URL+"/v1/chat/memberships?workspace="+url.QueryEscape(alias), local.URL, map[string]string{"Channel": created, "Action": "leave"})
+	call("POST", remoteBase+"/v1/chat/messages", remoteBase, map[string]string{"Target": "#desktop-project", "Body": "History after the desktop left", "IdempotencyKey": "archived-history"})
+	call("PATCH", management, local.URL, map[string]any{"Channel": created, "Archived": true})
+	if !channelArchived(remoteDB, "#desktop-project") || !channelArchived(localDB, created) {
+		t.Fatal("desktop did not archive the remote channel")
+	}
+	call("GET", local.URL+"/v1/chat/messages?target="+url.QueryEscape(created)+"&refresh=1", "", nil)
+	messageIn(t, localDB, created, "History after the desktop left")
+	var localOwner string
+	_ = localDB.QueryRow("SELECT local_principal_id FROM remote_human_sessions").Scan(&localOwner)
+	if channelJoined(localDB, localOwner, created) {
+		t.Fatal("viewing archived history rejoined the channel")
+	}
+	call("PATCH", management, local.URL, map[string]any{"Channel": created, "Archived": false})
+	call("POST", local.URL+"/v1/chat/memberships?workspace="+url.QueryEscape(alias), local.URL, map[string]string{"Channel": created, "Action": "join"})
+	if err := GrantWorkspaceChannels(remoteDB, profile["id"].(string), []string{"#later-read-only"}, false); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = localDB.Exec("UPDATE chat_metadata SET value=0 WHERE key LIKE 'remote:%'")
+	mustSync(t, localDB, alias)
+	later := "#" + alias + "/later-read-only"
+	if status, _, _ := request("POST", local.URL+"/v1/chat/messages", local.URL, map[string]string{"Target": later, "Body": "Must not be queued"}); status != 403 {
+		t.Fatal("desktop ignored changed write permission", status)
+	}
+	if _, err := remoteDB.Exec("DELETE FROM permissions WHERE principal_id=? AND channel='#later-read-only'", profile["id"]); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = localDB.Exec("UPDATE chat_metadata SET value=0 WHERE key LIKE 'remote:%'")
+	mustSync(t, localDB, alias)
+	if status, _, _ := request("GET", local.URL+"/v1/chat/messages?target="+url.QueryEscape(later), "", nil); status != 403 {
+		t.Fatal("revoked remote read permission remained visible", status)
+	}
 	if _, err = localDB.Exec("UPDATE remote_human_sessions SET expires_at=0"); err != nil {
 		t.Fatal(err)
 	}

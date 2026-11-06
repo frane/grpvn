@@ -175,5 +175,8 @@ func JoinWorkspaceChannel(db *sql.DB, access *channelAccess, p *Principal, chann
 	if access.isOpen(channel) {
 		return GrantWorkspaceChannels(db, p.ID, []string{channel}, true)
 	}
-	return nil
+	if err := setChannelJoined(db, p.ID, channel, true); err != nil {
+		return err
+	}
+	return TouchChatMetadata(db)
 }

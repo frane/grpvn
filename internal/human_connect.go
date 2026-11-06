@@ -136,11 +136,7 @@ func (s *webServer) startWorkspace(w http.ResponseWriter, r *http.Request, p *Pr
 			apiError(w, 400, "Could not load workspace channels. Try again.")
 			return
 		}
-		channels, _ := RemoteChannels(s.db, alias)
-		target := ""
-		if len(channels) > 0 {
-			target = channels[0].Target
-		}
+		target := activeRemoteTarget(s.db, alias, p.ID)
 		writeJSON(w, 200, map[string]string{"status": "connected", "source": alias, "target": target})
 		return
 	}
@@ -366,15 +362,16 @@ func (s *webServer) workspaceStatus(w http.ResponseWriter, r *http.Request, p *P
 	}
 	target := ""
 	if status == "connected" {
-		channels, _ := RemoteChannels(s.db, alias)
-		if len(channels) > 0 {
-			target = channels[0].Target
-		}
+		target = activeRemoteTarget(s.db, alias, p.ID)
 	}
 	writeJSON(w, 200, map[string]string{"status": status, "detail": detail, "target": target})
 }
 
 func discoverWorkspaceChannels(ctx context.Context, db *sql.DB, remote Remote) error {
+	var owner string
+	if db.QueryRow("SELECT local_principal_id FROM remote_human_sessions WHERE server_id=?", remote.ServerID).Scan(&owner) == nil {
+		return discoverHumanChannels(ctx, db, remote, owner)
+	}
 	var list struct {
 		Channels []string `json:"channels"`
 	}

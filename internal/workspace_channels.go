@@ -95,8 +95,13 @@ func channelGrant(db dbtx, p *Principal, channel string, write bool) error {
    ON CONFLICT(principal_id,channel) DO UPDATE SET can_read=1,can_write=MAX(permissions.can_write,excluded.can_write)`, id, channel, write); err != nil {
 			return err
 		}
+		if strings.HasPrefix(channel, "#") {
+			if err := setChannelJoined(db, id, channel, true); err != nil {
+				return err
+			}
+		}
 	}
-	return nil
+	return TouchChatMetadata(db)
 }
 
 func CreateWorkspaceChannel(db *sql.DB, access *channelAccess, p *Principal, channel string, open bool) (WorkspaceChannel, error) {

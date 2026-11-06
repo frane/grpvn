@@ -55,6 +55,13 @@ func (s *webServer) principal(r *http.Request) *Principal {
 	}
 	return p
 }
+func (s *webServer) actor(r *http.Request) *Principal {
+	p := s.principal(r)
+	if p == nil && r.Header.Get("Authorization") != "" {
+		p, _ = authenticateMember(s.db, r)
+	}
+	return p
+}
 func (s *webServer) cookie(w http.ResponseWriter, secret string, age int) {
 	http.SetCookie(w, &http.Cookie{Name: s.sessionCookie(), Value: secret, Path: "/", HttpOnly: true, Secure: strings.HasPrefix(s.base, "https://"), SameSite: http.SameSiteLaxMode, MaxAge: age})
 }
@@ -107,6 +114,17 @@ func (s *webServer) can(p *Principal, target string, write bool) bool {
 	if p == nil {
 		return false
 	}
+	if write && channelArchived(s.db, target) {
+		return false
+	}
+	if s.local {
+		if alias, native, ok := splitRemoteTarget(target); ok {
+			var read, post bool
+			if err := s.db.QueryRow("SELECT can_read,can_write FROM remote_channel_details WHERE remote_name=? AND channel=?", alias, native).Scan(&read, &post); err == nil {
+				return read && (!write || post) && principalPermission(s.db, p, target, write)
+			}
+		}
+	}
 	if strings.HasPrefix(target, "@") && p.Kind == "human" {
 		return principalPermission(s.db, p, "@*", write) || principalPermission(s.db, p, "*", write)
 	}
@@ -144,7 +162,7 @@ func mountWeb(mux *http.ServeMux, db *sql.DB, access *channelAccess, base string
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		if r.Method != "GET" {
+		if r.Method != "GET" && r.Header.Get("Authorization") == "" {
 			origin := s.base
 			if origin == "" {
 				origin = "http://" + r.Host
@@ -154,7 +172,7 @@ func mountWeb(mux *http.ServeMux, db *sql.DB, access *channelAccess, base string
 				return
 			}
 		}
-		p := s.principal(r)
+		p := s.actor(r)
 		switch r.URL.Path {
 		case "/oauth/callback":
 			if local && r.Method == "GET" {
@@ -199,9 +217,22 @@ func mountWeb(mux *http.ServeMux, db *sql.DB, access *channelAccess, base string
 			apiError(w, 401, "Sign in to continue")
 			return
 		}
+		if p.scopes != nil {
+			scope := "grpvn.read"
+			if r.Method != "GET" && r.URL.Path != "/v1/chat/read-markers" {
+				scope = "grpvn.write"
+			}
+			if !p.scopes[scope] {
+				apiError(w, 403, "Credential does not grant "+scope)
+				return
+			}
+		}
 		s.handle(w, r, p)
+		if r.Method != "GET" && r.URL.Path != "/v1/chat/read-markers" {
+			_ = TouchChatMetadata(db)
+		}
 	})
-	for _, prefix := range []string{"/v1/auth/", "/v1/accounts", "/v1/chat/", "/v1/access-requests", "/v1/access-approvals", "/v1/workspaces", "/v1/workspace-connections", "/v1/workspace-connections/"} {
+	for _, prefix := range []string{"/v1/auth/", "/v1/accounts", "/v1/chat/", "/v1/members", "/v1/members/", "/v1/access-requests", "/v1/access-approvals", "/v1/workspaces", "/v1/workspace-connections", "/v1/workspace-connections/"} {
 		mux.Handle(prefix, handler)
 	}
 	if local {
@@ -385,6 +416,9 @@ func LocalHumanTicket(db *sql.DB, name string) (string, error) {
 }
 
 func (s *webServer) handle(w http.ResponseWriter, r *http.Request, p *Principal) {
+	if s.manage(w, r, p) {
+		return
+	}
 	if s.local && r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/v1/workspace-connections/") {
 		s.workspaceStatus(w, r, p)
 		return
@@ -392,7 +426,7 @@ func (s *webServer) handle(w http.ResponseWriter, r *http.Request, p *Principal)
 	switch r.URL.Path {
 	case "/v1/chat/channels":
 		if r.Method == "GET" {
-			s.channels(w, p)
+			s.channels(w, r, p)
 			return
 		}
 
@@ -498,6 +532,20 @@ func (s *webServer) handle(w http.ResponseWriter, r *http.Request, p *Principal)
 				return
 			}
 			if a.Agent != "" {
+				if s.local {
+					if _, err := participantByAddress(s.db, a.Agent); err != nil {
+						if !write {
+							apiError(w, 400, "Use Manage members to edit local posting access")
+							return
+						}
+						if err = s.inviteLocalAgent(p, a.Channel, a.Agent); err != nil {
+							apiError(w, 403, err.Error())
+						} else {
+							writeJSON(w, 200, map[string]string{"name": strings.TrimPrefix(a.Agent, "@"), "status": "joined"})
+						}
+						return
+					}
+				}
 				peer, err := InviteWorkspaceAgent(s.db, s.access, p, a.Channel, a.Agent, write)
 				if err != nil {
 					apiError(w, 403, err.Error())
@@ -575,7 +623,7 @@ func (s *webServer) handle(w http.ResponseWriter, r *http.Request, p *Principal)
 	apiError(w, 404, "Not found")
 }
 
-func (s *webServer) channels(w http.ResponseWriter, p *Principal) {
+func (s *webServer) channels(w http.ResponseWriter, r *http.Request, p *Principal) {
 	query := `SELECT target FROM messages WHERE target LIKE '#%' UNION SELECT channel FROM workspace_channels UNION SELECT channel FROM permissions WHERE principal_id=? AND channel LIKE '#%'`
 	if s.local {
 		query += " UNION SELECT target FROM remote_channels"
@@ -597,6 +645,11 @@ func (s *webServer) channels(w http.ResponseWriter, p *Principal) {
 	out := []map[string]any{}
 	for _, n := range names {
 		if !s.can(p, n, false) {
+			continue
+		}
+		archived := channelArchived(s.db, n)
+		joined := channelJoined(s.db, p.ID, n)
+		if r.URL.Query().Get("browse") != "1" && (archived || !joined) {
 			continue
 		}
 		var unread, latest int64
@@ -621,7 +674,11 @@ func (s *webServer) channels(w http.ResponseWriter, p *Principal) {
 				source = "local"
 			}
 		}
-		out = append(out, map[string]any{"name": n, "label": native, "source": source, "source_id": sourceID, "account_name": account, "unread": unread, "latest": latest, "write": s.can(p, n, true), "open": s.access.isOpen(n)})
+		open, manage := s.access.isOpen(n), canManageChannel(s.db, p, n)
+		if sourceID != "" {
+			_ = s.db.QueryRow("SELECT is_open,can_manage FROM remote_channel_details WHERE remote_name=? AND channel=?", sourceID, native).Scan(&open, &manage)
+		}
+		out = append(out, map[string]any{"name": n, "label": native, "source": source, "source_id": sourceID, "account_name": account, "unread": unread, "latest": latest, "write": s.can(p, n, true), "open": open, "joined": joined, "archived": archived, "manage": manage})
 	}
 	writeJSON(w, 200, map[string]any{"channels": out})
 }
@@ -633,6 +690,16 @@ func (s *webServer) messages(w http.ResponseWriter, r *http.Request, p *Principa
 	if !s.can(p, target, false) {
 		apiError(w, 403, "Channel access denied")
 		return
+	}
+	if s.local && r.URL.Query().Get("refresh") == "1" {
+		if err := SyncTarget(r.Context(), s.db, target); err != nil {
+			var cached bool
+			_ = s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM messages WHERE target=?)", target).Scan(&cached)
+			if !cached {
+				apiError(w, 503, "History is unavailable while this workspace is offline. Try again shortly.")
+				return
+			}
+		}
 	}
 	before := int64(0)
 	if raw := r.URL.Query().Get("before"); raw != "" {
@@ -704,6 +771,10 @@ func (s *webServer) messages(w http.ResponseWriter, r *http.Request, p *Principa
 	writeJSON(w, 200, map[string]any{"messages": out, "more": len(list) == 100})
 }
 func (s *webServer) send(w http.ResponseWriter, r *http.Request, p *Principal) {
+	if !isChatParticipant(p) {
+		apiError(w, 401, "An agent or human profile is required to post")
+		return
+	}
 	var a struct{ Target, Body, IdempotencyKey string }
 	if !webDecode(w, r, &a) {
 		return
@@ -781,7 +852,7 @@ func (s *webServer) people(w http.ResponseWriter) {
 		people = append(people, map[string]string{"id": p.ID, "name": name, "kind": p.Kind, "status": p.Status})
 	}
 	if s.local {
-		rows, err := s.db.Query("SELECT DISTINCT sender FROM messages m WHERE NOT EXISTS(SELECT 1 FROM remote_messages rm WHERE rm.local_id=m.id) ORDER BY sender LIMIT 200")
+		rows, err := s.db.Query("SELECT DISTINCT sender FROM messages m WHERE NOT EXISTS(SELECT 1 FROM remote_messages rm WHERE rm.local_id=m.id) AND NOT EXISTS(SELECT 1 FROM local_participants lp WHERE lp.name=m.sender AND lp.enabled=0) UNION SELECT agent_name FROM agent_sessions a WHERE NOT EXISTS(SELECT 1 FROM local_participants lp WHERE lp.name=a.agent_name AND lp.enabled=0) ORDER BY 1 LIMIT 200")
 		if err == nil {
 			for rows.Next() {
 				var name string
@@ -859,17 +930,20 @@ func subscribeWeb(db *sql.DB) (chan struct{}, func()) {
 			tick := time.NewTicker(time.Second)
 			defer tick.Stop()
 			var last int64 = -1
+			var lastMetadata int64 = -1
 			for {
 				select {
 				case <-ctx.Done():
 					return
 				case <-tick.C:
 					var seq int64
-					if db.QueryRowContext(ctx, "SELECT COALESCE(MAX(seq),0) FROM messages").Scan(&seq) != nil {
+					var metadata int64
+					if db.QueryRowContext(ctx, "SELECT COALESCE(MAX(seq),0),COALESCE((SELECT value FROM chat_metadata WHERE key='revision'),0) FROM messages").Scan(&seq, &metadata) != nil {
 						continue
 					}
-					if seq != last {
+					if seq != last || metadata != lastMetadata {
 						last = seq
+						lastMetadata = metadata
 						f.mu.Lock()
 						for c := range f.listeners {
 							select {
@@ -925,7 +999,7 @@ func (s *webServer) events(w http.ResponseWriter, r *http.Request, p *Principal)
 		case <-r.Context().Done():
 			return
 		case <-ch:
-			if s.principal(r) == nil {
+			if s.actor(r) == nil {
 				fmt.Fprint(w, "event: signed-out\ndata: {}\n\n")
 				flush.Flush()
 				return
@@ -934,7 +1008,7 @@ func (s *webServer) events(w http.ResponseWriter, r *http.Request, p *Principal)
 				return
 			}
 		case <-heartbeat.C:
-			if s.principal(r) == nil {
+			if s.actor(r) == nil {
 				return
 			}
 			if !push(": keep-alive\n\n") {
@@ -945,7 +1019,7 @@ func (s *webServer) events(w http.ResponseWriter, r *http.Request, p *Principal)
 }
 
 func humanAPIPath(path string) bool {
-	for _, prefix := range []string{"/v1/auth/", "/v1/accounts", "/v1/chat/", "/v1/access-requests", "/v1/access-approvals", "/v1/workspaces", "/v1/workspace-connections"} {
+	for _, prefix := range []string{"/v1/auth/", "/v1/accounts", "/v1/chat/", "/v1/files", "/v1/members", "/v1/access-requests", "/v1/access-approvals", "/v1/workspaces", "/v1/workspace-connections"} {
 		if strings.HasPrefix(path, prefix) {
 			return true
 		}

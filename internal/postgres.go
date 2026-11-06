@@ -202,6 +202,9 @@ CREATE TRIGGER grpvn_message_sequence BEFORE INSERT ON messages FOR EACH ROW EXE
 	if _, err = tx.Exec("INSERT INTO schema_version(version,applied_at) VALUES(?,?) ON CONFLICT DO NOTHING", CurrentSchemaVersion, time.Now().UnixMilli()); err != nil {
 		return err
 	}
+	if _, err = tx.Exec(postgresChatGuard); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 

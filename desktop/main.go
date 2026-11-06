@@ -43,7 +43,7 @@ func main() {
 			return
 		}
 		_ = app.Browser.OpenURL(command.URL)
-	}, Name: "grpvn", Description: "A shared place for people and agents", Linux: application.LinuxOptions{DisableQuitOnLastWindowClosed: true}, OnShutdown: func() { server.Close() }})
+	}, Name: "grpvn", Description: "grpvn chat", Linux: application.LinuxOptions{DisableQuitOnLastWindowClosed: true}, OnShutdown: func() { server.Close() }})
 	window := app.Window.NewWithOptions(application.WebviewWindowOptions{Title: "grpvn", Width: 1240, Height: 820, MinWidth: 760, MinHeight: 520, URL: server.URL})
 	menu := app.NewMenu()
 	if runtime.GOOS == "darwin" {

@@ -67,7 +67,7 @@ func remoteRequest(ctx context.Context, remote Remote, method, path string, inpu
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var failure struct {
 			Error string `json:"error"`
 		}
@@ -97,6 +97,51 @@ type SyncStats struct {
 // transaction, and a slow/broken source cannot prevent another syncing.
 func SyncRemotes(ctx context.Context, db *sql.DB, name string) (SyncStats, error) {
 	return syncScheduled(ctx, db, name, time.Second, true)
+}
+
+// SyncTarget is an explicit history request, including a channel the human
+// has left. It uses the same coordinator lease, pacing and delivery cursor.
+func SyncTarget(ctx context.Context, db *sql.DB, target string) error {
+	alias, _, ok := splitRemoteTarget(target)
+	if !ok {
+		return nil
+	}
+	remote, err := getRemote(db, alias)
+	if err != nil {
+		return err
+	}
+	remote.DB = db
+	owner, claimed, err := claimSync(db, *remote, true, time.Now())
+	if err != nil {
+		return err
+	}
+	if !claimed {
+		return nil
+	}
+	run, cancel := context.WithTimeout(ctx, maxSyncDuration)
+	defer cancel()
+	var stats SyncStats
+	err = refreshHumanRemote(run, db, remote)
+	if err == nil {
+		channels, readErr := RemoteChannels(db, alias)
+		err = readErr
+		if err == nil {
+			for _, channel := range channels {
+				if channel.Target != target {
+					continue
+				}
+				stats.Pulled, err = pullBatch(*remote, db, func(request syncBatchRequest, response *syncBatchResponse) error {
+					return remoteRequest(run, *remote, "POST", "/v1/sync", request, response)
+				}, []RemoteChannel{channel})
+				break
+			}
+		}
+	}
+	if err == nil {
+		err = syncRemoteFiles(run, db, *remote)
+	}
+	finishErr := finishSync(db, *remote, owner, time.Second, stats, err)
+	return errors.Join(err, finishErr)
 }
 
 func syncScheduled(ctx context.Context, db *sql.DB, name string, base time.Duration, force bool) (SyncStats, error) {
@@ -203,6 +248,9 @@ func syncRemote(ctx context.Context, db *sql.DB, remote Remote) (SyncStats, erro
 		}
 	}
 	var failures []error
+	if err := refreshWorkspaceMetadata(ctx, db, remote); err != nil {
+		failures = append(failures, err)
+	}
 	stats.Pushed, err = pushOutgoing(ctx, db, remote)
 	if err != nil {
 		failures = append(failures, err)
@@ -211,18 +259,25 @@ func syncRemote(ctx context.Context, db *sql.DB, remote Remote) (SyncStats, erro
 	if err != nil {
 		return stats, errors.Join(append(failures, err)...)
 	}
-	if len(channels) == 0 {
-		var human bool
-		_ = db.QueryRow("SELECT EXISTS(SELECT 1 FROM remote_human_sessions WHERE server_id=?)", remote.ServerID).Scan(&human)
-		if human {
-			_ = discoverWorkspaceChannels(ctx, db, remote)
-			channels, _ = RemoteChannels(db, remote.Name)
+	var humanOwner string
+	if db.QueryRow("SELECT local_principal_id FROM remote_human_sessions WHERE server_id=?", remote.ServerID).Scan(&humanOwner) == nil {
+		active := channels[:0]
+		for _, channel := range channels {
+			var read bool
+			err := db.QueryRow("SELECT can_read FROM remote_channel_details WHERE remote_name=? AND channel=?", remote.Name, channel.Channel).Scan(&read)
+			if (err == sql.ErrNoRows || read) && channelJoined(db, humanOwner, channel.Target) {
+				active = append(active, channel)
+			}
 		}
+		channels = active
 	}
 	stats.Pulled, err = pullBatch(remote, db, func(request syncBatchRequest, response *syncBatchResponse) error {
 		return remoteRequest(ctx, remote, "POST", "/v1/sync", request, response)
 	}, channels)
 	if err != nil {
+		failures = append(failures, err)
+	}
+	if err := syncRemoteFiles(ctx, db, remote); err != nil {
 		failures = append(failures, err)
 	}
 	return stats, errors.Join(failures...)
@@ -400,6 +455,9 @@ func importPage(db *sql.DB, remote string, channel RemoteChannel, page messagePa
 		}
 		m := wire.message()
 		m.ID, m.Target = id, channel.Target
+		if err := queueMessageFiles(tx, remote, channel.Target, wire.Body); err != nil {
+			return 0, err
+		}
 		if wire.OwnerID != "" {
 			var own string
 			_ = tx.QueryRow("SELECT c.principal_id FROM local_credentials c JOIN remotes r ON r.server_id=c.server_id WHERE r.name=? AND c.agent_name=''", remote).Scan(&own)

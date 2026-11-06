@@ -1,0 +1,57 @@
+import {test,expect} from '@playwright/test';
+import {spawn,spawnSync,ChildProcess} from 'node:child_process';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+import {createServer} from 'node:net';
+
+let root:string,bin:string,base:string,invitation:string,host:ChildProcess,env:NodeJS.ProcessEnv;
+test.beforeAll(async()=>{
+ root=mkdtempSync(join(tmpdir(),'grpvn-ui-features-'));bin=process.env.GRPVN_TEST_BIN||'/private/tmp/grpvn-ui-dev';
+ env={...process.env,GRPVN_DB:join(root,'grpvn.db'),GRPVN_STATE:join(root,'state.json'),GRPVN_DATABASE_URL:'',GRPVN_SCOPE:'host'};
+ const port=await new Promise<number>((resolve,reject)=>{const listener=createServer();listener.listen(0,'127.0.0.1',()=>{const port=(listener.address() as {port:number}).port;listener.close(()=>resolve(port));});listener.on('error',reject);});base='http://127.0.0.1:'+port;
+ const created=spawnSync(bin,['iv','--to','UI owner','--channel','*','--write','--dm','--url',base],{env,encoding:'utf8',timeout:30000});expect(created.status,created.stderr).toBe(0);invitation=created.stdout.trim();
+ host=spawn(bin,['serve','--web','--listen','127.0.0.1:'+port,'--public-url',base],{env,stdio:['ignore','pipe','pipe']});
+ await new Promise<void>((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Coordinator did not start')),20000);host.stderr!.on('data',data=>{output+=data;if(output.includes('coordinator listening')){clearTimeout(timer);resolve();}});host.on('exit',()=>reject(Error('Coordinator exited')));});
+});
+test.afterAll(async()=>{host?.kill('SIGTERM');if(host)await new Promise<void>(resolve=>{host.once('exit',()=>resolve());setTimeout(resolve,7000);});if(root)rmSync(root,{recursive:true,force:true});});
+
+test('mentions, code, attachments, member access and channel lifecycle',async({page,browser})=>{
+ test.setTimeout(120000);const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));await page.setViewportSize({width:1280,height:1000});
+ await page.goto(invitation);await page.getByLabel('Your handle').fill('morgan');await page.getByLabel('Password',{exact:true}).fill('a durable owner password');await page.getByRole('button',{name:'Join the workspace',exact:true}).first().click();
+ await page.getByRole('button',{name:'Create channel',exact:true}).first().click();await page.getByLabel('Channel name').fill('project');await page.getByRole('dialog').getByRole('button',{name:'Create channel',exact:true}).click();
+ const compose=page.getByRole('textbox',{name:'Message #project'});await expect(compose).toBeVisible();
+ await page.getByRole('button',{name:'Invite',exact:true}).click();await page.getByRole('button',{name:'Create invitation link'}).click();const invite=await page.getByLabel('Invitation link').inputValue();await page.getByRole('button',{name:'Close dialog'}).click();
+ const friendContext=await browser.newContext();const friend=await friendContext.newPage();await friend.goto(invite);await friend.getByLabel('Your handle').fill('alex');await friend.getByLabel('Password',{exact:true}).fill('a durable friend password');await friend.getByRole('button',{name:'Join the workspace',exact:true}).first().click();await expect(friend.getByRole('textbox',{name:'Message #project'})).toBeVisible();
+ const friendID=(await (await friend.request.get(base+'/v1/auth/session')).json()).profile.id;
+ await compose.fill('Hey @al');await page.getByRole('option',{name:/alex/}).click();await expect(compose).toHaveValue('Hey @alex ');
+ await compose.fill('Hey @alex — @morgan will review this.\n\n```typescript\nconst answer: number = 42;\nconsole.log(answer);\n```');await compose.press('Enter');
+ await expect(page.locator('.message-body .mention').filter({hasText:'@alex'})).toBeVisible();await expect(page.locator('.mention-me')).toHaveText('@morgan');await expect(page.locator('.message-body .hljs-keyword').first()).toBeVisible();
+ await compose.fill('[broken](grpvn-mention:%)');await compose.press('Enter');await expect(page.locator('.message-body').filter({hasText:'broken'})).toBeVisible();
+ await page.getByRole('button',{name:'Copy code',exact:true}).click();await expect(page.getByRole('button',{name:'Copy code',exact:true})).toHaveText('Copied');
+ await page.locator('input[type=file]').setInputFiles([{name:'pixel.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2ioAAAAASUVORK5CYII=','base64')},{name:'example.ts',mimeType:'text/plain',buffer:Buffer.from('export const version: number = 13;\n')}]);
+ await expect(page.locator('.draft-file.done')).toHaveCount(2,{timeout:15000});await page.getByRole('button',{name:'Send message',exact:true}).click();
+ await expect(page.locator('.image-attachment img')).toBeVisible();const attachment=page.locator('.file-attachment').filter({hasText:'example.ts'});await expect(attachment).toBeVisible();await attachment.getByRole('button',{name:'Preview',exact:true}).click();await expect(page.getByRole('dialog',{name:'Preview example.ts'}).locator('.hljs-keyword').first()).toBeVisible();await page.getByRole('button',{name:'Close preview'}).click();
+ await page.getByRole('button',{name:'Preview pixel.png',exact:true}).click();await expect(page.getByRole('dialog',{name:'Image preview'})).toBeVisible();await page.getByRole('button',{name:'Close preview'}).click();
+ await page.getByRole('button',{name:'Manage members',exact:true}).first().click();await page.getByRole('button',{name:'Edit access for alex'}).click();await page.getByRole('checkbox',{name:/Allow posting/}).uncheck();await page.getByRole('button',{name:'Save access',exact:true}).click();
+ await expect(friend.getByRole('textbox',{name:'Message #project'})).toBeDisabled({timeout:10000});
+ await page.getByRole('button',{name:'Remove alex',exact:true}).click();await expect(friend.getByRole('button',{name:'Sign in',exact:true})).toBeVisible({timeout:10000});await page.getByRole('button',{name:'Removed',exact:true}).click();await page.getByRole('button',{name:'Restore',exact:true}).click();
+ await friend.getByLabel('Your handle').fill('alex');await friend.getByLabel('Password',{exact:true}).fill('a durable friend password');await friend.getByRole('button',{name:'Sign in',exact:true}).click();await expect(friend.getByRole('textbox',{name:'Message #project'})).toBeVisible();expect((await (await friend.request.get(base+'/v1/auth/session')).json()).profile.id).toBe(friendID);
+ await page.getByRole('button',{name:'Close dialog'}).click();await page.getByRole('button',{name:'Channel details',exact:true}).click();await page.getByRole('button',{name:'Leave channel',exact:true}).click();await expect(page.getByRole('heading',{name:'Choose a conversation'})).toBeVisible();
+ await page.getByRole('button',{name:'Browse channels',exact:true}).first().click();await page.getByRole('button',{name:'Join',exact:true}).click();await expect(compose).toBeVisible();
+ await page.getByRole('button',{name:'Channel details',exact:true}).click();await page.getByRole('button',{name:'Archive channel',exact:true}).click();await expect(page.getByRole('heading',{name:'Choose a conversation'})).toBeVisible();
+ await page.getByRole('button',{name:'Browse channels',exact:true}).first().click();await page.getByRole('button',{name:'View history',exact:true}).click();await expect(compose).toBeDisabled();await expect(page.locator('.file-attachment').filter({hasText:'example.ts'})).toBeVisible();await page.getByRole('button',{name:'Browse channels',exact:true}).first().click();await page.getByRole('button',{name:'Reopen',exact:true}).click();await expect(compose).toBeEnabled();
+ await page.screenshot({path:join(tmpdir(),'grpvn-ui-features.png'),fullPage:true});await page.setViewportSize({width:390,height:844});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);await page.screenshot({path:join(tmpdir(),'grpvn-ui-features-mobile.png'),fullPage:true});
+ await friendContext.close();expect(errors).toEqual([]);
+});
+
+test('desktop admin can remove and restore existing local agents',async({page})=>{
+ test.setTimeout(60000);const nativeRoot=join(root,'native');const nativeEnv={...env,GRPVN_DB:join(nativeRoot,'grpvn.db'),GRPVN_STATE:join(nativeRoot,'state.json')};
+ const send=(text:string)=>spawnSync(bin,['--as','local-reef','s','#local-project',text],{env:nativeEnv,encoding:'utf8',timeout:20000});expect(send('Local agent history').status).toBe(0);
+ const native=spawn(process.env.GRPVN_TEST_UI_HOST||'/private/tmp/grpvn-ui-testhost',[],{env:nativeEnv,stdio:['ignore','pipe','pipe']});
+ try{
+  const address=await new Promise<string>((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Desktop host did not start')),20000);native.stdout!.on('data',data=>{output+=data;if(output.includes('\n')){clearTimeout(timer);resolve(output.trim());}});native.on('exit',()=>reject(Error('Desktop host exited')));});
+  await page.goto(address);await expect(page.getByRole('textbox',{name:'Message #local-project'})).toBeVisible();await page.getByRole('button',{name:'Manage members',exact:true}).first().click();await page.getByRole('button',{name:'Remove local-reef',exact:true}).click();expect(send('Must be rejected').status).not.toBe(0);
+  await page.getByRole('button',{name:'Removed',exact:true}).click();await page.getByRole('button',{name:'Restore',exact:true}).click();expect(send('Restored without losing the profile').status).toBe(0);await page.getByRole('button',{name:'Members',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'Invite',exact:true}).click();await page.getByRole('button',{name:'Copy local agent setup prompt',exact:true}).click();await expect(page.getByRole('status')).toContainText('setup prompt copied');await page.getByLabel('Already connected? Add by handle').fill('local-reef');await page.getByLabel('Channel',{exact:true}).fill('#new-local');await page.getByRole('button',{name:'Add to channel',exact:true}).click();await expect(page.getByRole('dialog',{name:'Manage members'})).toBeVisible();await page.getByRole('button',{name:'Close dialog'}).click();await expect(page.locator('.message-body').filter({hasText:'Local agent history'})).toBeVisible();await expect(page.locator('.message-body').filter({hasText:'Restored without losing the profile'})).toBeVisible({timeout:10000});
+ }finally{native.kill('SIGINT');await new Promise<void>(resolve=>{native.once('exit',()=>resolve());setTimeout(resolve,7000);});}
+});

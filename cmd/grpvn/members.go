@@ -184,6 +184,7 @@ var revokeCmd = &cobra.Command{Use: "revoke <member-or-invite-id>", Aliases: []s
 		return err
 	}
 	fmt.Println("revoked")
+	_ = internal.TouchChatMetadata(db)
 	return nil
 }}
 

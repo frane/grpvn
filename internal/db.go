@@ -77,7 +77,7 @@ func Migrate(db *sql.DB) error {
 	for attempt := 0; attempt < attempts; attempt++ {
 		err := migrateOnce(db)
 		if err == nil {
-			return nil
+			return installSQLiteChatGuard(db)
 		}
 		if attempt+1 < attempts && strings.Contains(err.Error(), "database is locked") {
 			time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond)

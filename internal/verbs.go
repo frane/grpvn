@@ -319,6 +319,12 @@ func sendOnce(db dbtx, sender string, targetArg string, bodyArg string, defaultC
 	if err != nil {
 		return nil, err
 	}
+	if channelArchived(db, target) {
+		return nil, fmt.Errorf("channel is archived; reopen it before posting")
+	}
+	if !localSenderAllowed(db, sender, target) {
+		return nil, fmt.Errorf("this local agent is removed or lacks channel write access")
+	}
 	if parent != nil && strings.HasPrefix(parent.Target, "@") {
 		sameSender, err := samePrincipalAddress(db, parent.Sender, sender)
 		if err != nil {

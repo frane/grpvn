@@ -121,6 +121,22 @@ func ServeMCP(name, version string, b Bootstrap, options ...MCPOptions) error {
 		return n, st, db, nil
 	}
 
+	s.AddTool(mcp.NewTool("read_file", mcp.WithDescription("Read an attachment from one relevant local/cached channel or DM. Use the grpvn-file ID from its message and an explicit target; images and code are returned as native MCP content."), mcp.WithReadOnlyHintAnnotation(true), mcp.WithString("id", mcp.Required()), mcp.WithString("target", mcp.Required())), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		var args struct {
+			ID     string `json:"id"`
+			Target string `json:"target"`
+		}
+		if err := req.BindArguments(&args); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		_, _, db, err := open(ctx)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		defer db.Close()
+		return attachmentResult(ctx, db, nil, nil, args.ID, args.Target)
+	})
+
 	s.AddTool(tool("c", mcpDescC), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		_, st, db, err := open(ctx)
 		if err != nil {

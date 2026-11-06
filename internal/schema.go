@@ -301,6 +301,35 @@ CREATE TABLE IF NOT EXISTS workspace_signins (
  base_url TEXT NOT NULL, server_id TEXT NOT NULL, alias TEXT NOT NULL, client_id TEXT NOT NULL,
  callback TEXT NOT NULL, verifier TEXT NOT NULL, status TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', expires_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS channel_archives (
+ channel TEXT PRIMARY KEY, principal_id TEXT NOT NULL, created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS local_participants (
+ name TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1, restricted INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS local_channel_grants (
+ name TEXT NOT NULL, channel TEXT NOT NULL, can_write INTEGER NOT NULL DEFAULT 1,
+ PRIMARY KEY(name,channel)
+);
+CREATE TABLE IF NOT EXISTS channel_subscriptions (
+ principal_id TEXT NOT NULL, channel TEXT NOT NULL, joined INTEGER NOT NULL,
+ PRIMARY KEY(principal_id,channel)
+);
+CREATE TABLE IF NOT EXISTS chat_files (
+ id TEXT NOT NULL, target TEXT NOT NULL, uploader TEXT NOT NULL, name TEXT NOT NULL,
+ media_type TEXT NOT NULL, data BLOB NOT NULL, created_at INTEGER NOT NULL,
+ PRIMARY KEY(id,target)
+);
+CREATE TABLE IF NOT EXISTS remote_file_queue (
+ remote_name TEXT NOT NULL, file_id TEXT NOT NULL, target TEXT NOT NULL,
+ PRIMARY KEY(remote_name,file_id,target)
+);
+CREATE TABLE IF NOT EXISTS chat_metadata (key TEXT PRIMARY KEY,value INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS remote_channel_details (
+ remote_name TEXT NOT NULL, channel TEXT NOT NULL, can_read INTEGER NOT NULL,
+ can_write INTEGER NOT NULL, is_open INTEGER NOT NULL, can_manage INTEGER NOT NULL,
+ PRIMARY KEY(remote_name,channel)
+);
 CREATE TABLE IF NOT EXISTS remote_human_sessions (
  server_id TEXT PRIMARY KEY, local_principal_id TEXT NOT NULL REFERENCES principals(id),
  principal_id TEXT NOT NULL, name TEXT NOT NULL, client_id TEXT NOT NULL, refresh_token TEXT NOT NULL, expires_at INTEGER NOT NULL

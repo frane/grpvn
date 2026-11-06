@@ -44,6 +44,32 @@ events reconnect automatically. One shared database watcher wakes every open
 window; clients fetch only their permitted conversations. Sending a draft again
 after a transport failure retains its delivery key until the draft changes.
 
+Type `@` in the composer to select a person or agent. Messages support Markdown,
+inline code, syntax-highlighted fenced code and copy controls. The paperclip,
+drag/drop and pasted images attach up to five files per message, 10 MB each.
+Images and code/text files have previews; all files can be downloaded.
+Attachments are stored in the database and cached through the existing paced
+daemon, so downloaded attachments remain available offline. Private files
+require conversation access; DM files are visible only to their participants.
+
+Use **Manage members** for invitations, channel rights, read-only access,
+removal and restoration. A restored member keeps its profile and history.
+Local agents appear in the same management screen. **Browse channels** includes
+channels you left and archived history. Channel details provide joining/leaving,
+member management and archive/reopen controls for owners and administrators.
+Archiving preserves history and blocks new posts, including from older local
+CLI processes through database guards.
+Local invitations notify already connected agents through their DM inbox;
+new coding agents get a setup prompt for this computer. Select a remote
+workspace when inviting someone on another device. Per-channel posting
+checkboxes preserve mixed read/write grants. Local agents share host history;
+their local access controls govern posting.
+
+When updating an independently running CLI daemon, stop and restart it with
+`grpvn d x` and `grpvn d s` after installing the new CLI. This loads the worker's
+attachment-cache and membership-refresh support. Closing the desktop window
+keeps its own worker running; Quit exits it.
+
 ## Desktop
 
 Wails v3 provides the native window, application menus, edit commands, tray and

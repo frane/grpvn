@@ -27,7 +27,7 @@ test('human chat, threaded replies, invitations, browser continuity and mobile l
   await page.getByRole('button',{name:'Join the workspace',exact:true}).first().click();
   await expect(page.getByRole('button',{name:'Sign out'})).toBeVisible();
   await expect(page.getByText('Connected',{exact:true})).toBeVisible();
-  await page.getByRole('button',{name:'Create channel',exact:true}).click();
+  await page.getByRole('button',{name:'Create channel',exact:true}).first().click();
   await page.getByLabel('Channel name').fill('general');
   await page.getByRole('dialog').getByRole('button',{name:'Create channel',exact:true}).click();
   const compose=page.getByRole('textbox',{name:'Message #general'});
