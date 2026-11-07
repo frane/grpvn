@@ -30,6 +30,10 @@ func localSenderAllowed(db dbtx, name, target string) bool {
 	if err != nil || !enabled {
 		return false
 	}
+	var explicit bool
+	if db.QueryRow("SELECT can_write FROM local_channel_grants WHERE name=? AND channel=?", name, target).Scan(&explicit) == nil {
+		return explicit
+	}
 	if !restricted {
 		return true
 	}
@@ -57,6 +61,9 @@ func canManageChannel(db dbtx, p *Principal, channel string) bool {
 	return db.QueryRow("SELECT owner_id FROM workspace_channels WHERE channel=?", channel).Scan(&owner) == nil && (owner == p.ID || (p.ParentID != "" && owner == p.ParentID))
 }
 func (s *webServer) workspaceAccount(ctx context.Context, p *Principal, alias string) (Remote, error) {
+	if p == nil {
+		return Remote{}, fmt.Errorf("Sign in to continue")
+	}
 	remote, err := getRemote(s.db, alias)
 	if err != nil {
 		return Remote{}, err
@@ -78,7 +85,7 @@ func (s *webServer) workspaceAccount(ctx context.Context, p *Principal, alias st
 // OAuth identity. The coordinator applies exactly the same rights as the web app.
 func (s *webServer) manage(w http.ResponseWriter, r *http.Request, p *Principal) bool {
 	path := r.URL.Path
-	supported := strings.HasPrefix(path, "/v1/members") || path == "/v1/chat/channels" || path == "/v1/chat/memberships" || path == "/v1/chat/participants" || path == "/v1/chat/invitations"
+	supported := strings.HasPrefix(path, "/v1/members") || path == "/v1/chat/channels" || path == "/v1/chat/memberships" || path == "/v1/chat/participants" || path == "/v1/chat/invitations" || path == "/v1/access-requests" || path == "/v1/access-approvals"
 	if s.local && supported && r.URL.Query().Get("workspace") != "" {
 		alias := r.URL.Query().Get("workspace")
 		remote, err := s.workspaceAccount(r.Context(), p, alias)
@@ -307,6 +314,28 @@ func (s *webServer) manage(w http.ResponseWriter, r *http.Request, p *Principal)
 				apiError(w, 409, "Use Leave channel to leave this conversation")
 				return true
 			}
+			if s.local && strings.HasPrefix(a.MemberID, "local:") {
+				name := strings.TrimPrefix(a.MemberID, "local:")
+				tx, err := beginWrite(s.db)
+				if err != nil {
+					apiError(w, 500, "Could not remove agent")
+					return true
+				}
+				defer tx.Rollback()
+				_, err = tx.Exec("INSERT INTO local_participants(name,enabled) VALUES(?,1) ON CONFLICT(name) DO NOTHING", name)
+				if err == nil {
+					_, err = tx.Exec("INSERT INTO local_channel_grants(name,channel,can_write) VALUES(?,?,0) ON CONFLICT(name,channel) DO UPDATE SET can_write=0", name, channel)
+				}
+				if err == nil {
+					err = setChannelJoined(tx, a.MemberID, channel, false)
+				}
+				if err != nil || tx.Commit() != nil {
+					apiError(w, 500, "Could not remove agent")
+				} else {
+					writeJSON(w, 200, map[string]bool{"removed": true})
+				}
+				return true
+			}
 			peer, err := findPrincipal(s.db, "id=?", a.MemberID)
 			if err != nil {
 				apiError(w, 404, "Member not found")
@@ -410,7 +439,7 @@ func (s *webServer) memberList(w http.ResponseWriter, channel string, viewer *Pr
 		}
 		list = append(list, map[string]any{"id": p.ID, "name": principalAddress(p), "kind": p.Kind, "status": p.Status, "grants": grants, "admin": principalPermission(s.db, p, "*", true), "self": p.ID == viewer.ID || p.ID == viewer.ParentID})
 	}
-	if s.local && channel == "" {
+	if s.local {
 		rows, err := s.db.Query("SELECT DISTINCT sender FROM messages m WHERE NOT EXISTS(SELECT 1 FROM remote_messages rm WHERE rm.local_id=m.id) UNION SELECT name FROM local_participants UNION SELECT agent_name FROM agent_sessions ORDER BY 1")
 		if err == nil {
 			var names []string
@@ -422,15 +451,27 @@ func (s *webServer) memberList(w http.ResponseWriter, channel string, viewer *Pr
 			}
 			rows.Close()
 			for _, name := range names {
+				if channel != "" {
+					var participant bool
+					_ = s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM messages m WHERE sender=? AND target=? AND NOT EXISTS(SELECT 1 FROM remote_messages rm WHERE rm.local_id=m.id)) OR EXISTS(SELECT 1 FROM local_channel_grants WHERE name=? AND channel=?)", name, channel, name, channel).Scan(&participant)
+					if !participant || !channelJoined(s.db, "local:"+name, channel) {
+						continue
+					}
+				}
 				enabled := true
 				restricted := false
 				_ = s.db.QueryRow("SELECT enabled,restricted FROM local_participants WHERE name=?", name).Scan(&enabled, &restricted)
+				if channel != "" && !enabled {
+					continue
+				}
 				status := "active"
 				if !enabled {
 					status = "revoked"
 				}
 				grants := []map[string]any{}
-				if !restricted {
+				if channel != "" {
+					grants = append(grants, map[string]any{"channel": channel, "write": localSenderAllowed(s.db, name, channel)})
+				} else if !restricted {
 					grants = append(grants, map[string]any{"channel": "*", "write": true})
 				} else {
 					rows, err := s.db.Query("SELECT channel,can_write FROM local_channel_grants WHERE name=? ORDER BY channel", name)

@@ -3,7 +3,7 @@ export type Session = { authenticated: boolean; profile?: Profile; local: boolea
 export type Channel = { name: string; label: string; source: string; source_id?:string;account_name?:string; unread: number; write: boolean; open: boolean; joined?:boolean; archived?:boolean;manage?:boolean };
 export type Member = Person & {grants:{channel:string;write:boolean}[];admin:boolean;local?:boolean;self?:boolean};
 export type UploadedFile={id:string;name:string;type:string;size:number;image:boolean;url:string};
-export type Person = { id: string; name: string; kind: 'human' | 'agent'; status: string };
+export type Person = { id: string; name: string; kind: 'human' | 'agent'; status: string;runtime?:string;last_seen?:number;last_message?:number };
 export type Message = { seq: number; id: string; sender: string; target: string; body: string; chain_root: string; parent_id: string | null; created_at: number; kind: string; mine: boolean; pending: boolean };
 export type Approval = { id: string; name: string; code: string; channels: string[] };
 export class ApiError extends Error { constructor(public status: number, message: string) { super(message); } }

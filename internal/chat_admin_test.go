@@ -173,3 +173,83 @@ func TestAgentAccessEditExtendsOwnerWithoutPromotingReadOnlyGrants(t *testing.T)
 		t.Fatal("read-only channel was promoted")
 	}
 }
+
+func TestLocalChannelRosterIncludesAuthorsAndSupportsRemoval(t *testing.T) {
+	db := newTestDB(t)
+	seedTestAgent(t, db, "admin-token", "admin", []string{"*"})
+	_, _ = db.Exec("INSERT INTO principal_approvals(principal_id,approved) SELECT id,1 FROM principals WHERE name='admin'")
+	_, _ = Send(db, "reef", "#project", "Existing local participant", "", false)
+	_, _ = Send(db, "elsewhere", "#other", "Other channel participant", "", false)
+	h, err := CoordinatorHandler(db, CoordinatorOptions{LocalUI: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(h)
+	defer server.Close()
+	roster := func() map[string]bool {
+		t.Helper()
+		status, raw := accessRequest(t, server, "GET", "/v1/chat/memberships?channel=%23project", "admin-token", nil)
+		if status != 200 {
+			t.Fatal(status, raw)
+		}
+		var result struct{ Members []struct{ Name string } }
+		if err := json.Unmarshal([]byte(raw), &result); err != nil {
+			t.Fatal(err)
+		}
+		names := map[string]bool{}
+		for _, m := range result.Members {
+			names[m.Name] = true
+		}
+		return names
+	}
+	if names := roster(); !names["reef"] || names["elsewhere"] {
+		t.Fatal("incorrect local channel roster", names)
+	}
+	_, err = db.Exec("INSERT INTO agent_sessions(id,agent_name,runtime,runtime_session,heartbeat_at) VALUES('reef-session','reef','codex','runtime-session',1700000000000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, raw := accessRequest(t, server, "GET", "/v1/chat/participants?name=reef&channel=%23project", "admin-token", nil)
+	if status != 200 {
+		t.Fatal(status, raw)
+	}
+	var profile struct {
+		People []struct {
+			Name, Kind, Runtime string
+			LastSeen            int64 `json:"last_seen"`
+			LastMessage         int64 `json:"last_message"`
+		}
+	}
+	if err := json.Unmarshal([]byte(raw), &profile); err != nil {
+		t.Fatal(err)
+	}
+	if len(profile.People) != 1 || profile.People[0].Kind != "agent" || profile.People[0].Runtime != "codex" || profile.People[0].LastSeen != 1700000000000 || profile.People[0].LastMessage == 0 {
+		t.Fatal("incorrect participant activity", raw)
+	}
+	status, raw = accessRequest(t, server, "DELETE", "/v1/chat/memberships", "admin-token", map[string]string{"Channel": "#project", "MemberID": "local:reef"})
+	if status != 200 {
+		t.Fatal(status, raw)
+	}
+	if roster()["reef"] {
+		t.Fatal("removed local agent is still listed")
+	}
+	if _, err := Send(db, "reef", "#project", "Removed", "", false); err == nil {
+		t.Fatal("removed agent posted")
+	}
+	if err := NewMessage("reef", "#project", []byte("Old writer")).Save(db); err == nil {
+		t.Fatal("older writer bypassed channel removal")
+	}
+	if _, err := Send(db, "reef", "#other", "Other access is retained", "", false); err != nil {
+		t.Fatal(err)
+	}
+	status, raw = accessRequest(t, server, "POST", "/v1/chat/invitations", "admin-token", map[string]any{"Channel": "#project", "Agent": "reef", "Write": true})
+	if status != 200 {
+		t.Fatal(status, raw)
+	}
+	if !roster()["reef"] {
+		t.Fatal("reinvited agent missing")
+	}
+	if _, err := Send(db, "reef", "#project", "Rejoined", "", false); err != nil {
+		t.Fatal(err)
+	}
+}

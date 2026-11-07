@@ -25,8 +25,7 @@ test('human chat, threaded replies, invitations, browser continuity and mobile l
   await page.getByLabel('Your handle').fill('frane');
   await page.getByLabel('Password',{exact:true}).fill('a good owner test password');
   await page.getByRole('button',{name:'Join the workspace',exact:true}).first().click();
-  await expect(page.getByRole('button',{name:'Sign out'})).toBeVisible();
-  await expect(page.getByText('Connected',{exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Workspace menu',exact:true})).toBeVisible();
   await page.getByRole('button',{name:'Create channel',exact:true}).first().click();
   await page.getByLabel('Channel name').fill('general');
   await page.getByRole('dialog').getByRole('button',{name:'Create channel',exact:true}).click();
@@ -49,11 +48,11 @@ test('human chat, threaded replies, invitations, browser continuity and mobile l
   await expect(friend.locator('.message-body').filter({hasText:'A shared place for people and agents.'})).toBeVisible();
   await friend.getByRole('textbox',{name:'Message #general'}).fill('Joined directly from the invitation.');await friend.getByRole('textbox',{name:'Message #general'}).press('Enter');
   await expect(page.locator('.message-body').filter({hasText:'Joined directly from the invitation.'})).toBeVisible({timeout:10000});
-  await friend.reload();await expect(friend.getByRole('button',{name:'Sign out'})).toBeVisible();
-  await friend.getByRole('button',{name:'Sign out'}).click();await friend.getByLabel('Your handle').fill('alex');await friend.getByLabel('Password',{exact:true}).fill('a good browser test password');await friend.getByRole('button',{name:'Sign in',exact:true}).click();
+  await friend.reload();await expect(friend.getByRole('button',{name:'Workspace menu',exact:true})).toBeVisible();
+  await friend.getByRole('button',{name:'Workspace menu',exact:true}).click();await friend.getByRole('menuitem',{name:'Sign out',exact:true}).click();await friend.getByLabel('Your handle').fill('alex');await friend.getByLabel('Password',{exact:true}).fill('a good browser test password');await friend.getByRole('button',{name:'Sign in',exact:true}).click();
   await expect(friend.getByRole('textbox',{name:'Message #general'})).toBeVisible();
   await page.getByRole('button',{name:'People & agents'}).click();
-  await expect(page.locator('.person-card').filter({hasText:'alex'})).toBeVisible();await page.locator('.person-card').filter({hasText:'alex'}).click();
+  await expect(page.locator('.person-card').filter({hasText:'alex'})).toBeVisible();await page.locator('.person-card').filter({hasText:'alex'}).click();await page.getByRole('button',{name:'Message @alex',exact:true}).click();
   await page.getByRole('textbox',{name:'Message alex'}).fill('A direct conversation.');await page.getByRole('textbox',{name:'Message alex'}).press('Enter');
   await expect(page.locator('.message-body').filter({hasText:'A direct conversation.'})).toBeVisible();
   await context.close();
@@ -81,12 +80,12 @@ test('human chat, threaded replies, invitations, browser continuity and mobile l
     await expect(desktop.getByRole('textbox',{name:'Message #general'})).toBeVisible({timeout:15000});
     await desktop.getByRole('textbox',{name:'Message #general'}).fill('Same profile from the desktop.');await desktop.getByRole('textbox',{name:'Message #general'}).press('Enter');
     await expect(page.locator('.message-body').filter({hasText:'Same profile from the desktop.'})).toBeVisible({timeout:15000});
-    await expect(desktop.locator('.profile strong')).toHaveText('frane');
-    await desktop.getByRole('button',{name:'Add workspace',exact:true}).click();
+    await expect(desktop.getByRole('button',{name:'Workspace menu',exact:true})).toContainText(new URL(link).host);
+    await desktop.getByRole('button',{name:'Workspace menu',exact:true}).click();await desktop.getByRole('menuitem',{name:'Add workspace',exact:true}).click();
     await desktop.getByLabel('Workspace address or invitation').fill(new URL(link).origin);
     await desktop.getByRole('button',{name:'Continue',exact:true}).click();
     await expect(desktop.getByRole('dialog')).toHaveCount(0);
-    await desktop.reload();await expect(desktop.getByRole('textbox',{name:'Message #general'})).toBeVisible();
+    await desktop.reload();await expect(desktop.getByRole('textbox',{name:'Message #general'})).toBeVisible();await desktop.getByRole('button',{name:'Workspace menu',exact:true}).click();await desktop.getByRole('menuitemradio',{name:'On this computer',exact:true}).click();await expect(desktop.getByRole('heading',{name:'Choose a conversation',exact:true})).toBeVisible();await desktop.getByRole('button',{name:'Workspace menu',exact:true}).click();await desktop.getByRole('menuitem',{name:'Connect an agent',exact:true}).click();await expect(desktop.getByLabel('Agent connection prompt')).toContainText('grpvn-cli@0.13.0');await desktop.getByRole('button',{name:'Close dialog',exact:true}).click();await desktop.getByRole('button',{name:'Workspace menu',exact:true}).click();await desktop.getByRole('menuitemradio',{name:new URL(link).host,exact:true}).click();await expect(desktop.getByRole('textbox',{name:'Message #general'})).toBeVisible();
     await desktop.close();await signin.close();
   } finally { native.kill('SIGINT');await new Promise<void>(resolve=>{native.once('exit',()=>resolve());setTimeout(resolve,7000);}); }
   expect(errors).toEqual([]);

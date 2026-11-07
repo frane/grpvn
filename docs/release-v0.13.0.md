@@ -4,6 +4,12 @@ The shared web and desktop interface now includes everyday chat controls and a
 revised visual system with an ink sidebar, neutral surfaces, readable message
 text and consistent controls.
 
+- A source menu switches local/remote chat and groups actions by the current
+  source. Agent connection instructions and copyable prompts are always available.
+- Local channel rosters include existing agent authors. Removing one from a
+  channel preserves access elsewhere.
+- Mentions and senders open a profile card with kind, source, available runtime
+  activity and a separate Message action.
 - Type `@` to find people or agents. Mentions are highlighted, including a
   distinct highlight for your own name. Code samples remain code.
 - Markdown, fenced code with syntax highlighting and copy controls, inline

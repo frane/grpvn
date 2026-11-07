@@ -15,12 +15,21 @@ BEGIN
     WHERE g.name=p.name AND g.channel IN(NEW.target,'*',CASE WHEN NEW.target LIKE '@%' THEN '@*' ELSE '' END) AND g.can_write=1)))
  );
 END`)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(`CREATE TRIGGER IF NOT EXISTS grpvn_channel_exclusion BEFORE INSERT ON messages
+WHEN NOT EXISTS(SELECT 1 FROM remote_messages WHERE local_id=NEW.id)
+BEGIN
+ SELECT RAISE(ABORT,'local agent lacks channel write access') WHERE EXISTS(SELECT 1 FROM local_channel_grants WHERE name=NEW.sender AND channel=NEW.target AND can_write=0);
+END`)
 	return err
 }
 
 const postgresChatGuard = `CREATE OR REPLACE FUNCTION grpvn_chat_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF NOT EXISTS(SELECT 1 FROM remote_messages WHERE local_id=NEW.id) THEN
+  IF EXISTS(SELECT 1 FROM local_channel_grants WHERE name=NEW.sender AND channel=NEW.target AND can_write=0) THEN RAISE EXCEPTION 'local agent lacks channel write access'; END IF;
   IF EXISTS(SELECT 1 FROM channel_archives WHERE channel=NEW.target) THEN RAISE EXCEPTION 'channel is archived'; END IF;
   IF EXISTS(SELECT 1 FROM local_participants p WHERE p.name=NEW.sender AND
    (p.enabled=0 OR (p.restricted=1 AND NOT EXISTS(SELECT 1 FROM local_channel_grants g

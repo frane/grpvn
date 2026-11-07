@@ -36,18 +36,18 @@ function FileLink({href,name}:{href:string;name:string}){
  const fence='`'.repeat((text.match(/`+/g)||[]).reduce((length,run)=>Math.max(length,run.length+1),3));
  return <><span className="file-attachment"><FileText size={26}/><span><strong>{name}</strong><span>{extension.toUpperCase()||'File'}{previewable?' · Preview available':''}</span></span>{previewable&&<button className="button secondary" onClick={preview}>Preview</button>}<a className="icon" href={href+'&download=1'} aria-label={'Download '+name}><Download size={18}/></a></span>{open&&createPortal(<div className="modal-backdrop" onClick={()=>setOpen(false)}><section className="file-preview modal" role="dialog" aria-label={'Preview '+name} onClick={e=>e.stopPropagation()}><header><strong>{name}</strong><a className="icon" href={href+'&download=1'} aria-label="Download file"><Download size={18}/></a><button className="icon" aria-label="Close preview" onClick={()=>setOpen(false)}><X size={20}/></button></header>{loading?<p>Loading preview…</p>:error?<p role="alert">{error}</p>:<Markdown rehypePlugins={[[rehypeHighlight,highlightOptions]]} components={{pre:CodeBlock}}>{fence+language+'\n'+text+'\n'+fence}</Markdown>}</section></div>,document.body)}</>;
 }
-const CurrentName=React.createContext('');
+const MemberContext=React.createContext<{currentName:string;onMention?:(name:string)=>void}>({currentName:''});
 function MessageLink({href,children}:{href?:string;children?:React.ReactNode}){
- const currentName=React.useContext(CurrentName);
- return href?.startsWith('grpvn-mention:')?<span className={'mention '+(decodeURIComponent(href.slice(14))===currentName?'mention-me':'')} title="Workspace member">{children}</span>:href?.startsWith('/v1/files/')?<FileLink href={href} name={String(children)}/>:<a href={href} target="_blank" rel="noreferrer noopener">{children}</a>;
+ const {currentName,onMention}=React.useContext(MemberContext);
+ return href?.startsWith('grpvn-mention:')?<button type="button" className={'mention '+(decodeURIComponent(href.slice(14))===currentName?'mention-me':'')} title={'View @'+decodeURIComponent(href.slice(14))} onClick={()=>onMention?.(decodeURIComponent(href.slice(14)))}>{children}</button>:href?.startsWith('/v1/files/')?<FileLink href={href} name={String(children)}/>:<a href={href} target="_blank" rel="noreferrer noopener">{children}</a>;
 }
 function MessageImage({src,alt}:{src?:string|Blob;alt?:string}){
  return typeof src==='string'&&src.startsWith('/v1/files/')?<Image src={src} alt={alt||'Image'}/>:<span className="external-image">{alt||'External image'}</span>;
 }
 const markdownComponents={pre:CodeBlock,a:MessageLink,img:MessageImage};
-export function MessageBody({body,target,people=[],currentName=''}:{body:string;target:string;people?:Person[];currentName?:string}){
+export function MessageBody({body,target,people=[],currentName='',onMention}:{body:string;target:string;people?:Person[];currentName?:string;onMention?:(name:string)=>void}){
  const names=[...people.map(p=>p.name),currentName].filter(Boolean);
- return <CurrentName.Provider value={currentName}><div className="message-body markdown"><Markdown skipHtml remarkPlugins={[remarkGfm,[mentions,{names}]]} rehypePlugins={[[rehypeHighlight,highlightOptions]]}
+ return <MemberContext.Provider value={{currentName,onMention}}><div className="message-body markdown"><Markdown skipHtml remarkPlugins={[remarkGfm,[mentions,{names}]]} rehypePlugins={[[rehypeHighlight,highlightOptions]]}
   urlTransform={url=>{if(/^grpvn-file:[0-9A-HJKMNP-TV-Z]{26}$/.test(url))return fileURL(url.slice(11),target);if(url.startsWith('grpvn-mention:')){try{const name=decodeURIComponent(url.slice(14));return names.includes(name)?'grpvn-mention:'+encodeURIComponent(name):'';}catch{return '';}}return defaultUrlTransform(url);}}
-  components={markdownComponents}>{body}</Markdown></div></CurrentName.Provider>;
+  components={markdownComponents}>{body}</Markdown></div></MemberContext.Provider>;
 }

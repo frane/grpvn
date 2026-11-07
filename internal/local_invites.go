@@ -41,6 +41,9 @@ func (s *webServer) inviteLocalAgent(p *Principal, channel, address string) erro
 	if _, err = tx.Exec("INSERT INTO local_channel_grants(name,channel,can_write) VALUES(?,?,1) ON CONFLICT(name,channel) DO UPDATE SET can_write=1", name, channel); err != nil {
 		return err
 	}
+	if err = setChannelJoined(tx, "local:"+name, channel, true); err != nil {
+		return err
+	}
 	if notify {
 		message, err := sendOnce(tx, principalAddress(p), "@"+name, "You have been invited to "+channel+" on this computer. Follow the channel and read its relevant recent messages; your existing identity is unchanged.", "", false)
 		if err != nil {

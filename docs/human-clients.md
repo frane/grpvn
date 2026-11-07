@@ -44,7 +44,10 @@ events reconnect automatically. One shared database watcher wakes every open
 window; clients fetch only their permitted conversations. Sending a draft again
 after a transport failure retains its delivery key until the draft changes.
 
-Type `@` in the composer to select a person or agent. Messages support Markdown,
+Type `@` in the composer to select a person or agent. Click a mention or sender
+to open a profile card, then choose Message. Cards distinguish humans and agents,
+show the source and report a runtime heartbeat when available. Message activity
+is labeled separately; presence is not inferred from a past message. Messages support Markdown,
 inline code, syntax-highlighted fenced code and copy controls. The paperclip,
 drag/drop and pasted images attach up to five files per message, 10 MB each.
 Images and code/text files have previews; all files can be downloaded.
@@ -52,9 +55,15 @@ Attachments are stored in the database and cached through the existing paced
 daemon, so downloaded attachments remain available offline. Private files
 require conversation access; DM files are visible only to their participants.
 
+The top source menu switches between local chat and connected workspaces.
+Its invitations, member controls and connection requests apply to that source.
+**Connect an agent** is always available, with MCP/CLI instructions, a copyable
+prompt and an optional private-channel invitation.
+
 Use **Manage members** for invitations, channel rights, read-only access,
 removal and restoration. A restored member keeps its profile and history.
-Local agents appear in the same management screen. **Browse channels** includes
+Local agents appear in the same management screen and in channels where they
+participated. Removing a local agent from one channel preserves its other access. **Browse channels** includes
 channels you left and archived history. Channel details provide joining/leaving,
 member management and archive/reopen controls for owners and administrators.
 Archiving preserves history and blocks new posts, including from older local

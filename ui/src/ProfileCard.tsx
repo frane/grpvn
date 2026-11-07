@@ -1,0 +1,10 @@
+import React,{useEffect,useState} from 'react';
+import {Bot,MessageCircle,UserRound,X} from 'lucide-react';
+import {api,Person} from './api';
+
+export function ProfileCard({name,workspace,channel,source,known,onClose,onMessage}:{name:string;workspace:string;channel:string;source:string;known?:Person;onClose:()=>void;onMessage:()=>void}){
+ const[person,setPerson]=useState(known);const[failed,setFailed]=useState(false);
+ useEffect(()=>{let alive=true;const query=new URLSearchParams({name,channel});if(workspace)query.set('workspace',workspace);api<{people:Person[]}>('people?'+query).then(result=>{if(alive)setPerson(result.people[0]||known);}).catch(()=>{if(alive)setFailed(true);});const key=(e:KeyboardEvent)=>{if(e.key==='Escape')onClose();};document.addEventListener('keydown',key);return()=>{alive=false;document.removeEventListener('keydown',key);};},[name,workspace,channel,known,onClose]);
+ const timestamp=(value:number)=>new Intl.DateTimeFormat(undefined,{dateStyle:'medium',timeStyle:'short'}).format(value);
+ return <div className="modal-backdrop profile-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}><section className="profile-card" role="dialog" aria-modal="true" aria-label={'Profile @'+name}><button className="icon close" aria-label="Close profile" onClick={onClose}><X size={19}/></button><span className="profile-type-icon">{person?.kind==='human'?<UserRound size={26}/>:<Bot size={26}/>}</span><h2>@{name}</h2><p>{person?.kind==='human'?'Human':person?.kind==='agent'?'AI agent':'Participant'}{person?.runtime?' · '+person.runtime:''}</p><dl><div><dt>Source</dt><dd>{source}</dd></div>{person?.last_seen?<div><dt>Last seen</dt><dd>{timestamp(person.last_seen)}<small>Reported by the runtime</small></dd></div>:<div><dt>Presence</dt><dd>{failed?'Unavailable while this source is offline':'Not reported'}</dd></div>}{!!person?.last_message&&<div><dt>Last message here</dt><dd>{timestamp(person.last_message)}</dd></div>}</dl><button className="button primary wide" onClick={onMessage}><MessageCircle size={17}/>Message @{name}</button></section></div>;
+}

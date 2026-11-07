@@ -181,6 +181,20 @@ func mountWeb(mux *http.ServeMux, db *sql.DB, access *channelAccess, base string
 			}
 		case "/v1/auth/session":
 			if r.Method == "GET" {
+				if local && r.URL.Query().Get("workspace") != "" {
+					remote, err := s.workspaceAccount(r.Context(), p, r.URL.Query().Get("workspace"))
+					if err != nil {
+						apiError(w, 403, err.Error())
+						return
+					}
+					var result map[string]any
+					if err = remoteRequest(r.Context(), remote, "GET", "/v1/auth/session", nil, &result); err != nil {
+						apiError(w, 503, "Workspace is unavailable")
+						return
+					}
+					writeJSON(w, 200, result)
+					return
+				}
 				if p == nil {
 					writeJSON(w, 200, map[string]any{"authenticated": false, "local": local})
 					return
@@ -581,7 +595,7 @@ func (s *webServer) handle(w http.ResponseWriter, r *http.Request, p *Principal)
 		}
 	case "/v1/chat/participants":
 		if r.Method == "GET" {
-			s.people(w)
+			s.people(w, r, p)
 			return
 		}
 	case "/v1/workspaces":
@@ -826,8 +840,15 @@ func (s *webServer) send(w http.ResponseWriter, r *http.Request, p *Principal) {
 	}
 	writeJSON(w, 201, map[string]any{"id": m.ID, "replayed": replay, "pending": m.Pending})
 }
-func (s *webServer) people(w http.ResponseWriter) {
-	rows, err := s.db.Query("SELECT id FROM principals WHERE kind IN ('agent','human') AND status IN ('active','pending') ORDER BY name LIMIT 200")
+func (s *webServer) people(w http.ResponseWriter, r *http.Request, viewer *Principal) {
+	requested := r.URL.Query().Get("name")
+	query := "SELECT id FROM principals WHERE kind IN ('agent','human') AND status IN ('active','pending') ORDER BY name LIMIT 200"
+	var args []any
+	if requested != "" {
+		query = "SELECT id FROM principals WHERE kind IN ('agent','human') AND (name=? OR id IN (SELECT principal_id FROM principal_aliases WHERE address=?)) ORDER BY name LIMIT 200"
+		args = []any{requested, requested}
+	}
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		apiError(w, 500, "Could not list people")
 		return
@@ -840,7 +861,7 @@ func (s *webServer) people(w http.ResponseWriter) {
 		}
 	}
 	rows.Close()
-	people := []map[string]string{}
+	people := []map[string]any{}
 	seen := map[string]bool{}
 	for _, id := range ids {
 		p, err := findPrincipal(s.db, "id=?", id)
@@ -849,20 +870,50 @@ func (s *webServer) people(w http.ResponseWriter) {
 		}
 		name := principalAddress(p)
 		seen[name] = true
-		people = append(people, map[string]string{"id": p.ID, "name": name, "kind": p.Kind, "status": p.Status})
+		people = append(people, map[string]any{"id": p.ID, "name": name, "kind": p.Kind, "status": p.Status})
 	}
 	if s.local {
-		rows, err := s.db.Query("SELECT DISTINCT sender FROM messages m WHERE NOT EXISTS(SELECT 1 FROM remote_messages rm WHERE rm.local_id=m.id) AND NOT EXISTS(SELECT 1 FROM local_participants lp WHERE lp.name=m.sender AND lp.enabled=0) UNION SELECT agent_name FROM agent_sessions a WHERE NOT EXISTS(SELECT 1 FROM local_participants lp WHERE lp.name=a.agent_name AND lp.enabled=0) ORDER BY 1 LIMIT 200")
+		query := "SELECT DISTINCT sender FROM messages m WHERE NOT EXISTS(SELECT 1 FROM remote_messages rm WHERE rm.local_id=m.id) AND NOT EXISTS(SELECT 1 FROM local_participants lp WHERE lp.name=m.sender AND lp.enabled=0) UNION SELECT agent_name FROM agent_sessions a WHERE NOT EXISTS(SELECT 1 FROM local_participants lp WHERE lp.name=a.agent_name AND lp.enabled=0) ORDER BY 1 LIMIT 200"
+		var args []any
+		if requested != "" {
+			query = "SELECT ? WHERE EXISTS(SELECT 1 FROM messages m WHERE sender=? AND NOT EXISTS(SELECT 1 FROM remote_messages rm WHERE rm.local_id=m.id)) OR EXISTS(SELECT 1 FROM agent_sessions WHERE agent_name=?) OR EXISTS(SELECT 1 FROM local_participants WHERE name=?)"
+			args = []any{requested, requested, requested, requested}
+		}
+		rows, err := s.db.Query(query, args...)
 		if err == nil {
 			for rows.Next() {
 				var name string
 				if rows.Scan(&name) == nil && !seen[name] {
-					people = append(people, map[string]string{"id": "local:" + name, "name": name, "kind": "agent", "status": "active"})
+					people = append(people, map[string]any{"id": "local:" + name, "name": name, "kind": "agent", "status": "active"})
 					seen[name] = true
 				}
 			}
 			rows.Close()
 		}
+	}
+	if name := r.URL.Query().Get("name"); name != "" {
+		selected := []map[string]any{}
+		for _, person := range people {
+			if person["name"] != name {
+				continue
+			}
+			if s.local {
+				var runtime string
+				var seen int64
+				if s.db.QueryRow("SELECT runtime,heartbeat_at FROM agent_sessions WHERE agent_name=? ORDER BY heartbeat_at DESC LIMIT 1", name).Scan(&runtime, &seen) == nil {
+					person["runtime"] = runtime
+					person["last_seen"] = seen
+				}
+			}
+			if channel := r.URL.Query().Get("channel"); channel != "" && s.can(viewer, channel, false) {
+				var last int64
+				if s.db.QueryRow("SELECT COALESCE(MAX(created_at),0) FROM messages WHERE sender=? AND target=?", name, channel).Scan(&last) == nil && last > 0 {
+					person["last_message"] = last
+				}
+			}
+			selected = append(selected, person)
+		}
+		people = selected
 	}
 	writeJSON(w, 200, map[string]any{"people": people})
 }
