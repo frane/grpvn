@@ -233,7 +233,7 @@ func mountWeb(mux *http.ServeMux, db *sql.DB, access *channelAccess, base string
 		}
 		if p.scopes != nil {
 			scope := "grpvn.read"
-			if r.Method != "GET" && r.URL.Path != "/v1/chat/read-markers" {
+			if r.Method != "GET" && r.URL.Path != "/v1/chat/read-markers" && r.URL.Path != "/v1/chat/preferences" {
 				scope = "grpvn.write"
 			}
 			if !p.scopes[scope] {
@@ -491,34 +491,12 @@ func (s *webServer) handle(w http.ResponseWriter, r *http.Request, p *Principal)
 			s.events(w, r, p)
 			return
 		}
+	case "/v1/chat/preferences":
+		s.preferences(w, r, p)
+		return
 	case "/v1/chat/read-markers":
 		if r.Method == "POST" {
-			var a struct {
-				Target   string
-				Position int64
-			}
-			if !webDecode(w, r, &a) {
-				return
-			}
-			if !s.can(p, a.Target, false) {
-				apiError(w, 403, "Channel access denied")
-				return
-			}
-			var max int64
-			if strings.HasPrefix(a.Target, "@") {
-				_ = s.db.QueryRow("SELECT COALESCE(MAX(seq),0) FROM messages WHERE (sender=? AND target=?) OR (sender=? AND target=?)", principalAddress(p), a.Target, strings.TrimPrefix(a.Target, "@"), "@"+principalAddress(p)).Scan(&max)
-			} else {
-				_ = s.db.QueryRow("SELECT COALESCE(MAX(seq),0) FROM messages WHERE target=?", a.Target).Scan(&max)
-			}
-			if a.Position < 0 || a.Position > max {
-				apiError(w, 400, "Invalid read position")
-				return
-			}
-			if advanceCursor(s.db, p.ID, a.Target, a.Position) != nil {
-				apiError(w, 500, "Could not mark read")
-				return
-			}
-			writeJSON(w, 200, map[string]bool{"ok": true})
+			s.readMarker(w, r, p)
 			return
 		}
 
@@ -656,6 +634,16 @@ func (s *webServer) channels(w http.ResponseWriter, r *http.Request, p *Principa
 		}
 	}
 	rows.Close()
+	positions, err := loadCursors(s.db, p.ID)
+	if err != nil {
+		apiError(w, 500, "Could not read conversation state")
+		return
+	}
+	preferences, err := loadConversationSettings(s.db, p.ID)
+	if err != nil {
+		apiError(w, 500, "Could not read conversation settings")
+		return
+	}
 	out := []map[string]any{}
 	for _, n := range names {
 		if !s.can(p, n, false) {
@@ -667,7 +655,12 @@ func (s *webServer) channels(w http.ResponseWriter, r *http.Request, p *Principa
 			continue
 		}
 		var unread, latest int64
-		_ = s.db.QueryRow("SELECT COUNT(*),COALESCE(MAX(seq),0) FROM messages m WHERE target=? AND seq>COALESCE((SELECT position FROM cursors WHERE agent_name=? AND target=?),0) AND sender<>?", n, p.ID, n, principalAddress(p)).Scan(&unread, &latest)
+		settings := preferences[n]
+		position, held := positions[n], settings.Held.Valid
+		if held {
+			position = settings.Held.Int64
+		}
+
 		source := "workspace"
 		sourceID := ""
 		account := ""
@@ -692,7 +685,12 @@ func (s *webServer) channels(w http.ResponseWriter, r *http.Request, p *Principa
 		if sourceID != "" {
 			_ = s.db.QueryRow("SELECT is_open,can_manage FROM remote_channel_details WHERE remote_name=? AND channel=?", sourceID, native).Scan(&open, &manage)
 		}
-		out = append(out, map[string]any{"name": n, "label": native, "source": source, "source_id": sourceID, "account_name": account, "unread": unread, "latest": latest, "write": s.can(p, n, true), "open": open, "joined": joined, "archived": archived, "manage": manage})
+		self := principalAddress(p)
+		if account != "" {
+			self = account
+		}
+		_ = s.db.QueryRow("SELECT COUNT(*),COALESCE(MAX(seq),0) FROM messages m WHERE target=? AND seq>? AND (sender<>? OR ?=1)", n, position, self, held).Scan(&unread, &latest)
+		out = append(out, map[string]any{"muted": settings.Muted, "read_position": position, "read_held": held, "name": n, "label": native, "source": source, "source_id": sourceID, "account_name": account, "unread": unread, "latest": latest, "write": s.can(p, n, true), "open": open, "joined": joined, "archived": archived, "manage": manage})
 	}
 	writeJSON(w, 200, map[string]any{"channels": out})
 }
@@ -782,7 +780,8 @@ func (s *webServer) messages(w http.ResponseWriter, r *http.Request, p *Principa
 		}
 		out = append(out, map[string]any{"seq": m.Seq, "id": m.ID, "sender": displaySender, "target": m.Target, "body": string(m.Body), "chain_root": m.ChainRoot, "parent_id": m.ParentID, "created_at": m.CreatedAt, "kind": kind, "mine": mine, "pending": m.Pending})
 	}
-	writeJSON(w, 200, map[string]any{"messages": out, "more": len(list) == 100})
+	position, held := conversationReadPosition(s.db, p.ID, target)
+	writeJSON(w, 200, map[string]any{"messages": out, "more": len(list) == 100, "read_position": position, "read_held": held})
 }
 func (s *webServer) send(w http.ResponseWriter, r *http.Request, p *Principal) {
 	if !isChatParticipant(p) {
@@ -914,6 +913,33 @@ func (s *webServer) people(w http.ResponseWriter, r *http.Request, viewer *Princ
 			selected = append(selected, person)
 		}
 		people = selected
+	}
+	muted := map[string]bool{}
+	if rows, err := s.db.Query("SELECT target,muted FROM conversation_preferences WHERE principal_id=? AND target LIKE '@%'", viewer.ID); err == nil {
+		for rows.Next() {
+			var target string
+			var mute bool
+			if rows.Scan(&target, &mute) == nil {
+				muted[target] = mute
+			}
+		}
+		rows.Close()
+	}
+	counts := map[string]int64{}
+	if rows, err := s.db.Query(`SELECT q.peer,COUNT(*) FROM (SELECT CASE WHEN sender=? THEN target ELSE '@'||sender END AS peer,seq,sender FROM messages WHERE target LIKE '@%' AND (sender=? OR target=?)) q LEFT JOIN cursors c ON c.agent_name=? AND c.target=q.peer LEFT JOIN conversation_preferences f ON f.principal_id=? AND f.target=q.peer WHERE q.seq>COALESCE(f.held_position,c.position,0) AND (q.sender<>? OR f.held_position IS NOT NULL) GROUP BY q.peer`, principalAddress(viewer), principalAddress(viewer), "@"+principalAddress(viewer), viewer.ID, viewer.ID, principalAddress(viewer)); err == nil {
+		for rows.Next() {
+			var peer string
+			var count int64
+			if rows.Scan(&peer, &count) == nil {
+				counts[peer] = count
+			}
+		}
+		rows.Close()
+	}
+	for _, person := range people {
+		target := "@" + person["name"].(string)
+		person["muted"] = muted[target]
+		person["unread"] = counts[target]
 	}
 	writeJSON(w, 200, map[string]any{"people": people})
 }

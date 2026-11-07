@@ -71,6 +71,14 @@ channels you left and archived history. Channel details provide joining/leaving,
 member management and archive/reopen controls for owners and administrators.
 Archiving preserves history and blocks new posts, including from older local
 CLI processes through database guards.
+
+Right-click a channel or DM (or use its ellipsis) for mute/unmute and read/unread
+controls. Channel menus also include details, leaving and permitted archiving.
+Message menus provide threaded replies, profile details, copying and marking
+unread from a specific message. An explicit unread position remains held across
+refreshes and reconnects until resumed. Mute preferences persist per profile;
+remote workspace mute changes synchronize through the paced daemon, including
+changes queued while offline. Muting suppresses badges while messages keep syncing.
 Local invitations notify already connected agents through their DM inbox;
 new coding agents get a setup prompt for this computer. Select a remote
 workspace when inviting someone on another device. Per-channel posting

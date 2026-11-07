@@ -55,6 +55,7 @@ test('human chat, threaded replies, invitations, browser continuity and mobile l
   await expect(page.locator('.person-card').filter({hasText:'alex'})).toBeVisible();await page.locator('.person-card').filter({hasText:'alex'}).click();await page.getByRole('button',{name:'Message @alex',exact:true}).click();
   await page.getByRole('textbox',{name:'Message alex'}).fill('A direct conversation.');await page.getByRole('textbox',{name:'Message alex'}).press('Enter');
   await expect(page.locator('.message-body').filter({hasText:'A direct conversation.'})).toBeVisible();
+  await friend.getByRole('button',{name:'People & agents'}).click();await friend.locator('.person-card').filter({hasText:'frane'}).click();await friend.getByRole('button',{name:'Message @frane',exact:true}).click();await friend.getByRole('textbox',{name:'Message frane',exact:true}).fill('A direct reply clears the open inbox badge.');await friend.getByRole('textbox',{name:'Message frane',exact:true}).press('Enter');await page.bringToFront();await expect(page.locator('.message-body').filter({hasText:'A direct reply clears the open inbox badge.'})).toBeVisible();await expect(page.locator('.person-channel').filter({hasText:'alex'}).locator('b')).toHaveCount(0);
   await context.close();
   await page.locator('button.channel').filter({hasText:'general'}).first().click();
   // An external CLI write must arrive through the same live feed.

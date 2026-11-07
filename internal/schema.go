@@ -315,6 +315,11 @@ CREATE TABLE IF NOT EXISTS channel_subscriptions (
  principal_id TEXT NOT NULL, channel TEXT NOT NULL, joined INTEGER NOT NULL,
  PRIMARY KEY(principal_id,channel)
 );
+CREATE TABLE IF NOT EXISTS conversation_preferences (
+ principal_id TEXT NOT NULL, target TEXT NOT NULL, muted INTEGER NOT NULL DEFAULT 0,
+ held_position INTEGER, mute_dirty INTEGER NOT NULL DEFAULT 0,
+ PRIMARY KEY(principal_id,target)
+);
 CREATE TABLE IF NOT EXISTS chat_files (
  id TEXT NOT NULL, target TEXT NOT NULL, uploader TEXT NOT NULL, name TEXT NOT NULL,
  media_type TEXT NOT NULL, data BLOB NOT NULL, created_at INTEGER NOT NULL,

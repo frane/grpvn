@@ -162,6 +162,19 @@ func TestDesktopWorkspaceSignInReusesHumanProfile(t *testing.T) {
 	messageIn(t, localDB, created, "History after the desktop left")
 	var localOwner string
 	_ = localDB.QueryRow("SELECT local_principal_id FROM remote_human_sessions").Scan(&localOwner)
+	call("PATCH", local.URL+"/v1/chat/preferences", local.URL, map[string]any{"Target": created, "Muted": true})
+	_, _ = localDB.Exec("UPDATE chat_metadata SET value=0 WHERE key LIKE 'remote:%'")
+	mustSync(t, localDB, alias)
+	if !conversationSettings(remoteDB, registeredID, "#desktop-project").Muted || !conversationSettings(localDB, localOwner, created).Muted {
+		t.Fatal("local mute was lost or did not synchronize")
+	}
+	call("PATCH", remoteBase+"/v1/chat/preferences", remoteBase, map[string]any{"Target": "#desktop-project", "Muted": false})
+	_, _ = localDB.Exec("UPDATE chat_metadata SET value=0 WHERE key LIKE 'remote:%'")
+	mustSync(t, localDB, alias)
+	if conversationSettings(localDB, localOwner, created).Muted {
+		t.Fatal("remote mute change did not synchronize back")
+	}
+
 	if channelJoined(localDB, localOwner, created) {
 		t.Fatal("viewing archived history rejoined the channel")
 	}

@@ -1,0 +1,10 @@
+import React,{useEffect,useLayoutEffect,useRef,useState} from 'react';
+import {createPortal} from 'react-dom';
+
+export type ContextAction={label:string;icon?:React.ReactNode;onSelect:()=>void|Promise<void>;danger?:boolean;divider?:boolean};
+export function ContextMenu({x,y,label,items,onClose,onError}:{x:number;y:number;label:string;items:ContextAction[];onClose:()=>void;onError:(error:unknown)=>void}){
+ const root=useRef<HTMLDivElement>(null);const previousFocus=useRef(document.activeElement as HTMLElement);const[position,setPosition]=useState({left:x,top:y});
+ useLayoutEffect(()=>{const box=root.current?.getBoundingClientRect();if(box)setPosition({left:Math.max(8,Math.min(x,innerWidth-box.width-8)),top:Math.max(8,Math.min(y,innerHeight-box.height-8))});root.current?.querySelector('button')?.focus();},[x,y]);
+ useEffect(()=>{const previous=previousFocus.current;const outside=(e:PointerEvent)=>{if(!root.current?.contains(e.target as Node))onClose();};const key=(e:KeyboardEvent)=>{if(e.key==='Escape'){e.preventDefault();onClose();}if(['ArrowDown','ArrowUp','Home','End'].includes(e.key)){e.preventDefault();const buttons=Array.from(root.current?.querySelectorAll('button')||[]);const current=buttons.indexOf(document.activeElement as HTMLButtonElement);const next=e.key==='Home'?0:e.key==='End'?buttons.length-1:(current+(e.key==='ArrowDown'?1:-1)+buttons.length)%buttons.length;buttons[next]?.focus();}};document.addEventListener('pointerdown',outside);document.addEventListener('keydown',key);return()=>{document.removeEventListener('pointerdown',outside);document.removeEventListener('keydown',key);if(document.contains(previous))previous.focus();};},[onClose]);
+ return createPortal(<div ref={root} role="menu" aria-label={label} className="context-menu" style={position} onContextMenu={e=>e.preventDefault()}>{items.map(item=><button role="menuitem" className={(item.danger?'danger-text ':'')+(item.divider?'menu-divider':'')} key={item.label} onClick={e=>{e.stopPropagation();onClose();try{Promise.resolve(item.onSelect()).catch(onError);}catch(error){onError(error);}}}>{item.icon}<span>{item.label}</span></button>)}</div>,document.body);
+}

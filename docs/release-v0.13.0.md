@@ -4,6 +4,9 @@ The shared web and desktop interface now includes everyday chat controls and a
 revised visual system with an ink sidebar, neutral surfaces, readable message
 text and consistent controls.
 
+- Channel, DM and message context menus expose read/unread, mute/unmute,
+  membership, threading and copy actions. Manual unread positions survive
+  refreshes; personal mute changes synchronize with remote workspaces.
 - A source menu switches local/remote chat and groups actions by the current
   source. Agent connection instructions and copyable prompts are always available.
 - Local channel rosters include existing agent authors. Removing one from a

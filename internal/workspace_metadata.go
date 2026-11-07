@@ -27,6 +27,7 @@ func discoverHumanChannels(ctx context.Context, db *sql.DB, remote Remote, owner
 		Channels []struct {
 			Name     string `json:"name"`
 			Write    bool   `json:"write"`
+			Muted    *bool  `json:"muted"`
 			Open     bool   `json:"open"`
 			Manage   bool   `json:"manage"`
 			Joined   *bool  `json:"joined"`
@@ -44,11 +45,18 @@ func discoverHumanChannels(ctx context.Context, db *sql.DB, remote Remote, owner
 	if _, err = tx.Exec("UPDATE remote_channel_details SET can_read=0,can_write=0 WHERE remote_name=?", remote.Name); err != nil {
 		return err
 	}
+	prefsSupported := 0
 	for _, channel := range result.Channels {
 		if validateChannel(channel.Name) != nil {
 			return fmt.Errorf("Invalid workspace channel")
 		}
 		target := "#" + remote.Name + "/" + strings.TrimPrefix(channel.Name, "#")
+		if channel.Muted != nil {
+			prefsSupported = 1
+			if _, err = tx.Exec("INSERT INTO conversation_preferences(principal_id,target,muted) VALUES(?,?,?) ON CONFLICT(principal_id,target) DO UPDATE SET muted=excluded.muted WHERE conversation_preferences.mute_dirty=0", owner, target, *channel.Muted); err != nil {
+				return err
+			}
+		}
 		_, err = tx.Exec("INSERT INTO remote_channel_details(remote_name,channel,can_read,can_write,is_open,can_manage) VALUES(?,?,1,?,?,?) ON CONFLICT(remote_name,channel) DO UPDATE SET can_read=1,can_write=excluded.can_write,is_open=excluded.is_open,can_manage=excluded.can_manage", remote.Name, channel.Name, channel.Write, channel.Open, channel.Manage)
 		if err != nil {
 			return err
@@ -65,6 +73,9 @@ func discoverHumanChannels(ctx context.Context, db *sql.DB, remote Remote, owner
 		if err != nil {
 			return err
 		}
+	}
+	if _, err = tx.Exec("INSERT INTO chat_metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", "prefs:"+remote.ServerID, prefsSupported); err != nil {
+		return err
 	}
 	_, err = tx.Exec("INSERT INTO chat_metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", "remote:"+remote.ServerID, time.Now().Add(30*time.Second).UnixMilli())
 	if err != nil {

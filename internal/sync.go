@@ -251,6 +251,9 @@ func syncRemote(ctx context.Context, db *sql.DB, remote Remote) (SyncStats, erro
 	if err := refreshWorkspaceMetadata(ctx, db, remote); err != nil {
 		failures = append(failures, err)
 	}
+	if err := syncWorkspacePreferences(ctx, db, remote); err != nil {
+		failures = append(failures, err)
+	}
 	stats.Pushed, err = pushOutgoing(ctx, db, remote)
 	if err != nil {
 		failures = append(failures, err)
