@@ -6,7 +6,8 @@ metadata:
     cert-manager.io/cluster-issuer: staging-letsencrypt-prod
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/proxy-body-size: "1m"
+    # A 10 MiB attachment plus multipart headers; the app enforces file limits.
+    nginx.ingress.kubernetes.io/proxy-body-size: "11m"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "65"
     nginx.ingress.kubernetes.io/proxy-buffering: "off"
     nginx.ingress.kubernetes.io/limit-rps: "20"
