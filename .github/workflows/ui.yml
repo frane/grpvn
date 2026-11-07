@@ -56,6 +56,9 @@ jobs:
       - name: Linux native webview libraries
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev
+      - name: Test desktop actions
+        working-directory: desktop
+        run: go test ./...
       - name: Build desktop
         if: runner.os == 'Linux'
         working-directory: desktop

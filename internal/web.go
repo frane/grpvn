@@ -503,10 +503,19 @@ func (s *webServer) handle(w http.ResponseWriter, r *http.Request, p *Principal)
 	case "/v1/chat/invitations":
 		if r.Method == "POST" {
 			var a struct {
-				Channel, Agent string
-				Write          *bool
+				Channel, Agent, Recipient string
+				Write                     *bool
 			}
 			if !webDecode(w, r, &a) {
+				return
+			}
+			recipient := a.Recipient
+			if recipient == "" {
+				recipient = a.Agent
+			}
+			normalized, email, err := invitationRecipient(recipient)
+			if err != nil {
+				apiError(w, 400, err.Error())
 				return
 			}
 			write := a.Write == nil || *a.Write
@@ -515,7 +524,10 @@ func (s *webServer) handle(w http.ResponseWriter, r *http.Request, p *Principal)
 					apiError(w, 403, err.Error())
 					return
 				}
-				result, err := remoteChatTool(r.Context(), remote, "invite", map[string]any{"channel": native, "agent": a.Agent, "write": write})
+				result, err := remoteChatTool(r.Context(), remote, "invite", map[string]any{"channel": native, "agent": normalized, "write": write})
+				if err != nil && strings.Contains(strings.ToLower(err.Error()), "agent not found") {
+					result, err = remoteChatTool(r.Context(), remote, "invite", map[string]any{"channel": native, "write": write})
+				}
 				if err != nil {
 					apiError(w, 400, err.Error())
 					return
@@ -523,54 +535,41 @@ func (s *webServer) handle(w http.ResponseWriter, r *http.Request, p *Principal)
 				writeJSON(w, 201, result)
 				return
 			}
-			if a.Agent != "" {
-				if s.local {
-					if _, err := participantByAddress(s.db, a.Agent); err != nil {
-						if !write {
-							apiError(w, 400, "Use Manage members to edit local posting access")
-							return
-						}
-						if err = s.inviteLocalAgent(p, a.Channel, a.Agent); err != nil {
-							apiError(w, 403, err.Error())
-						} else {
-							writeJSON(w, 200, map[string]string{"name": strings.TrimPrefix(a.Agent, "@"), "status": "joined"})
-						}
-						return
-					}
-				}
-				peer, err := InviteWorkspaceAgent(s.db, s.access, p, a.Channel, a.Agent, write)
-				if err != nil {
-					apiError(w, 403, err.Error())
+			if s.local && normalized != "" {
+				if email != "" {
+					apiError(w, 400, "Choose a remote workspace to invite someone on another device")
 					return
 				}
-				writeJSON(w, 200, map[string]string{"name": principalAddress(peer), "status": "joined"})
-				return
-			}
-			secret, err := CreateWorkspaceInvitation(s.db, s.access, p, a.Channel, write)
-			if err != nil {
-				apiError(w, 403, err.Error())
-				return
+				if _, err := participantByAddress(s.db, normalized); err != nil {
+					if !write {
+						apiError(w, 400, "Use Manage members to edit local posting access")
+						return
+					}
+					if err = s.inviteLocalAgent(p, a.Channel, normalized); err != nil {
+						apiError(w, 403, err.Error())
+					} else {
+						writeJSON(w, 200, map[string]string{"kind": "member", "name": strings.TrimPrefix(normalized, "@"), "status": "joined"})
+					}
+					return
+				}
 			}
 			base := s.base
 			if base == "" {
 				base = "http://" + r.Host
 			}
-			writeJSON(w, 201, map[string]string{"url": base + "/join?invite=" + secret})
-			return
-		}
-	case "/v1/chat/memberships":
-		if r.Method == "POST" {
-			var a struct{ Invitation string }
-			if !webDecode(w, r, &a) {
-				return
-			}
-			if err := JoinWorkspaceChannel(s.db, s.access, p, "", a.Invitation); err != nil {
+			result, err := inviteWorkspaceRecipient(s.db, s.access, p, a.Channel, normalized, write, base)
+			if err != nil {
 				apiError(w, 403, err.Error())
 				return
 			}
-			writeJSON(w, 200, map[string]bool{"ok": true})
+			status := 200
+			if result.Kind == "invitation" {
+				status = 201
+			}
+			writeJSON(w, status, result)
 			return
 		}
+
 	case "/v1/chat/participants":
 		if r.Method == "GET" {
 			s.people(w, r, p)

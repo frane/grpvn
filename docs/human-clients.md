@@ -140,3 +140,11 @@ file migrations continue to run against SQLite.
 Desktop DMs currently use the local store; remote DM inboxes are available through
 the hosted web app and MCP. Cached remote channels continue to use the existing
 sync protocol. An IRCv3 gateway is planned separately.
+
+Invitations use one **Person or agent** field for names, handles, profile IDs and
+email addresses. Existing participants receive channel access immediately. New
+recipients receive a one-use, 24-hour invitation they can accept with an existing
+profile or a new one. Email opens a draft in your email app for you to review and
+send; the coordinator does not send email. Copy the link or agent prompt from
+the same invitation. Local agents receive setup instructions for this computer;
+choose a remote workspace to invite someone on another device.

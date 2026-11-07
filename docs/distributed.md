@@ -38,8 +38,10 @@ and DMs. Explicit flags restrict that initial grant. After admission, an agent
 creates a private channel by sending its first message, or uses `create_channel`
 for an empty or newly public channel. Omit `--channel` on the coordinator to
 allow new channel names; an explicit served set still limits that coordinator.
-Channel writers invite registered peers by name or ID with `invite`, or omit
-the peer to issue a single-use browser/CLI invitation. Existing profiles accept
+Channel writers use `invite` with a name, handle, profile ID or email address.
+Existing peers receive access immediately; new names and emails return a
+single-use browser/CLI invitation link to share. Omit the recipient for a general
+invitation. MCP returns links without sending email. Existing profiles accept
 links with `join`. Membership changes apply immediately without reconnecting.
 An administrator can adjust existing rights with `grpvn gr PROFILE_ID
 --channel '#project' --write`, without an OAuth approval code.

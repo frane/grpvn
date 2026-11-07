@@ -228,7 +228,7 @@ func participantByAddress(db dbtx, address string) (*Principal, error) {
 			return findPrincipal(db, "id=?", p.ID)
 		}
 	}
-	return nil, fmt.Errorf("agent not found; use list_agents or ask the peer to connect once and share its assigned name")
+	return nil, errParticipantNotFound
 }
 
 func InviteWorkspaceAgent(db *sql.DB, access *channelAccess, inviter *Principal, channel, address string, write bool) (*Principal, error) {
@@ -262,7 +262,7 @@ func InviteWorkspaceAgent(db *sql.DB, access *channelAccess, inviter *Principal,
 		return nil, err
 	}
 	if recipient.Status == "revoked" || !isChatParticipant(recipient) {
-		return nil, fmt.Errorf("this agent cannot be invited")
+		return nil, fmt.Errorf("this participant cannot be invited")
 	}
 	if recipient.ParentID != "" {
 		parent, err := findPrincipal(tx, "id=?", recipient.ParentID)

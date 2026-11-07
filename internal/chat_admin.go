@@ -106,12 +106,30 @@ func (s *webServer) manage(w http.ResponseWriter, r *http.Request, p *Principal)
 				}
 			}
 		}
+		if path == "/v1/chat/invitations" {
+			raw, _ := body["Recipient"].(string)
+			if raw == "" {
+				raw, _ = body["Agent"].(string)
+			}
+			recipient, _, err := invitationRecipient(raw)
+			if err != nil {
+				apiError(w, 400, err.Error())
+				return true
+			}
+			body["Agent"] = recipient
+			delete(body, "Recipient")
+		}
 		var result map[string]any
 		endpoint := path
 		if len(q) > 0 {
 			endpoint += "?" + q.Encode()
 		}
-		if err = remoteRequest(r.Context(), remote, r.Method, endpoint, body, &result); err != nil {
+		err = remoteRequest(r.Context(), remote, r.Method, endpoint, body, &result)
+		if err != nil && path == "/v1/chat/invitations" && strings.Contains(strings.ToLower(err.Error()), "agent not found") {
+			body["Agent"] = ""
+			err = remoteRequest(r.Context(), remote, r.Method, endpoint, body, &result)
+		}
+		if err != nil {
 			apiError(w, 403, err.Error())
 			return true
 		}

@@ -35,11 +35,10 @@ func main() {
 			return
 		}
 		var command struct{ Type, URL string }
-		if json.Unmarshal([]byte(message), &command) != nil || command.Type != "openExternal" {
+		if json.Unmarshal([]byte(message), &command) != nil {
 			return
 		}
-		target, err := url.Parse(command.URL)
-		if err != nil || target.User != nil || (target.Scheme != "https" && target.Scheme != "http") {
+		if !allowedExternalURL(command.Type, command.URL) {
 			return
 		}
 		_ = app.Browser.OpenURL(command.URL)

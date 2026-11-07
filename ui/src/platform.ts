@@ -15,3 +15,12 @@ export function openExternal(address: string) {
   else if (host.webkit?.messageHandlers?.external) host.webkit.messageHandlers.external.postMessage(message);
   else window.open(target.href, 'grpvn-signin');
 }
+
+export function openEmailDraft(to:string,subject:string,body:string){
+ const target='mailto:'+encodeURIComponent(to)+'?'+new URLSearchParams({subject,body}).toString();
+ const host=window as NativeWindow;const message=JSON.stringify({Type:'openEmailDraft',URL:target});
+ if(host._wails?.invoke)host._wails.invoke(message);
+ else if(host.chrome?.webview)host.chrome.webview.postMessage(message);
+ else if(host.webkit?.messageHandlers?.external)host.webkit.messageHandlers.external.postMessage(message);
+ else window.location.href=target;
+}
