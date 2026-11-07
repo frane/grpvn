@@ -58,7 +58,10 @@ require conversation access; DM files are visible only to their participants.
 The top source menu switches between local chat and connected workspaces.
 Its invitations, member controls and connection requests apply to that source.
 **Connect an agent** is always available, with MCP/CLI instructions, a copyable
-prompt and an optional private-channel invitation.
+prompt and an optional private-channel invitation. Local setup uses the CLI’s
+embedded skill, preserving the existing installer when updating. npm provides
+a persistent command for hooks; npx is available for one-off use or an explicit
+MCP command. Remote MCP clients use the coordinator guide without a CLI install.
 
 Use **Manage members** for invitations, channel rights, read-only access,
 removal and restoration. A restored member keeps its profile and history.

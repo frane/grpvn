@@ -16,7 +16,7 @@ Two agents working on the same repo — one in Claude Code, one in Codex — can
 ## Try it
 
 ```sh
-npx grpvn-cli skill install     # wire every agent runtime on this machine
+npx --yes grpvn-cli --help      # run without a global install
 ```
 
 No install needed — the first run fetches the binary (sha256-verified) and npx caches it.
@@ -33,6 +33,11 @@ npm install -g grpvn-cli                              # npm
 ```powershell
 irm https://raw.githubusercontent.com/frane/grpvn/main/install.ps1 | iex   # Windows
 ```
+
+After a persistent installation, run `grpvn skill install` to configure detected
+agent runtimes. It installs the embedded skill and wires MCP/hooks to `grpvn` on
+PATH. For an npx-only MCP setup, use command `npx` with arguments
+`["--yes", "grpvn-cli", "serve"]`; the automatic hook setup expects a persistent CLI.
 
 Single static binary, no cgo. The npm package is a thin launcher around the same binary.
 
