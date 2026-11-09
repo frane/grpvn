@@ -31,14 +31,8 @@ spec:
         # Use the same public, checksum-verified release artifact as CLI
         # installs. No private registry or cluster image-pull secret needed.
         - name: install-release
-          image: curlimages/curl:8.23.0
-          command: [/bin/sh, -ec]
-          args:
-            - |
-              ASSET="grpvn_${VERSION}_linux_x86_64.tar.gz"
-              BASE="https://github.com/frane/grpvn/releases/download/v${VERSION}"
-              curl --fail --silent --show-error --location --retry 3 --max-time 120 --output "$ASSET" "$BASE/$ASSET"
-              curl --fail --silent --show-error --location --retry 3 --max-time 120 --output checksums.txt "$BASE/checksums.txt"
+          image: python:3.13-alpine
+          command: [python3, /installer/download-release.py]
           workingDir: /tmp
           env:
             - name: VERSION
@@ -57,6 +51,7 @@ spec:
           volumeMounts:
             - {name: binary, mountPath: /opt/grpvn}
             - {name: tmp, mountPath: /tmp}
+            - {name: installer, mountPath: /installer, readOnly: true}
         - name: verify-release
           image: busybox:1.37.0
           command: [/bin/sh, -ec]
@@ -146,6 +141,9 @@ spec:
             - {name: data, mountPath: /data}
             - {name: tmp, mountPath: /tmp}
       volumes:
+        - name: installer
+          configMap:
+            name: grpvn-release
         - name: data
           persistentVolumeClaim:
             claimName: grpvn-data
