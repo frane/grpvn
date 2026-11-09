@@ -31,21 +31,30 @@ const exe = process.platform === "win32" ? "grpvn.exe" : "grpvn";
 const cacheDir = path.join(__dirname, "..", "dist");
 const cached = path.join(cacheDir, exe);
 
-async function fetchBytes(url) {
-  const res = await fetch(url);
-  if (!res.ok) fail(`download failed (${res.status}): ${url}`);
-  return Buffer.from(await res.arrayBuffer());
+async function fetchBytes(url, accept = "application/octet-stream") {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(url, { headers: { Accept: accept, "User-Agent": "grpvn-cli" }, signal: AbortSignal.timeout(60000) });
+      if (!res.ok) throw Object.assign(new Error(`download failed (${res.status}): ${url}`), { status: res.status });
+      return Buffer.from(await res.arrayBuffer());
+    } catch (error) {
+      if (attempt === 2 || (error.status && error.status < 500 && error.status !== 429)) throw error;
+      await new Promise(resolve => setTimeout(resolve, 2000 * (attempt + 1)));
+    }
+  }
 }
 
 async function download() {
   const t = triple();
   const ext = process.platform === "win32" ? "zip" : "tar.gz";
   const asset = `grpvn_${version}_${t}.${ext}`;
-  const base = `https://github.com/${repo}/releases/download/v${version}`;
   console.error(`grpvn: fetching ${asset} (first run for ${version})`);
+  const release = JSON.parse(await fetchBytes(`https://api.github.com/repos/${repo}/releases/tags/v${version}`, "application/vnd.github+json"));
+  const assets = new Map(release.assets.map(item => [item.name, item.url]));
+  if (!assets.has(asset) || !assets.has("checksums.txt")) fail(`release is missing ${asset} or checksums.txt`);
   const [archive, sums] = await Promise.all([
-    fetchBytes(`${base}/${asset}`),
-    fetchBytes(`${base}/checksums.txt`),
+    fetchBytes(assets.get(asset)),
+    fetchBytes(assets.get("checksums.txt")),
   ]);
   const line = sums.toString("utf8").split("\n").find((l) => l.includes(asset));
   if (!line) fail(`no checksum for ${asset}`);
@@ -78,4 +87,4 @@ async function main() {
   process.exit(res.status ?? 0);
 }
 
-main();
+main().catch(error => fail(error.message));

@@ -41,6 +41,8 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "GRPVN_TEST_BIN=$pwd\.build\grpvn.exe"
       - name: Test
         run: go test -race -v ./...
+      - name: Verify npm launcher
+        run: node --test npm/test/launcher.test.js
       - name: Verify install.ps1
         if: matrix.os == 'windows-latest'
         shell: pwsh
