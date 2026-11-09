@@ -46,6 +46,7 @@ jobs:
         shell: pwsh
         run: |
           $null = [scriptblock]::Create((Get-Content -Raw install.ps1))
+          & .\tests\install_download_test.ps1
           & .\install.ps1 -Version v0.6.0 -BinDir "$env:TEMP\grpvn-bin"
           & "$env:TEMP\grpvn-bin\grpvn.exe" version
       - name: Fmt

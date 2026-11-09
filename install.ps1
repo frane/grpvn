@@ -21,6 +21,22 @@ $Repo = "frane/grpvn"
 function Say($m) { Write-Host "grpvn-install: $m" }
 function Fail($m) { Write-Error "grpvn-install: $m"; exit 1 }
 
+function Invoke-ReleaseDownload {
+    param([string]$Uri, [string]$OutFile = "")
+    $request = @{ Uri = $Uri; UseBasicParsing = $true; TimeoutSec = 60 }
+    if ($OutFile) { $request.OutFile = $OutFile }
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try { return (Invoke-WebRequest @request) }
+        catch {
+            $status = $_.Exception.Response.StatusCode
+            if ($attempt -eq 3 -or ($null -ne $status -and [int]$status -lt 500 -and [int]$status -ne 429)) { throw }
+            $delay = 2 * $attempt
+            Say "download interrupted; retrying in ${delay}s ($($attempt + 1)/3)"
+            Start-Sleep -Seconds $delay
+        }
+    }
+}
+
 # Only windows/amd64 is published today; other arches fall through to go install.
 $target = $null
 if ($env:PROCESSOR_ARCHITECTURE -eq "AMD64") { $target = "windows_x86_64" }
@@ -50,11 +66,11 @@ function Install-FromRelease {
     New-Item -ItemType Directory -Force -Path $tmp | Out-Null
     try {
         $zip = Join-Path $tmp $asset
-        Invoke-WebRequest -Uri "$base/$asset" -OutFile $zip -UseBasicParsing
+        Invoke-ReleaseDownload -Uri "$base/$asset" -OutFile $zip
         # Same contract as install.sh: refuse anything that fails checksum.
         # GitHub serves checksums.txt as octet-stream, so .Content is a
         # byte[] — decode it or the line match silently fails.
-        $raw = (Invoke-WebRequest -Uri "$base/checksums.txt" -UseBasicParsing).Content
+        $raw = (Invoke-ReleaseDownload -Uri "$base/checksums.txt").Content
         $sums = if ($raw -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($raw) } else { [string]$raw }
         $line = $sums -split "`n" | Where-Object { $_ -match [regex]::Escape($asset) } | Select-Object -First 1
         if (-not $line) { Fail "no checksum for $asset in checksums.txt" }
