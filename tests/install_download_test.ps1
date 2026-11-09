@@ -8,9 +8,9 @@ $function = $ast.Find({ param($node) $node -is [System.Management.Automation.Lan
 function Say($message) {}
 function Start-Sleep($Seconds) { $script:delays += $Seconds }
 function Invoke-WebRequest {
-    param($Uri, $OutFile, $UseBasicParsing, $TimeoutSec)
+    param($Uri, $OutFile, $UseBasicParsing, $TimeoutSec, $Headers)
     $script:calls++
-    if ($Uri -ne 'https://example.test/asset' -or $OutFile -ne 'test.zip' -or -not $UseBasicParsing -or $TimeoutSec -ne 60) { throw 'Download options changed' }
+    if ($Uri -ne 'https://example.test/asset' -or $OutFile -ne 'test.zip' -or -not $UseBasicParsing -or $TimeoutSec -ne 60 -or $Headers.Accept -ne 'application/octet-stream') { throw 'Download options changed' }
     if ($script:calls -le $script:failures) {
         $error = [Exception]::new('Download failure')
         $error | Add-Member -NotePropertyName Response -NotePropertyValue ([pscustomobject]@{StatusCode=$script:status})

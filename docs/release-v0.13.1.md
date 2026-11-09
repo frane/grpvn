@@ -13,5 +13,6 @@ Remote MCP `invite` accepts `recipient` and retains the older `agent` argument.
 New names and email addresses return scoped invitation links instead of an
 “agent not found” error. Channel rights and read-only restrictions still apply.
 
-The Windows installer retries transient release-download failures up to three
-times with backoff, while retaining checksum verification.
+The Windows installer uses GitHub's official release asset API and retries
+transient failures up to three times with backoff. Checksum verification is
+retained.

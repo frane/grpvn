@@ -22,8 +22,8 @@ function Say($m) { Write-Host "grpvn-install: $m" }
 function Fail($m) { Write-Error "grpvn-install: $m"; exit 1 }
 
 function Invoke-ReleaseDownload {
-    param([string]$Uri, [string]$OutFile = "")
-    $request = @{ Uri = $Uri; UseBasicParsing = $true; TimeoutSec = 60 }
+    param([string]$Uri, [string]$OutFile = "", [string]$Accept = "application/octet-stream")
+    $request = @{ Uri = $Uri; UseBasicParsing = $true; TimeoutSec = 60; Headers = @{ Accept = $Accept } }
     if ($OutFile) { $request.OutFile = $OutFile }
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         try { return (Invoke-WebRequest @request) }
@@ -52,25 +52,28 @@ if (-not (Test-Path $BinDir)) { New-Item -ItemType Directory -Force -Path $BinDi
 
 function Install-FromRelease {
     if (-not $target) { return $false }
-    $ver = $Version
-    if ($ver -eq "latest") {
-        $rel = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest"
-        $ver = $rel.tag_name
-        if (-not $ver) { return $false }
-    }
+    $releasePath = if ($Version -eq "latest") { "latest" } else { "tags/" + [Uri]::EscapeDataString($Version) }
+    $rawRelease = (Invoke-ReleaseDownload -Uri "https://api.github.com/repos/$Repo/releases/$releasePath" -Accept "application/vnd.github+json").Content
+    $releaseJSON = if ($rawRelease -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($rawRelease) } else { [string]$rawRelease }
+    $rel = $releaseJSON | ConvertFrom-Json
+    $ver = $rel.tag_name
+    if (-not $ver) { return $false }
     $bare = $ver -replace '^v', ''
     $asset = "grpvn_${bare}_$target.zip"
-    $base = "https://github.com/$Repo/releases/download/$ver"
+    $binaryAsset = $rel.assets | Where-Object { $_.name -eq $asset } | Select-Object -First 1
+    $checksumAsset = $rel.assets | Where-Object { $_.name -eq 'checksums.txt' } | Select-Object -First 1
+    if (-not $binaryAsset) { return $false }
+    if (-not $checksumAsset) { Fail "release is missing checksums.txt" }
     Say "downloading $asset"
     $tmp = Join-Path $env:TEMP ("grpvn-install-" + [System.Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Force -Path $tmp | Out-Null
     try {
         $zip = Join-Path $tmp $asset
-        Invoke-ReleaseDownload -Uri "$base/$asset" -OutFile $zip
+        Invoke-ReleaseDownload -Uri $binaryAsset.url -OutFile $zip
         # Same contract as install.sh: refuse anything that fails checksum.
         # GitHub serves checksums.txt as octet-stream, so .Content is a
         # byte[] — decode it or the line match silently fails.
-        $raw = (Invoke-ReleaseDownload -Uri "$base/checksums.txt").Content
+        $raw = (Invoke-ReleaseDownload -Uri $checksumAsset.url).Content
         $sums = if ($raw -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($raw) } else { [string]$raw }
         $line = $sums -split "`n" | Where-Object { $_ -match [regex]::Escape($asset) } | Select-Object -First 1
         if (-not $line) { Fail "no checksum for $asset in checksums.txt" }
