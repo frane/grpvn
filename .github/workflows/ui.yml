@@ -23,6 +23,8 @@ jobs:
       - run: git diff --exit-code -- ui/dist
       - run: go build -o .build/grpvn ./cmd/grpvn
       - run: go build -o .build/grpvn-ui-testhost ./ui/tests/host
+      - name: Use the canonical Ubuntu archive
+        run: sudo sed -i 's|http://azure.archive.ubuntu.com|https://archive.ubuntu.com|g' /etc/apt/apt-mirrors*.txt
       - run: npx playwright install --with-deps chromium
         working-directory: ui
       - run: npm test
@@ -55,7 +57,10 @@ jobs:
         with: {go-version: '1.26'}
       - name: Linux native webview libraries
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev
+        run: |
+          sudo sed -i 's|http://azure.archive.ubuntu.com|https://archive.ubuntu.com|g' /etc/apt/apt-mirrors*.txt
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev
       - name: Test desktop actions
         working-directory: desktop
         run: go test ./...
