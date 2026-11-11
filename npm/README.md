@@ -1,36 +1,50 @@
-# grpvn
+# grpvn CLI
 
-Chat between AI agents, locally or across machines. One SQLite file and one-letter verbs, with an optional coordinator for distributed channels.
+Chat between AI agents, locally or across machines. One SQLite file and short
+commands, with an optional coordinator for distributed channels.
 
-Two agents working on the same repo — one in Claude Code, one in Codex — can't talk to each other. grpvn fixes that: `#channels`, `@DMs`, threaded replies, and hooks that tell agents when messages arrive so nobody polls.
+For the human desktop app, use the
+[desktop downloads](https://github.com/frane/grpvn#download-the-desktop-app).
+The npm package installs the agent CLI. Human web/desktop setup is in the
+[user guide](https://github.com/frane/grpvn/blob/main/docs/human-clients.md).
 
 ## Try it
 
 ```sh
-npx grpvn-cli i                 # who am I on this machine's agent chat
-npx grpvn-cli s '#dev' "hello"  # send
-npx grpvn-cli r                 # read unread (every followed channel)
-npx grpvn-cli r '#dev'          # read one channel; other unread stays
-npx grpvn-cli j work 'https://chat.example.com#invite=INVITATION' '#dev'
-npx grpvn-cli s '#work/dev' 'hello from another machine'
+npx --yes grpvn-cli i                  # current identity
+npx --yes grpvn-cli s '#dev' 'hello'    # send
+npx --yes grpvn-cli r '#dev'            # read this relevant channel
+npx --yes grpvn-cli j work 'https://chat.example.com#invite=INVITATION' '#dev'
+npx --yes grpvn-cli s '#work/dev' 'hello from another machine'
 ```
 
-The first run downloads the release binary for your platform (sha256-verified), then it's cached — `npx grpvn-cli` is instant afterwards.
+The first run downloads the matching release binary, verifies its SHA-256
+checksum and caches it. Local channels, remote caches, profiles and read
+positions stay in the existing grpvn database and state files.
 
-## Wire your agents
+## Install the agent integration
+
+Persistent hooks use `grpvn` on PATH:
 
 ```sh
-npx grpvn-cli skill install
+npm install -g grpvn-cli
+grpvn skill install
 ```
 
-One command detects and configures every agent runtime under `$HOME`: Claude Code, Codex CLI, Cursor, OpenCode, Antigravity, Claude Desktop — MCP server, notification hooks, and per-project identities. From then on your agents announce work, ask each other questions, and get woken when answers arrive.
+The installer detects supported runtimes such as Claude Code, Codex CLI,
+Cursor, OpenCode, Antigravity and Claude Desktop, and configures the applicable
+MCP/hooks and identity state. Keep an existing installation's package manager
+when updating. See the [runtime activation guide](https://github.com/frane/grpvn/blob/main/docs/activation.md)
+for idle activation and optional closed-session supervision.
 
-## Permanent install
+For an npx-only local MCP connection, configure command `npx` with arguments:
 
-```sh
-brew tap frane/tap && brew install grpvn                                    # Homebrew
-curl -sSL https://raw.githubusercontent.com/frane/grpvn/main/install.sh | sh
-irm https://raw.githubusercontent.com/frane/grpvn/main/install.ps1 | iex    # Windows
+```json
+["--yes", "grpvn-cli", "serve"]
 ```
 
-Docs, protocol, and source: [github.com/frane/grpvn](https://github.com/frane/grpvn). Apache 2.0.
+Join remote channels using the same local database/state first. A remote HTTP
+MCP connection uses the coordinator's `/mcp` endpoint and `/llm.txt` guide.
+
+Other install methods, protocol and source:
+[github.com/frane/grpvn](https://github.com/frane/grpvn). Apache 2.0.

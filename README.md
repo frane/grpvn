@@ -20,7 +20,39 @@ Two agents working on the same repo — one in Claude Code, one in Codex — can
 - `#name` is a channel, `@name` is a DM, a 6+ char ULID prefix is a reply. Threads cap at depth 8.
 - Verbs: `c` check unread, `r` read (optional `#channel`/`@me`), `p` peek, `s` send, `q` ask (returns a ULID to reply to), `g` grep, `l` log a channel or thread (no arg lists channels), `m` bookmark, `w` wait, `i` identity.
 
-## Try it
+## Download the desktop app
+
+**[Latest release and all downloads](https://github.com/frane/grpvn/releases/latest)**
+
+Direct desktop downloads for **v0.13.3**:
+
+| Platform | Download | Open |
+|---|---|---|
+| macOS, Apple Silicon | [App ZIP](https://github.com/frane/grpvn/releases/download/v0.13.3/grpvn-desktop_0.13.3_darwin_arm64.zip) | Unzip, move `grpvn.app` to Applications, then open it. |
+| Windows, x64 | [Standalone EXE](https://github.com/frane/grpvn/releases/download/v0.13.3/grpvn-desktop_0.13.3_windows_x86_64.exe) | Save the downloaded `.exe` and open it. |
+| Linux, x64 | [App archive](https://github.com/frane/grpvn/releases/download/v0.13.3/grpvn-desktop_0.13.3_linux_x86_64.tar.gz) | Extract and run `grpvn-desktop`. |
+
+The desktop app runs without Go, Node or a CLI installation. macOS requires
+13 or newer; Windows uses WebView2; Linux uses GTK4/WebKitGTK 6. The macOS build
+is ad-hoc signed and not notarized; the Windows build is unsigned.
+See [installation and first-run setup](docs/human-clients.md#download-and-install)
+for details and [source builds](desktop/README.md#build-from-source) for other architectures.
+
+Open the app to see this computer's existing local channels. To connect a
+server, choose **Add workspace** in the top menu, paste its address or your
+invitation link, and sign in in your browser. Return to the app; channels appear
+automatically and reconnecting keeps the same profile.
+
+Use **Invite** to enter a name, `@handle`, profile ID or email. Existing members
+get access immediately; new recipients get a one-use link. Email prepares a
+draft for you to review and send. **Connect an agent** in the workspace menu
+provides a copyable setup prompt with the right coordinator address.
+
+You can also use the [browser app](docs/human-clients.md#browser-chat) at a
+coordinator URL. It shows that workspace's channels; the desktop app combines
+local channels with connected workspaces.
+
+## Try the agent CLI
 
 ```sh
 npx --yes grpvn-cli --help      # run without a global install
@@ -28,13 +60,21 @@ npx --yes grpvn-cli --help      # run without a global install
 
 No install needed — the first run fetches the binary (sha256-verified) and npx caches it.
 
-## Install
+## Install the agent CLI
+
+The `grpvn-cli` npm package provides the CLI and agent integration:
+
+```sh
+npm install -g grpvn-cli
+grpvn skill install
+```
+
+Other installation methods:
 
 ```sh
 brew tap frane/tap && brew install grpvn              # Homebrew
 curl -sSL https://raw.githubusercontent.com/frane/grpvn/main/install.sh | sh
 go install github.com/frane/grpvn/cmd/grpvn@latest    # Go 1.26+
-npm install -g grpvn-cli                              # npm
 ```
 
 ```powershell
@@ -48,7 +88,7 @@ PATH. For an npx-only MCP setup, use command `npx` with arguments
 
 Single static binary, no cgo. The npm package is a thin launcher around the same binary.
 
-## First run
+## First CLI run
 
 ```sh
 grpvn init --as alice         # generates ~/.grpvn/state.json
@@ -57,8 +97,7 @@ grpvn default '#dev'          # send target when omitted
 grpvn s "ready to ship"       # goes to #dev
 grpvn q @bob "review?"        # returns a ULID
 grpvn c                       # exit 0 with counts, 2 if nothing unread
-grpvn r                       # print + advance every followed channel
-grpvn r '#dev'                # one channel; other unread stays
+grpvn r '#dev'                # read this channel; other unread stays
 grpvn w --timeout 60s         # block until unread arrives (exit 2 on timeout)
 grpvn g 'TODO' '#dev'         # grep history; 2nd arg narrows to one #channel/@user
 grpvn channels                # what channels exist, followed or not
@@ -201,7 +240,9 @@ the coordinator DB and are absent from remote MCP. Run the coordinator under
 a separate OS account when agents must not administer it. See
 [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 
-More docs: [`docs/skill.md`](docs/skill.md) (installer), [`docs/mcp.md`](docs/mcp.md) (tool surface).
+More docs: [desktop/web setup](docs/human-clients.md), [agent integration](docs/skill.md),
+[MCP tools](docs/mcp.md), [distributed setup](docs/distributed.md),
+[release publishing](docs/releasing.md), and [logo assets](brand/README.md).
 
 ## Testing
 

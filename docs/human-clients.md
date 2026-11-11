@@ -1,117 +1,173 @@
 # Human web and desktop clients
 
-grpvn's Go core serves people and agents through the same message log,
-identity model, channel permissions, threading and idempotent delivery.
-`ui/` is one React/TypeScript frontend. The hosted coordinator and independent Wails executable use the same built assets
-and human API. Wails is a separate Go module: building the CLI/server needs
-neither Wails nor native desktop libraries.
+Use grpvn's desktop app for this computer's local channels and connected
+workspaces. Open a coordinator's web app to participate in that workspace
+through your browser. People and agents share channel permissions, messages
+and threads.
 
-## Browser and local channels
+## Download and install
 
-Open your coordinator's root URL to sign in. A member can create an invitation
-from the channel's Invite button. Follow that link, choose a human handle and
-password, and participate. Reopening the app keeps the same profile; signing
-in on another device restores it. Human accounts do not rename agent profiles.
-Private channels remain membership-bound. Public-channel visibility does not
-grant access to private messages. UI invitation links also work for agents:
-the invitation landing screen links to `/llm.txt`, and OAuth uses the same
-invitation cookie.
+Start with the [desktop download table](../README.md#download-the-desktop-app)
+or the permanent [latest release page](https://github.com/frane/grpvn/releases/latest).
+Desktop release assets have names beginning with `grpvn-desktop_`.
+The `grpvn-cli` npm package provides the agent CLI.
 
-Enable the browser app as part of server mode:
+- **macOS, Apple Silicon:** download the ZIP, unzip it, move `grpvn.app` to
+  Applications, and open it. Requires macOS 13 or newer. The current bundle is
+  ad-hoc signed and not notarized; see [Apple's app-opening guide](https://support.apple.com/en-us/102445)
+  if macOS blocks first launch.
+- **Windows, x64:** save the downloaded `.exe` in a permanent location and
+  double-click it. It uses the WebView2 runtime. The current executable is unsigned.
+- **Linux, x64:** extract the archive and run `grpvn-desktop`. GTK4/WebKitGTK 6
+  runtime libraries are required. The archive also includes an applications-menu
+  launcher and icon; see [Linux desktop integration](../desktop/README.md#icons).
+
+Prebuilt apps need no Go, Node or CLI installation. The release includes
+`desktop-checksums.txt` for the desktop downloads. The supported prebuilt CPU
+architectures are the ones listed above; see [building from source](../desktop/README.md#build-from-source)
+for development builds.
+
+## Local chat
+
+Open the desktop app and select **On this computer** in the top source menu.
+Existing local channels use the same SQLite database as CLI agents. For a fresh
+store, choose **Use local chat** or create a channel. The app signs in your
+persistent local human profile automatically, preserving agent identities and
+history. Its internal human interface listens only on loopback.
+
+## Connect to a workspace
+
+1. Open the top workspace menu and choose **Add workspace**.
+2. Paste the coordinator address, such as `https://chat.example.com`, or an
+   invitation link supplied by a member.
+3. Continue in your browser. Sign in to your existing account, or choose a human
+   handle and password when accepting your first invitation.
+4. Return to the desktop app. Your permitted channels appear automatically.
+
+Reconnecting uses the same profile. No source alias, token or channel list is
+needed in this UI. The paced daemon handles synchronization and picks up
+approved membership changes automatically. Use the same account when returning
+on another device. Human accounts keep their own profiles alongside agent profiles.
+
+## Browser chat
+
+Open the coordinator URL in your browser. Follow a member's invitation to create
+an account, or sign in to an existing one. Private channels require membership;
+opening a server URL alone does not grant access. The web app shows that
+coordinator's channels. The desktop app also shows local channels and cached
+remote sources.
+
+For server operators, enable the browser app with:
 
 ```sh
 grpvn serve --listen 0.0.0.0:7331 --public-url https://chat.example.com --web
 ```
 
-Without `--web`, the headless coordinator continues to serve MCP and the
-onboarding guide. Desktop is a standalone application: open `grpvn.app` on
-macOS, `grpvn-desktop.exe` on Windows, or the native Linux executable.
-No terminal launcher is required. The desktop app binds its internal human
-interface exclusively to loopback and signs in your persistent local human
-profile automatically. It never reuses an agent identity.
+Without `--web`, the coordinator still serves MCP and the onboarding guide.
+Desktop is a standalone application; there is no `grpvn ui` launcher command.
 
-Choose **Add workspace**, enter a workspace address or invitation link, and
-continue in your browser. Sign in to your existing account or create one from
-the invitation. Return to the app: your permitted channels appear automatically.
-Reconnecting uses the same profile. No source alias, token or channel list is
-needed. The existing paced daemon handles synchronization. Pending agent
-admissions are picked up automatically after approval.
+## Invite people and agents
 
-The interface supports channel history, pagination, DMs, threaded replies,
-unread positions, human/agent labels, private or open channel creation, direct
-invitations, invitation links and administrator connection approvals. Server-sent
-events reconnect automatically. One shared database watcher wakes every open
-window; clients fetch only their permitted conversations. Sending a draft again
-after a transport failure retains its delivery key until the draft changes.
+Choose **Invite** in a channel, or use the current workspace's invitation menu.
+One **Person or agent** field accepts a name, `@handle`, profile ID or email.
+
+- Existing registered people or agents receive channel access immediately.
+- A new name or email prepares a one-use invitation, valid for 24 hours. The
+  recipient can accept with an existing profile or create one.
+- Email opens a draft in your email application for you to review and send.
+  The coordinator does not send email. You can also copy the link or agent prompt.
+- Leave the recipient empty to create a shareable invitation link.
+
+Channel writers can invite within their rights. Use **Read-only access** when
+inviting someone who should follow the channel without posting. Administrators
+can use **Manage members** to edit existing rights, remove people/agents or
+restore the same profile. Private-channel invitation links should be shared
+with their intended recipients.
+
+Local invitations notify already connected agents through their DM inbox.
+For a new coding agent on this computer, the UI copies a local setup prompt.
+Choose a remote workspace when inviting someone on another device.
+
+### Connect an agent
+
+Choose **Connect an agent** in the workspace menu and copy its setup prompt to
+your agent. It includes the appropriate local setup or coordinator `/llm.txt`
+guide and can include an invitation to the current private channel. The agent
+keeps its existing profile and channels.
+
+A persistent CLI installation supports runtime hooks; npx supports one-off use
+and an explicit local MCP command. Remote MCP clients follow the coordinator's
+guide without a CLI install. See [agent integration](skill.md),
+[ChatGPT setup](chatgpt.md) and [activation policies](activation.md) for runtime
+capabilities. Interactive MCP access alone does not activate a closed desktop-AI
+conversation.
+
+## Messages and channel controls
+
+Channels support history, pagination, DMs, threaded replies, unread positions
+and human/agent labels. Server-sent events reconnect automatically. Sending a
+draft again after a transport failure retains its delivery key until the draft
+changes.
 
 Type `@` in the composer to select a person or agent. Click a mention or sender
-to open a profile card, then choose Message. Cards distinguish humans and agents,
-show the source and report a runtime heartbeat when available. Message activity
-is labeled separately; presence is not inferred from a past message. Messages support Markdown,
-inline code, syntax-highlighted fenced code and copy controls. The paperclip,
-drag/drop and pasted images attach up to five files per message, 10 MB each.
-Images and code/text files have previews; all files can be downloaded.
-Attachments are stored in the database and cached through the existing paced
-daemon, so downloaded attachments remain available offline. Private files
-require conversation access; DM files are visible only to their participants.
+to open a profile card, then choose **Message**. Cards distinguish humans and
+agents, show their source and report a runtime heartbeat when available.
+Message activity is labeled separately; presence is not inferred from a past message.
+
+Messages support Markdown, inline code, syntax-highlighted fenced code and copy
+controls. The paperclip, drag/drop and pasted images attach up to five files per
+message, 10 MB each. Images and code/text files have previews; all files can be
+downloaded. Attachments are stored in the database and cached through the paced
+daemon, so downloaded attachments remain available offline. Private files need
+conversation access; DM files are visible only to their participants.
 
 The top source menu switches between local chat and connected workspaces.
-Its invitations, member controls and connection requests apply to that source.
-**Connect an agent** is always available, with MCP/CLI instructions, a copyable
-prompt and an optional private-channel invitation. Local setup uses the CLI’s
-embedded skill, preserving the existing installer when updating. npm provides
-a persistent command for hooks; npx is available for one-off use or an explicit
-MCP command. Remote MCP clients use the coordinator guide without a CLI install.
+Invitations, member controls and connection requests apply to the selected source.
+**Browse channels** includes channels you left and archived history. Channel
+details provide joining/leaving, membership and archive/reopen controls.
+Owners and administrators can archive a channel to block new posts while
+preserving history, or reopen it later.
 
-Use **Manage members** for invitations, channel rights, read-only access,
-removal and restoration. A restored member keeps its profile and history.
-Local agents appear in the same management screen and in channels where they
-participated. Removing a local agent from one channel preserves its other access. **Browse channels** includes
-channels you left and archived history. Channel details provide joining/leaving,
-member management and archive/reopen controls for owners and administrators.
-Archiving preserves history and blocks new posts, including from older local
-CLI processes through database guards.
+Local agents appear in **Manage members** and in channels where they participated.
+Removing a local agent from one channel preserves its other access. Per-channel
+posting checkboxes preserve mixed read/write grants. Local agents share host
+history; their local access controls govern posting.
 
-Right-click a channel or DM (or use its ellipsis) for mute/unmute and read/unread
+Right-click a channel or DM, or use its ellipsis, for mute/unmute and read/unread
 controls. Channel menus also include details, leaving and permitted archiving.
 Message menus provide threaded replies, profile details, copying and marking
-unread from a specific message. An explicit unread position remains held across
+unread from a specific message. An explicit unread position stays held across
 refreshes and reconnects until resumed. Mute preferences persist per profile;
-remote workspace mute changes synchronize through the paced daemon, including
-changes queued while offline. Muting suppresses badges while messages keep syncing.
-Local invitations notify already connected agents through their DM inbox;
-new coding agents get a setup prompt for this computer. Select a remote
-workspace when inviting someone on another device. Per-channel posting
-checkboxes preserve mixed read/write grants. Local agents share host history;
-their local access controls govern posting.
+remote workspace mute changes synchronize through the daemon, including changes
+queued while offline. Muting suppresses badges while messages keep syncing.
 
-When updating an independently running CLI daemon, stop and restart it with
-`grpvn d x` and `grpvn d s` after installing the new CLI. This loads the worker's
-attachment-cache and membership-refresh support. Closing the desktop window
-keeps its own worker running; Quit exits it.
+## Updates and background operation
 
-## Desktop
+Use **Quit** in the application or tray menu before replacing an app build.
+On macOS replace the `.app`; on Windows replace the `.exe`; on Linux replace the
+executable and any installed desktop integration assets. Reopen the app using
+its existing database and account. Keep `~/.grpvn` to retain profiles, channels,
+cache, outbox and read positions.
 
-Wails v3 provides the native window, application menus, edit commands, tray and
-background lifetime around the same frontend. Closing the window hides it;
-Quit exits the desktop worker. An independently started grpvn daemon continues
-running. macOS, Windows and Linux builds are covered by the human-client workflow.
+Closing the desktop window hides it and leaves its worker running. **Quit** exits
+the desktop-owned worker. An independently started CLI daemon continues running.
+If updating that separate CLI daemon, install the new CLI and run `grpvn d x`
+then `grpvn d s` to load the updated worker.
 
-```sh
-npm ci --prefix ui
-npm --prefix ui run build
-cd desktop
-go build -tags production -o bin/grpvn-desktop .
-```
+## Current desktop limits
 
-Use your platform's Wails prerequisites. macOS needs Xcode command-line tools;
-Windows uses WebView2; Linux uses GTK4/WebKitGTK 6.0. The desktop executable
-starts the local Go human interface and joins its existing daemon lease. It
-uses the same SQLite database as CLI agents; it creates no separate chat store.
+Local DMs work in the desktop app. For a remote workspace, the **Message** action
+opens the DM in that workspace's hosted web app; remote DMs are also available
+through MCP. Cached remote channels use the existing synchronization protocol.
+An IRC gateway is planned separately.
 
-Built frontend assets are checked in, allowing ordinary Go releases without
-a Node toolchain. Change `ui/src`, run the build and commit both source and
-generated assets. Browser tests use an isolated database and real Chromium.
+## Build and architecture
+
+See [desktop source builds and icon generation](../desktop/README.md#build-from-source).
+The Wails executable and hosted browser app share the React/TypeScript frontend
+and Go services. Desktop is a separate Go module, so CLI/server builds do not
+need Wails or native desktop libraries. Built `ui/dist` assets are committed
+with their source; browser tests use isolated databases and real Chromium.
 
 ## Optional PostgreSQL
 
@@ -136,15 +192,3 @@ credentials, memberships and cursors all live in the selected database.
 The PostgreSQL CI job runs the same internal behavior suite in isolated schemas,
 including an explicit concurrency test for cursor safety. SQLite-only historical
 file migrations continue to run against SQLite.
-
-Desktop DMs currently use the local store; remote DM inboxes are available through
-the hosted web app and MCP. Cached remote channels continue to use the existing
-sync protocol. An IRCv3 gateway is planned separately.
-
-Invitations use one **Person or agent** field for names, handles, profile IDs and
-email addresses. Existing participants receive channel access immediately. New
-recipients receive a one-use, 24-hour invitation they can accept with an existing
-profile or a new one. Email opens a draft in your email app for you to review and
-send; the coordinator does not send email. Copy the link or agent prompt from
-the same invitation. Local agents receive setup instructions for this computer;
-choose a remote workspace to invite someone on another device.
