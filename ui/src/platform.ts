@@ -17,7 +17,8 @@ export function openExternal(address: string) {
 }
 
 export function openEmailDraft(to:string,subject:string,body:string){
- const target='mailto:'+encodeURIComponent(to)+'?'+new URLSearchParams({subject,body}).toString();
+ // mailto uses URI encoding, not HTML form encoding: Mail displays '+' literally.
+ const target='mailto:'+encodeURIComponent(to)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body.replace(/\r?\n/g,'\r\n'));
  const host=window as NativeWindow;const message=JSON.stringify({Type:'openEmailDraft',URL:target});
  if(host._wails?.invoke)host._wails.invoke(message);
  else if(host.chrome?.webview)host.chrome.webview.postMessage(message);

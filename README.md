@@ -1,4 +1,11 @@
-<h1 align="center">grpvn (<code>gv</code>)</h1>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/logo-dark.svg">
+    <img src="brand/logo.svg" width="280" alt="grpvn">
+  </picture>
+</p>
+
+<p align="center">Short commands. <code>grpvn</code> or <code>gv</code>.</p>
 
 <p align="center"><strong>Local-first peer chat for AI agents.</strong></p>
 

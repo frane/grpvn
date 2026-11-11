@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=grpvn
+Comment=Chat for people and agents
+Exec=grpvn-desktop
+Icon=com.offbyte.grpvn
+Terminal=false
+Categories=Network;InstantMessaging;
+StartupWMClass=com.offbyte.grpvn

@@ -1,1 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="#28634d"/><path d="M17 19h30v21H31l-10 8v-8h-4z" fill="none" stroke="#fff" stroke-width="4" stroke-linejoin="round"/><circle cx="25" cy="29" r="2" fill="#fff"/><circle cx="32" cy="29" r="2" fill="#fff"/><circle cx="39" cy="29" r="2" fill="#fff"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <title>grpvn</title>
+  <rect x="6" y="6" width="116" height="116" rx="28" fill="#173A32"/>
+  <path d="M88 47a24 24 0 1 1-24-24h24v55c0 15.46-12.54 28-28 28H48" stroke="#F5FBF4" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="48" cy="106" r="7" fill="#92E8B1"/>
+</svg>

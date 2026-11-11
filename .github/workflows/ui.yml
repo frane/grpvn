@@ -64,7 +64,10 @@ jobs:
         working-directory: desktop
         run: |
           go build -trimpath -tags production -ldflags '-s -w' -o bin/grpvn-desktop .
-          tar -czf bin/grpvn-desktop-linux-${{ runner.arch }}.tar.gz -C bin grpvn-desktop
+          mkdir -p bin/share/applications bin/share/icons/hicolor/512x512/apps
+          cp com.offbyte.grpvn.desktop bin/share/applications/
+          cp icons/linux.png bin/share/icons/hicolor/512x512/apps/com.offbyte.grpvn.png
+          tar -czf bin/grpvn-desktop-linux-${{ runner.arch }}.tar.gz -C bin grpvn-desktop share
       - name: Build Windows executable
         if: runner.os == 'Windows'
         working-directory: desktop

@@ -7,6 +7,7 @@ import {openExternal} from './platform';
 import {Composer} from './Composer';
 const MessageBody=React.lazy(()=>import('./MessageBody').then(module=>({default:module.MessageBody})));
 import {Management} from './Management';
+import {BrandMark as Logo} from './Brand';
 import {WorkspaceMenu,WorkspaceSource} from './WorkspaceMenu';
 import {ConnectAgent} from './ConnectAgent';
 import {ProfileCard} from './ProfileCard';
@@ -175,7 +176,6 @@ function App() {
     {sidebar && <button className="sidebar-scrim" aria-label="Close sidebar" onClick={() => setSidebar(false)} />}
   </div></Presentation.Provider>;
 }
-function Logo() { return <span className="logo" aria-label="grpvn"><MessageSquare size={22} strokeWidth={1.6} /><span className="logo-dot" /></span>; }
 function day(time: number) { const d = new Date(time); const today = new Date(); return d.toDateString() === today.toDateString() ? 'Today' : new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(d); }
 function MessageRow({ message: m, onReply, replyCount = 0 }: { message: Message; onReply?: () => void; replyCount?: number }) {
   const {people,name,onMention,onContext}=React.useContext(Presentation);

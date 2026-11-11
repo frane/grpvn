@@ -8,7 +8,7 @@ func TestExternalActions(t *testing.T) {
 		allowed   bool
 	}{
 		{"openExternal", "https://chat.example/oauth/authorize", true},
-		{"openEmailDraft", "mailto:tim%40example.test?subject=Join+grpvn&body=Hello%0Ahttps%3A%2F%2Fchat.example%2Fjoin", true},
+		{"openEmailDraft", "mailto:tim%40example.test?subject=Join%20grpvn&body=Hello%0D%0Ahttps%3A%2F%2Fchat.example%2Fjoin", true},
 		{"openExternal", "mailto:tim@example.test", false},
 		{"openEmailDraft", "file:///private/secret", false},
 		{"openEmailDraft", "mailto:tim@example.test?bcc=other@example.test", false},

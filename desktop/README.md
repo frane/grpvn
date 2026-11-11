@@ -21,4 +21,17 @@ local channels. Closing its window hides it; the tray menu reopens it or quits.
 An existing standalone grpvn daemon is shared and continues after desktop exit.
 
 For the browser app, start a coordinator with `grpvn serve --listen 0.0.0.0:7331 --web` and open its root URL.
+
+## Icons
+
+The app, tray, favicon and project logo use the original SVG in
+[`brand/icon.svg`](../brand/icon.svg). Native assets are committed under `icons/`.
+To change the artwork, run `python3 scripts/generate-icons.py` from the repository
+root on macOS, then `go generate` from `desktop` to update the Windows resource.
+Normal builds need neither graphics tools nor a resource compiler.
+
+Linux release archives also include a `.desktop` entry and themed app icon.
+Install the executable on your PATH, the launcher under
+`~/.local/share/applications/`, and the icon under
+`~/.local/share/icons/hicolor/512x512/apps/` to register it with your desktop.
 See [human clients](../docs/human-clients.md) for invitations and PostgreSQL.

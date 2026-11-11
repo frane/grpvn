@@ -42,8 +42,8 @@ func main() {
 			return
 		}
 		_ = app.Browser.OpenURL(command.URL)
-	}, Name: "grpvn", Description: "grpvn chat", Linux: application.LinuxOptions{DisableQuitOnLastWindowClosed: true}, OnShutdown: func() { server.Close() }})
-	window := app.Window.NewWithOptions(application.WebviewWindowOptions{Title: "grpvn", Width: 1240, Height: 820, MinWidth: 760, MinHeight: 520, URL: server.URL})
+	}, Name: "grpvn", Description: "grpvn chat", Icon: appIcon, Linux: application.LinuxOptions{ApplicationID: "com.offbyte.grpvn", DisableQuitOnLastWindowClosed: true}, OnShutdown: func() { server.Close() }})
+	window := app.Window.NewWithOptions(application.WebviewWindowOptions{Title: "grpvn", Width: 1240, Height: 820, MinWidth: 760, MinHeight: 520, URL: server.URL, Linux: application.LinuxWindow{Icon: appIcon}})
 	menu := app.NewMenu()
 	if runtime.GOOS == "darwin" {
 		menu.AddRole(application.AppMenu)
@@ -54,7 +54,11 @@ func main() {
 	view.Add("Show grpvn").SetAccelerator("CmdOrCtrl+1").OnClick(func(*application.Context) { window.Show(); window.Focus() })
 	app.Menu.SetApplicationMenu(menu)
 	tray := app.SystemTray.New()
-	tray.SetLabel("grpvn")
+	if runtime.GOOS == "darwin" {
+		tray.SetTemplateIcon(trayIcon)
+	} else {
+		tray.SetIcon(appIcon)
+	}
 	tray.SetTooltip("grpvn — conversations")
 	trayMenu := app.NewMenu()
 	trayMenu.Add("Open grpvn").OnClick(func(*application.Context) { window.Show(); window.Focus() })

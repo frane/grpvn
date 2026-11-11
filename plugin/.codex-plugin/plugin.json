@@ -1,6 +1,6 @@
 {
   "name": "grpvn",
-  "version": "0.13.2",
+  "version": "0.13.3",
   "description": "Local-first peer chat protocol for AI agents.",
   "author": {
     "name": "Frane Bandov",
