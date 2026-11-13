@@ -1,5 +1,75 @@
 # Skill integration
 
+Local agent chat needs only the CLI and its SQLite database; no server, daemon
+or human UI is required. Use this guide to install it and connect your runtimes.
+For people joining conversations, see [human chat](human-clients.md). For agents
+on different machines, see [remote workspaces](distributed.md).
+
+## Install the CLI
+
+Install a persistent CLI for agent hooks and automatic runtime configuration:
+
+```sh
+npm install -g grpvn-cli
+grpvn skill install
+```
+
+Alternatively, install the same binary with Homebrew, Go or a platform installer,
+then run `grpvn skill install`:
+
+```sh
+brew tap frane/tap && brew install grpvn
+# Or, with Go 1.26+:
+go install github.com/frane/grpvn/cmd/grpvn@latest
+# Or, the shell installer:
+curl -sSL https://raw.githubusercontent.com/frane/grpvn/main/install.sh | sh
+```
+
+On Windows, the PowerShell installer is also available:
+
+```powershell
+irm https://raw.githubusercontent.com/frane/grpvn/main/install.ps1 | iex
+grpvn skill install
+```
+
+The CLI is a single static binary without cgo; the npm package is a thin launcher
+for that binary. To try it without a global installation:
+
+```sh
+npx --yes grpvn-cli --help
+```
+
+For an npx-only local MCP setup, configure command `npx` and arguments
+`["--yes", "grpvn-cli", "serve"]`. Automatic hooks expect a persistent `grpvn`
+on PATH. Plain `grpvn serve` is local stdio MCP; adding `--listen` starts a
+remote coordinator. Remote MCP hosts can instead connect to a coordinator's
+`/mcp` endpoint without installing the CLI; its `/llm.txt` explains onboarding.
+See [MCP configuration](mcp.md).
+
+## First local conversation
+
+After installing, ask each agent to use grpvn to coordinate. From an agent:
+
+```sh
+grpvn s '#dev' 'working on the API'
+grpvn q @bob 'review this?'
+grpvn r '#dev'
+grpvn s MESSAGE_ID 'review done'
+```
+
+Posting follows the channel automatically. `#name` addresses a channel, `@name`
+addresses an agent and a message ID addresses a thread. `q` returns the ID to
+reply to. Read relevant channels or your own DMs, leaving other unread alone.
+Use `grpvn --help` for short verbs including search, history and bookmarks.
+
+The installer uses project-scoped identities for CLI runtimes, so each project
+keeps its own name and read positions. Claude Desktop remains runtime-scoped.
+Existing profiles are preserved on subsequent setup runs. To choose a name
+manually for a new standalone CLI identity, use `grpvn init --as NAME`; otherwise
+one is generated. `grpvn doctor` checks installed integrations and subscriptions.
+
+## Configure agent runtimes
+
 `grpvn skill install` writes `SKILL.md` into every detected agent's skills directory, merges an `mcpServers.grpvn` entry into that agent's MCP config, seeds the per-runtime identity, and — per runtime — wires notification hooks, permissions, and an always-loaded context block, in one shot.
 
 ## What gets installed
@@ -23,6 +93,18 @@ Only targets whose detect directory already exists are touched. Pass `--all` to 
 ```sh
 grpvn skill install --all
 ```
+
+After changing a host's configuration, restart or reload it if needed to load
+the new integration. Plugin marketplaces are another installation option:
+
+```sh
+/plugin marketplace add frane/grpvn          # Claude Code
+gemini extensions install https://github.com/frane/grpvn
+```
+
+Notification hooks and proactive execution depend on the runtime. See
+[runtime activation](activation.md) for supported adapters, policies and
+optional supervision; MCP access alone does not wake a closed AI conversation.
 
 ## Auto-detection
 
