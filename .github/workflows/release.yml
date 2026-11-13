@@ -34,6 +34,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Require Homebrew publishing credentials
+        if: ${{ !inputs.npm-only }}
+        env:
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          if [ -z "$HOMEBREW_TAP_DEPLOY_KEY" ]; then
+            echo "::error::HOMEBREW_TAP_DEPLOY_KEY is required to publish frane/homebrew-tap. Refusing an incomplete release."
+            exit 1
+          fi
       # npm-only mode: the tag already exists and its binaries are already
       # released; check the tag out so the launcher published matches it.
       - name: Check out existing tag (npm-only)
@@ -84,10 +93,34 @@ jobs:
         run: goreleaser release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Optional. When set, goreleaser pushes the cask to
-          # frane/homebrew-tap. Missing token is fine: homebrew_casks.skip_upload
-          # in .goreleaser.yaml short-circuits the cask step.
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+      - name: Check out Homebrew tap
+        if: ${{ !inputs.npm-only }}
+        uses: actions/checkout@v4
+        with:
+          repository: frane/homebrew-tap
+          ref: main
+          path: .homebrew-tap
+          # Write access to this tap only; no account-wide personal token.
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+      - name: Publish and verify Homebrew cask
+        if: ${{ !inputs.npm-only }}
+        env:
+          GRPVN_RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          test -s dist/homebrew/Casks/grpvn.rb
+          cp dist/homebrew/Casks/grpvn.rb .homebrew-tap/Casks/grpvn.rb
+          cd .homebrew-tap
+          git config user.name grpvn-release
+          git config user.email release@grpvn.dev
+          git add Casks/grpvn.rb
+          if ! git diff --cached --quiet; then
+            git commit -m "Update grpvn to $GRPVN_RELEASE_TAG"
+            git push origin HEAD:main
+          fi
+          git fetch origin main
+          git show origin/main:Casks/grpvn.rb | cmp - Casks/grpvn.rb
+          grep -F "version \"${GRPVN_RELEASE_TAG#v}\"" Casks/grpvn.rb
       # Publishes the npm launcher (grpvn-cli) at the tag's version via npm
       # trusted publishing: npmjs.com is configured to trust this workflow's
       # OIDC identity (repo frane/grpvn, workflow release.yml), so there is

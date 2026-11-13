@@ -32,8 +32,11 @@ Use the same tested commit for all of them.
    GoReleaser's `checksums.txt` covers CLI archives.
 6. Set the public release notes, including supported architectures and the current
    signing status. macOS is presently ad-hoc signed and not notarized; Windows
-   is unsigned. Homebrew publishing requires the optional tap credential;
-   verify it separately before announcing a Homebrew update.
+   is unsigned. Homebrew publication is required: the workflow uses
+   `HOMEBREW_TAP_DEPLOY_KEY`, a write deploy key scoped to `frane/homebrew-tap`,
+   to publish the generated CLI cask and verify it on the remote branch. Missing
+   credentials fail before a new tag is created; a tap publication failure
+   fails the release workflow. This key grants no access to other repositories.
 
 ## Verify the published release
 
@@ -42,6 +45,9 @@ Use the same tested commit for all of them.
 - Check the root README download table against the published filenames. Keep
   `https://github.com/frane/grpvn/releases/latest` as the permanent share link.
 - Verify `npm view grpvn-cli@<version> version` and a fresh npm/npx invocation.
+- Verify `brew update` exposes the same version in `frane/tap/grpvn`, and check
+  the installed binary after `brew upgrade --cask frane/tap/grpvn`. The `grpvn`
+  cask installs the agent CLI; desktop app downloads are separate release assets.
 - Verify native icons and a basic launch/connect flow for the desktop artifacts.
 - If updating a hosted coordinator, follow [deployment instructions](../deploy/README.md),
   verify its version, and check existing identities/memberships and the changed

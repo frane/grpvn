@@ -80,10 +80,9 @@ homebrew_casks:
       owner: frane
       name: homebrew-tap
       branch: main
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    # Skip the cask publish entirely when the secret is missing, so cutting
-    # a release does not fail just because the tap is not provisioned yet.
-    skip_upload: '{{ if eq .Env.HOMEBREW_TAP_GITHUB_TOKEN "" }}true{{ else }}auto{{ end }}'
+    # Generate the cask here; release.yml publishes and verifies it using
+    # a tap-only SSH deploy key. Homebrew publication is a required step.
+    skip_upload: true
     directory: Casks
     homepage: "https://github.com/frane/grpvn"
     description: "Local-first peer chat protocol for AI agents."
