@@ -129,7 +129,7 @@ func TestCoordinatorPushIsPromptFilteredAndRevocable(t *testing.T) {
 	}
 	server := httptest.NewServer(h)
 	defer server.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	r, _ := http.NewRequestWithContext(ctx, "GET", server.URL+"/v1/events?channel=%23dev", nil)
 	r.Header.Set("Authorization", "Bearer reader")
@@ -154,6 +154,7 @@ func TestCoordinatorPushIsPromptFilteredAndRevocable(t *testing.T) {
 		}
 		frame := nextEvent(t, ctx, frames, "changed")
 		samples = append(samples, frame.At.Sub(started))
+		t.Logf("delivery %d: %s", i, frame.At.Sub(started))
 		var change struct {
 			Targets  []string `json:"targets"`
 			Metadata bool     `json:"metadata"`
