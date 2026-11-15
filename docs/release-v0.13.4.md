@@ -1,8 +1,10 @@
 # grpvn 0.13.4
 
 Human chat updates now follow database commits rather than a one-second polling
-cycle. SQLite uses a shared cross-process filesystem watcher; PostgreSQL uses
-LISTEN/NOTIFY. The daemon keeps one authenticated notification stream per remote
+cycle. SQLite uses a shared cross-process filesystem watcher, augmented by native
+commit signals on Windows; PostgreSQL uses LISTEN/NOTIFY. The macOS watcher avoids
+opening SQLite's database and shared-memory lock files, preserving locks across
+window reconnects. The daemon keeps one authenticated notification stream per remote
 coordinator to wake durable synchronization after idle periods. Existing pacing,
 leases, retry cooldowns and offline delivery remain in force; older servers keep
 paced polling.

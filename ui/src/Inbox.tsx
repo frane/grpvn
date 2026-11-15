@@ -20,11 +20,12 @@ export function useNeedsYou(profile:string|undefined,onError:(error:unknown)=>vo
  const cursor=useRef<number|null>(null);const identity=useRef(profile);identity.current=profile;
  const liveSettings=useRef(settings);liveSettings.current=settings;const latest=useRef(items);latest.current=items;
  const pending=useRef(new Map<string,AttentionItem>());const timer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);const busy=useRef<Promise<void>|null>(null);const again=useRef(false);const fullRefresh=useRef(false);
- useEffect(()=>{cursor.current=null;before.current=0;setMore(false);setLoadingEarlier(false);setItems([]);setUnread(0);setSettings(defaults);pending.current.clear();busy.current=null;again.current=false;fullRefresh.current=false;if(timer.current)clearTimeout(timer.current);return()=>{if(timer.current)clearTimeout(timer.current);};},[profile]);
+ const pendingSince=useRef(0);
+ useEffect(()=>{cursor.current=null;pendingSince.current=0;before.current=0;setMore(false);setLoadingEarlier(false);setItems([]);setUnread(0);setSettings(defaults);pending.current.clear();busy.current=null;again.current=false;fullRefresh.current=false;if(timer.current)clearTimeout(timer.current);return()=>{if(timer.current)clearTimeout(timer.current);};},[profile]);
  useEffect(()=>{setUnreadBadge(unread);},[unread]);
  useEffect(()=>{if(!notice)return;const timeout=setTimeout(()=>setNotice(null),6500);return()=>clearTimeout(timeout);},[notice]);
  const deliver=useCallback(async()=>{
-  timer.current=undefined;const batch=Array.from(pending.current.values());pending.current.clear();if(!batch.length)return;
+  timer.current=undefined;pendingSince.current=0;const batch=Array.from(pending.current.values());pending.current.clear();if(!batch.length)return;
   const relevant=batch.filter(item=>item.unread&&!item.muted);const currentProfile=identity.current;const prefs=liveSettings.current;if(prefs.level==='none')return;
   if(document.visibilityState==='visible'&&document.hasFocus()){if(!document.querySelector('[role=dialog]'))setNotice(relevant.length?relevant:null);return;}
   if(!prefs.desktop||!relevant.length)return;
@@ -46,7 +47,7 @@ export function useNeedsYou(profile:string|undefined,onError:(error:unknown)=>vo
     cursor.current=result.cursor;liveSettings.current=result.settings;setSettings(result.settings);setUnread(result.unread);
     if(!delta){before.current=result.before;setMore(result.more);}else if(result.more)again.current=true;
     setItems(old=>{const all=new Map((replace?[]:old).map(item=>[item.id,item]));for(const item of result.items)all.set(item.id,item);const sorted=Array.from(all.values()).sort((a,b)=>b.seq-a.seq);latest.current=sorted;return sorted;});
-    if(previous!==null){for(const item of result.items){if(item.seq>previous&&item.unread&&!item.muted&&(result.settings.level==='all'||item.reason!=='message'))pending.current.set(item.id,item);}if(pending.current.size&&!timer.current)timer.current=setTimeout(()=>void deliver(),1200);}
+    if(previous!==null){let fresh=false;for(const item of result.items){if(item.seq>previous&&item.unread&&!item.muted&&(result.settings.level==='all'||item.reason!=='message')){pending.current.set(item.id,item);fresh=true;}}if(fresh&&pending.current.size){if(timer.current)clearTimeout(timer.current);if(!pendingSince.current)pendingSince.current=Date.now();timer.current=setTimeout(()=>void deliver(),Math.max(0,Math.min(1200,5000-(Date.now()-pendingSince.current))));}}
    }
   };
   const promise=run().finally(()=>{if(busy.current===promise)busy.current=null;});busy.current=promise;return promise;

@@ -17,6 +17,7 @@ func watchSQLiteFiles(ctx context.Context, path string, signal func()) {
 	// SQLite reports forward-slash paths on Windows; filesystem events use
 	// native separators. Comparing those verbatim misses WAL write events.
 	path = filepath.Clean(filepath.FromSlash(path))
+	go watchSQLiteCommits(ctx, path, signal)
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return

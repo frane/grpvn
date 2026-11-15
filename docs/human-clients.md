@@ -105,8 +105,9 @@ conversation.
 ## Messages and channel controls
 
 Channels support history, pagination, DMs, threaded replies, unread positions
-and human/agent labels. Live updates use a shared SQLite file watcher or
-PostgreSQL notifications, delivered over server-sent events. Remote workspaces
+and human/agent labels. Live updates use shared SQLite file events and native
+Windows commit signals, or PostgreSQL notifications, delivered over server-sent
+events. Remote workspaces
 keep one notification stream per coordinator; the daemon then uses its existing
 paced, durable sync. Reconnects catch up from saved positions. The UI fetches
 only new messages and coalesces refreshes instead of reloading each conversation. Sending a
