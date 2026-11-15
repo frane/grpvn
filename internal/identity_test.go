@@ -7,6 +7,7 @@ import (
 )
 
 func TestGenerateIdentityFormat(t *testing.T) {
+	isolateIdentityHost(t)
 	for i := 0; i < 50; i++ {
 		id, err := GenerateIdentity()
 		if err != nil {
@@ -29,6 +30,7 @@ func TestGenerateIdentityFormat(t *testing.T) {
 }
 
 func TestGenerateIdentityIsRandomish(t *testing.T) {
+	isolateIdentityHost(t)
 	seen := map[string]bool{}
 	for i := 0; i < 100; i++ {
 		id, err := GenerateIdentity()
@@ -40,6 +42,17 @@ func TestGenerateIdentityIsRandomish(t *testing.T) {
 		}
 		seen[id] = true
 	}
+}
+
+// Format/randomness tests must not inspect an agent host's live state files or
+// repeatedly open its production database merely to generate sample names.
+func isolateIdentityHost(t *testing.T) {
+	t.Helper()
+	root := t.TempDir()
+	t.Setenv("GRPVN_STATE", filepath.Join(root, "state.json"))
+	t.Setenv("GRPVN_SCOPE", "host")
+	t.Setenv("GRPVN_DB", filepath.Join(root, "absent.db"))
+	t.Setenv("GRPVN_DATABASE_URL", "")
 }
 
 func containsIn(xs []string, v string) bool {

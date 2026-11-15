@@ -19,6 +19,8 @@ func main() {
 		name = u.Username
 	}
 	var app *application.App
+	var window *application.WebviewWindow
+	notifier := newDesktopNotifications()
 	server, err := uihost.Start(context.Background(), name, "")
 	if err != nil {
 		log.Fatal(err)
@@ -34,24 +36,67 @@ func main() {
 		if err != nil || caller.Scheme != local.Scheme || caller.Host != local.Host || (runtime.GOOS != "linux" && !origin.IsMainFrame) {
 			return
 		}
-		var command struct{ Type, URL string }
+		if len(message) > 8192 {
+			return
+		}
+		var command desktopCommand
 		if json.Unmarshal([]byte(message), &command) != nil {
+			return
+		}
+		if notificationCommand(command.Type) {
+			go notifier.handle(command, func(value any) { dispatchNotificationReply(window, value) })
 			return
 		}
 		if !allowedExternalURL(command.Type, command.URL) {
 			return
 		}
 		_ = app.Browser.OpenURL(command.URL)
-	}, Name: "grpvn", Description: "grpvn chat", Icon: appIcon, Linux: application.LinuxOptions{ApplicationID: "com.offbyte.grpvn", DisableQuitOnLastWindowClosed: true}, OnShutdown: func() { server.Close() }})
-	window := app.Window.NewWithOptions(application.WebviewWindowOptions{Title: "grpvn", Width: 1240, Height: 820, MinWidth: 760, MinHeight: 520, URL: server.URL, Linux: application.LinuxWindow{Icon: appIcon}})
+	}, Name: "grpvn", Description: "grpvn chat", Icon: appIcon, Services: []application.Service{application.NewService(notifier)}, Linux: application.LinuxOptions{ApplicationID: "com.offbyte.grpvn", DisableQuitOnLastWindowClosed: true}, OnShutdown: func() { server.Close() }})
+	window = app.Window.NewWithOptions(application.WebviewWindowOptions{Title: "grpvn", Width: 1240, Height: 820, MinWidth: 760, MinHeight: 520, URL: server.URL, Linux: application.LinuxWindow{Icon: appIcon}})
+	notifier.onOpen(func(target, root string) {
+		window.Show()
+		window.Focus()
+		encoded, _ := json.Marshal(map[string]string{"target": target, "root": root})
+		window.ExecJS("window.dispatchEvent(new CustomEvent('grpvn:open-notification',{detail:" + string(encoded) + "}));")
+	})
 	menu := app.NewMenu()
 	if runtime.GOOS == "darwin" {
 		menu.AddRole(application.AppMenu)
 	}
+	menuAction := func(action string) func(*application.Context) {
+		encoded, _ := json.Marshal(action)
+		return func(*application.Context) {
+			window.Show()
+			window.Focus()
+			window.ExecJS("window.dispatchEvent(new CustomEvent('grpvn:action',{detail:" + string(encoded) + "}));")
+		}
+	}
+	file := menu.AddSubmenu("File")
+	file.Add("New channel…").SetAccelerator("CmdOrCtrl+N").OnClick(menuAction("create"))
+	file.Add("Add workspace…").SetAccelerator("CmdOrCtrl+Shift+N").OnClick(menuAction("connect"))
+	file.AddSeparator()
+	file.Add("Invite people or agents…").OnClick(menuAction("invite"))
+	file.Add("Connect an agent…").OnClick(menuAction("agent"))
+	file.AddSeparator()
+	file.Add("Close window").SetAccelerator("CmdOrCtrl+W").OnClick(func(*application.Context) { window.Hide() })
+	if runtime.GOOS != "darwin" {
+		file.Add("Quit grpvn").SetAccelerator("Ctrl+Q").OnClick(func(*application.Context) { app.Quit() })
+	}
 	menu.AddRole(application.EditMenu)
+	view := menu.AddSubmenu("View")
+	view.Add("Find a conversation").SetAccelerator("CmdOrCtrl+K").OnClick(menuAction("search"))
+	view.AddSeparator()
+	view.Add("Conversations").SetAccelerator("CmdOrCtrl+1").OnClick(menuAction("chats"))
+	view.Add("People & agents").SetAccelerator("CmdOrCtrl+2").OnClick(menuAction("people"))
+	view.Add("Needs you").SetAccelerator("CmdOrCtrl+3").OnClick(menuAction("attention"))
+	view.Add("Browse channels…").OnClick(menuAction("channels"))
+	view.AddSeparator()
+	view.Add("Notification settings…").OnClick(menuAction("notifications"))
 	menu.AddRole(application.WindowMenu)
-	view := menu.AddSubmenu("Conversations")
-	view.Add("Show grpvn").SetAccelerator("CmdOrCtrl+1").OnClick(func(*application.Context) { window.Show(); window.Focus() })
+	help := menu.AddSubmenu("Help")
+	help.Add("grpvn documentation").OnClick(func(*application.Context) {
+		_ = app.Browser.OpenURL("https://github.com/frane/grpvn#documentation")
+	})
 	app.Menu.SetApplicationMenu(menu)
 	tray := app.SystemTray.New()
 	if runtime.GOOS == "darwin" {

@@ -1,19 +1,19 @@
-import React, {useRef,useState} from 'react';
+import React, {useMemo,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
 import Markdown,{defaultUrlTransform} from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import {visit} from 'unist-util-visit';
 import {Check,Copy,Download,FileText,X} from 'lucide-react';
-import {fileURL,Person} from './api';
+import {fileURL,mentionNames,Person,shortName} from './api';
 const highlightOptions={detect:false,aliases:{typescript:['tsx'],javascript:['jsx']}};
 
-function mentions(options:{names:string[]}){
- const names=new Set(options.names);
+function mentions(options:{aliases:[string,string][]}){
+ const names=new Map(options.aliases);
  return (tree:any)=>{visit(tree,'text',(node:any,index:number|undefined,parent:any)=>{
   if(index===undefined||!parent||parent.type==='link')return;
-  const parts:any[]=[];let last=0;const re=/(^|[\s([{])@([\p{L}\p{N}_.~\-]+)/gu;let match;
-  while((match=re.exec(node.value))){let name=match[2];while(name.endsWith('.')&&!names.has(name))name=name.slice(0,-1);if(!names.has(name))continue;const start=match.index+match[1].length;if(start>last)parts.push({type:'text',value:node.value.slice(last,start)});parts.push({type:'link',url:'grpvn-mention:'+encodeURIComponent(name),children:[{type:'text',value:'@'+name}]});last=start+name.length+1;}
+  const parts:any[]=[];let last=0;const re=/(^|[\s([{])@([\p{L}\p{N}_.~\-]+(?:@[\p{L}\p{N}_.~\-]+)?)/gu;let match;
+  while((match=re.exec(node.value))){let name=match[2];while(name.endsWith('.')&&!names.has(name))name=name.slice(0,-1);const canonical=names.get(name);if(!canonical)continue;const start=match.index+match[1].length;if(start>last)parts.push({type:'text',value:node.value.slice(last,start)});parts.push({type:'link',url:'grpvn-mention:'+encodeURIComponent(canonical),children:[{type:'text',value:'@'+shortName(canonical)}]});last=start+name.length+1;}
   if(!parts.length)return;if(last<node.value.length)parts.push({type:'text',value:node.value.slice(last)});parent.children.splice(index,1,...parts);return index+parts.length;
  });};
 }
@@ -45,9 +45,13 @@ function MessageImage({src,alt}:{src?:string|Blob;alt?:string}){
  return typeof src==='string'&&src.startsWith('/v1/files/')?<Image src={src} alt={alt||'Image'}/>:<span className="external-image">{alt||'External image'}</span>;
 }
 const markdownComponents={pre:CodeBlock,a:MessageLink,img:MessageImage};
-export function MessageBody({body,target,people=[],currentName='',onMention}:{body:string;target:string;people?:Person[];currentName?:string;onMention?:(name:string)=>void}){
- const names=[...people.map(p=>p.name),currentName].filter(Boolean);
- return <MemberContext.Provider value={{currentName,onMention}}><div className="message-body markdown"><Markdown skipHtml remarkPlugins={[remarkGfm,[mentions,{names}]]} rehypePlugins={[[rehypeHighlight,highlightOptions]]}
+type MessageBodyProps={body:string;target:string;people?:Person[];currentName?:string;onMention?:(name:string)=>void};
+export const MessageBody=React.memo(function MessageBody({body,target,people=[],currentName='',onMention}:MessageBodyProps){
+ const nameKey=[...people.map(p=>p.name),currentName].filter(Boolean).sort().join('\0');
+ const names=useMemo(()=>nameKey.split('\0').filter(Boolean),[nameKey]);
+ const aliases=useMemo(()=>Array.from(mentionNames(names)),[names]);
+ const plugins=useMemo(()=>[remarkGfm,[mentions,{aliases}]] as NonNullable<React.ComponentProps<typeof Markdown>['remarkPlugins']>,[aliases]);
+ return <MemberContext.Provider value={{currentName,onMention}}><div className="message-body markdown"><Markdown skipHtml remarkPlugins={plugins} rehypePlugins={[[rehypeHighlight,highlightOptions]]}
   urlTransform={url=>{if(/^grpvn-file:[0-9A-HJKMNP-TV-Z]{26}$/.test(url))return fileURL(url.slice(11),target);if(url.startsWith('grpvn-mention:')){try{const name=decodeURIComponent(url.slice(14));return names.includes(name)?'grpvn-mention:'+encodeURIComponent(name):'';}catch{return '';}}return defaultUrlTransform(url);}}
   components={markdownComponents}>{body}</Markdown></div></MemberContext.Provider>;
-}
+},(before,after)=>before.body===after.body&&before.target===after.target&&before.currentName===after.currentName&&before.onMention===after.onMention&&(before.people||[]).map(p=>p.name).join('\0')===(after.people||[]).map(p=>p.name).join('\0'));

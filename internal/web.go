@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -242,7 +243,7 @@ func mountWeb(mux *http.ServeMux, db *sql.DB, access *channelAccess, base string
 			}
 		}
 		s.handle(w, r, p)
-		if r.Method != "GET" && r.URL.Path != "/v1/chat/read-markers" {
+		if r.Method != "GET" && r.URL.Path != "/v1/chat/read-markers" && r.URL.Path != "/v1/chat/messages" && r.URL.Path != "/v1/chat/activity" && r.URL.Path != "/v1/chat/threads" && r.URL.Path != "/v1/chat/notification-settings" {
 			_ = TouchChatMetadata(db)
 		}
 	})
@@ -491,6 +492,15 @@ func (s *webServer) handle(w http.ResponseWriter, r *http.Request, p *Principal)
 			s.events(w, r, p)
 			return
 		}
+	case "/v1/chat/activity":
+		s.activity(w, r, p)
+		return
+	case "/v1/chat/threads":
+		s.threads(w, r, p)
+		return
+	case "/v1/chat/notification-settings":
+		s.notificationPreferences(w, r, p)
+		return
 	case "/v1/chat/preferences":
 		s.preferences(w, r, p)
 		return
@@ -721,6 +731,15 @@ func (s *webServer) messages(w http.ResponseWriter, r *http.Request, p *Principa
 			return
 		}
 	}
+	after := int64(0)
+	if raw := r.URL.Query().Get("after"); raw != "" {
+		var err error
+		after, err = strconv.ParseInt(raw, 10, 64)
+		if err != nil || after < 0 || before > 0 {
+			apiError(w, 400, "Invalid position")
+			return
+		}
+	}
 	// Both sides of the human's DM conversation are visible, including aliases.
 	peer := strings.TrimPrefix(target, "@")
 	dm := strings.HasPrefix(target, "@")
@@ -739,49 +758,111 @@ func (s *webServer) messages(w http.ResponseWriter, r *http.Request, p *Principa
 		predicate = `((m.sender=? AND m.target=?) OR (m.sender=? AND m.target=?))`
 		args = []any{principalAddress(p), target, peer, "@" + principalAddress(p)}
 	}
+	rootPredicate := predicate
+	rootArgs := append([]any(nil), args...)
 	if before > 0 {
 		predicate += " AND m.seq<?"
 		args = append(args, before)
 	}
-	rows, err := s.db.Query(`SELECT m.seq,m.id,m.sender,m.target,m.body,m.chain_root,m.chain_depth,m.parent_id,m.correlation,m.created_at FROM messages m WHERE `+predicate+" ORDER BY m.seq DESC LIMIT 100", args...)
+	if r.URL.Query().Has("after") {
+		predicate += " AND m.seq>?"
+		args = append(args, after)
+	}
+	order := "DESC"
+	if r.URL.Query().Has("after") {
+		order = "ASC"
+	}
+	threadRoot := r.URL.Query().Get("thread")
+	if threadRoot != "" {
+		if !validMessageID(threadRoot) {
+			apiError(w, 400, "Invalid thread")
+			return
+		}
+		predicate += " AND m.chain_root=?"
+		args = append(args, threadRoot)
+	}
+	list, err := s.messagePage(r.Context(), p, predicate, args, order, 101)
 	if err != nil {
 		apiError(w, 500, "Could not read messages")
 		return
 	}
-	var list []*Message
-	for rows.Next() {
-		m, err := scanMessage(rows, true)
-		if err != nil {
-			rows.Close()
-			apiError(w, 500, "Could not read messages")
-			return
-		}
-		list = append(list, m)
+	more := len(list) > 100
+	if more {
+		list = list[:100]
 	}
-	rows.Close()
-	out := []map[string]any{}
-	for i := len(list) - 1; i >= 0; i-- {
-		m := list[i]
-		kind := "agent"
-		mine := m.Sender == principalAddress(p)
-		displaySender := m.Sender
-		var remoteSelf string
-		if s.db.QueryRow("SELECT h.name FROM remote_human_sessions h JOIN remotes r ON r.server_id=h.server_id JOIN remote_channels c ON c.remote_name=r.name WHERE c.target=? AND h.local_principal_id=?", m.Target, p.ID).Scan(&remoteSelf) == nil && m.Sender == remoteSelf {
-			kind = "human"
-			mine = true
+	out := make([]map[string]any, 0, len(list))
+	if r.URL.Query().Has("after") {
+		out = append(out, list...)
+	} else {
+		for i := len(list) - 1; i >= 0; i-- {
+			out = append(out, list[i])
 		}
-		_ = s.db.QueryRow("SELECT p.kind FROM principals p JOIN message_principals mp ON mp.principal_id=p.id WHERE mp.message_id=?", m.ID).Scan(&kind)
-		var remoteAccount string
-		if s.db.QueryRow(`SELECT h.name FROM remote_attributions a JOIN remote_messages m ON m.local_id=a.local_id JOIN remotes r ON r.name=m.remote_name JOIN remote_human_sessions h ON h.server_id=r.server_id AND h.principal_id=a.principal_id WHERE a.local_id=? AND h.local_principal_id=?`, m.ID, p.ID).Scan(&remoteAccount) == nil {
-			mine = true
-			kind = "human"
-			displaySender = remoteAccount
-		}
-		out = append(out, map[string]any{"seq": m.Seq, "id": m.ID, "sender": displaySender, "target": m.Target, "body": string(m.Body), "chain_root": m.ChainRoot, "parent_id": m.ParentID, "created_at": m.CreatedAt, "kind": kind, "mine": mine, "pending": m.Pending})
 	}
+
 	position, held := conversationReadPosition(s.db, p.ID, target)
-	writeJSON(w, 200, map[string]any{"messages": out, "more": len(list) == 100, "read_position": position, "read_held": held})
+	response := map[string]any{"messages": out, "more": more, "read_position": position, "read_held": held}
+	if threadRoot != "" {
+		roots, err := s.messagePage(r.Context(), p, rootPredicate+" AND m.id=?", append(rootArgs, threadRoot), "ASC", 1)
+		if err == nil && len(roots) > 0 {
+			response["root"] = roots[0]
+		}
+		var following bool
+		var threadPosition int64
+		_ = s.db.QueryRow("SELECT following,position FROM human_threads WHERE principal_id=? AND root_id=?", p.ID, threadRoot).Scan(&following, &threadPosition)
+		response["following"] = following
+		response["thread_position"] = threadPosition
+	}
+
+	if threadRoot == "" {
+		s.addThreadSummaries(p, target, out)
+	}
+	writeJSON(w, 200, response)
 }
+func (s *webServer) messagePage(ctx context.Context, p *Principal, predicate string, args []any, order string, limit int) ([]map[string]any, error) {
+	query := `SELECT m.seq,m.id,m.sender,m.target,m.body,m.chain_root,m.chain_depth,m.parent_id,m.correlation,m.created_at,
+ COALESCE((SELECT p.kind FROM principals p JOIN message_principals mp ON mp.principal_id=p.id WHERE mp.message_id=m.id),'agent'),
+ COALESCE((SELECT h.name FROM remote_human_sessions h JOIN remotes r ON r.server_id=h.server_id JOIN remote_channels c ON c.remote_name=r.name WHERE c.target=m.target AND h.local_principal_id=?),''),
+ COALESCE((SELECT h.name FROM remote_attributions a JOIN remote_messages rm ON rm.local_id=a.local_id JOIN remotes r ON r.name=rm.remote_name JOIN remote_human_sessions h ON h.server_id=r.server_id AND h.principal_id=a.principal_id WHERE a.local_id=m.id AND h.local_principal_id=?),''),
+ EXISTS(SELECT 1 FROM remote_messages rm WHERE rm.local_id=m.id AND rm.remote_seq IS NULL)
+ FROM messages m WHERE ` + predicate + " ORDER BY m.seq " + order + " LIMIT " + strconv.Itoa(limit)
+	args = append([]any{p.ID, p.ID}, args...)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	var list []map[string]any
+	for rows.Next() {
+		var m Message
+		var parent, corr sql.NullString
+		var kind, remoteSelf, remoteAccount string
+		if err = rows.Scan(&m.Seq, &m.ID, &m.Sender, &m.Target, &m.Body, &m.ChainRoot, &m.ChainDepth, &parent, &corr, &m.CreatedAt, &kind, &remoteSelf, &remoteAccount, &m.Pending); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if parent.Valid {
+			m.ParentID = &parent.String
+		}
+		mine := m.Sender == principalAddress(p)
+		sender := m.Sender
+		if remoteSelf != "" && m.Sender == remoteSelf {
+			kind = "human"
+			mine = true
+		}
+		if remoteAccount != "" {
+			kind = "human"
+			mine = true
+			sender = remoteAccount
+		}
+		list = append(list, map[string]any{"seq": m.Seq, "id": m.ID, "sender": sender, "target": m.Target, "body": string(m.Body), "chain_root": m.ChainRoot, "parent_id": m.ParentID, "created_at": m.CreatedAt, "kind": kind, "mine": mine, "pending": m.Pending})
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
 func (s *webServer) send(w http.ResponseWriter, r *http.Request, p *Principal) {
 	if !isChatParticipant(p) {
 		apiError(w, 401, "An agent or human profile is required to post")
@@ -826,6 +907,9 @@ func (s *webServer) send(w http.ResponseWriter, r *http.Request, p *Principal) {
 				}
 			}
 			m, replay, err = SendSynced(r.Context(), s.db, sender, a.Target, a.Body, "", false, a.IdempotencyKey)
+			if err == nil && p.Kind == "human" {
+				err = followHumanMessage(s.db, p, m)
+			}
 		} else {
 			m, replay, err = sendRegistered(s.db, p, a.Target, a.Body, a.IdempotencyKey)
 		}
@@ -983,71 +1067,91 @@ func (s *webServer) approvals(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"requests": out})
 }
 
-// One inexpensive shared database check per second wakes every connected UI.
-// Events carry no chat content; clients fetch only their authorized view.
-type webFeed struct {
-	mu        sync.Mutex
-	listeners map[chan struct{}]bool
-	cancel    context.CancelFunc
-}
-
-var webFeeds sync.Map
-
-func subscribeWeb(db *sql.DB) (chan struct{}, func()) {
-	v, _ := webFeeds.LoadOrStore(db, &webFeed{listeners: map[chan struct{}]bool{}})
-	f := v.(*webFeed)
-	ch := make(chan struct{}, 1)
-	f.mu.Lock()
-	f.listeners[ch] = true
-	if f.cancel == nil {
-		ctx, cancel := context.WithCancel(context.Background())
-		f.cancel = cancel
-		go func() {
-			tick := time.NewTicker(time.Second)
-			defer tick.Stop()
-			var last int64 = -1
-			var lastMetadata int64 = -1
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-tick.C:
-					var seq int64
-					var metadata int64
-					if db.QueryRowContext(ctx, "SELECT COALESCE(MAX(seq),0),COALESCE((SELECT value FROM chat_metadata WHERE key='revision'),0) FROM messages").Scan(&seq, &metadata) != nil {
-						continue
-					}
-					if seq != last || metadata != lastMetadata {
-						last = seq
-						lastMetadata = metadata
-						f.mu.Lock()
-						for c := range f.listeners {
-							select {
-							case c <- struct{}{}:
-							default:
-							}
-						}
-						f.mu.Unlock()
-					}
+// changedTargets contains only conversations this authenticated viewer may
+// read. DM notifications are translated to the viewer's peer address; another
+// participant's private conversation never appears in an event.
+func (s *webServer) changedTargets(r *http.Request, p *Principal, after, through int64) ([]string, error) {
+	if r.URL.Path == "/v1/events" && r.URL.Query().Get("metadata_only") == "1" {
+		return []string{}, nil
+	}
+	rows, err := s.db.QueryContext(r.Context(), "SELECT DISTINCT target,sender FROM messages WHERE seq>? AND seq<=?", after, through)
+	if err != nil {
+		return nil, err
+	}
+	type change struct{ target, sender string }
+	var changes []change
+	for rows.Next() {
+		var c change
+		if err = rows.Scan(&c.target, &c.sender); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		changes = append(changes, c)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	visible := map[string]bool{}
+	allowed := map[string]bool{}
+	requested := r.URL.Query()["channel"]
+	selected := map[string]bool{}
+	for _, target := range requested {
+		selected[target] = true
+	}
+	for _, c := range changes {
+		target := c.target
+		if r.URL.Path == "/v1/events" {
+			if !strings.HasPrefix(target, "#") || strings.Contains(target, "/") {
+				continue
+			}
+			if len(selected) > 0 && !selected[target] {
+				continue
+			}
+			if _, ok := allowed[target]; !ok {
+				allowed[target] = s.access.canAccess(r, target)
+			}
+		} else {
+			if strings.HasPrefix(target, "@") {
+				if principalOwnsAddress(p, strings.TrimPrefix(target, "@")) {
+					target = "@" + c.sender
+				} else if !principalOwnsAddress(p, c.sender) {
+					continue
 				}
 			}
-		}()
-	}
-	f.mu.Unlock()
-	return ch, func() {
-		f.mu.Lock()
-		delete(f.listeners, ch)
-		if len(f.listeners) == 0 && f.cancel != nil {
-			f.cancel()
-			f.cancel = nil
+			if _, ok := allowed[target]; !ok {
+				allowed[target] = s.can(p, target, false)
+			}
 		}
-		f.mu.Unlock()
+		if allowed[target] {
+			visible[target] = true
+		}
 	}
+	targets := make([]string, 0, len(visible))
+	for target := range visible {
+		targets = append(targets, target)
+	}
+	sort.Strings(targets)
+	return targets, nil
 }
 func (s *webServer) events(w http.ResponseWriter, r *http.Request, p *Principal) {
+	if p == nil {
+		apiError(w, 401, "Sign in to continue")
+		return
+	}
 	flush, ok := w.(http.Flusher)
 	if !ok {
 		apiError(w, 500, "Streaming unavailable")
+		return
+	}
+	ch, done := subscribeWeb(s.db)
+	defer done()
+	var personal int64
+	_ = s.db.QueryRow("SELECT value FROM chat_metadata WHERE key=?", "personal:"+p.ID).Scan(&personal)
+	last, err := readChatRevision(r.Context(), s.db)
+	if err != nil {
+		apiError(w, 500, "Could not open live updates")
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -1066,8 +1170,6 @@ func (s *webServer) events(w http.ResponseWriter, r *http.Request, p *Principal)
 	if !push("retry: 3000\nevent: connected\ndata: {}\n\n") {
 		return
 	}
-	ch, done := subscribeWeb(s.db)
-	defer done()
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
 	for {
@@ -1075,16 +1177,36 @@ func (s *webServer) events(w http.ResponseWriter, r *http.Request, p *Principal)
 		case <-r.Context().Done():
 			return
 		case <-ch:
-			if s.actor(r) == nil {
-				fmt.Fprint(w, "event: signed-out\ndata: {}\n\n")
-				flush.Flush()
+			p = s.actor(r)
+			if p == nil {
+				push("event: signed-out\ndata: {}\n\n")
 				return
 			}
-			if !push("event: changed\ndata: {}\n\n") {
+			revision, err := readChatRevision(r.Context(), s.db)
+			if err != nil {
+				return
+			}
+			r = r.WithContext(context.WithValue(r.Context(), principalContextKey{}, p))
+			targets, err := s.changedTargets(r, p, last.Sequence, revision.Sequence)
+			if err != nil {
+				return
+			}
+			metadata := revision.Metadata != last.Metadata
+			var nextPersonal int64
+			_ = s.db.QueryRow("SELECT value FROM chat_metadata WHERE key=?", "personal:"+p.ID).Scan(&nextPersonal)
+			personalChanged := nextPersonal != personal
+			personal = nextPersonal
+			last = revision
+			if len(targets) == 0 && !metadata && !personalChanged {
+				continue
+			}
+			data, _ := json.Marshal(map[string]any{"targets": targets, "metadata": metadata, "personal": personalChanged})
+			if !push("event: changed\ndata: " + string(data) + "\n\n") {
 				return
 			}
 		case <-heartbeat.C:
 			if s.actor(r) == nil {
+				push("event: signed-out\ndata: {}\n\n")
 				return
 			}
 			if !push(": keep-alive\n\n") {

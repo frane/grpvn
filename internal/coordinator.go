@@ -130,6 +130,14 @@ func CoordinatorHandler(db *sql.DB, options CoordinatorOptions) (http.Handler, e
 	mux.HandleFunc("POST /v1/register", enrollmentHandler(db, access, false))
 	mux.HandleFunc("POST /v1/agents", enrollmentHandler(db, access, true))
 	mux.HandleFunc("POST /v1/sync", batchHandler(db, access, id))
+	mux.HandleFunc("GET /v1/events", func(w http.ResponseWriter, r *http.Request) {
+		p := requestPrincipal(r)
+		if p == nil || p.Status != "active" || (p.scopes != nil && !p.scopes["grpvn.read"]) {
+			apiError(w, 403, "An active read credential is required")
+			return
+		}
+		(&webServer{db: db, access: access}).events(w, r, p)
+	})
 	serverMetadata := func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, serverInfo{Protocol: syncProtocol, ServerID: id, Web: options.Web})
 	}

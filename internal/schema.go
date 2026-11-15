@@ -37,6 +37,8 @@ CREATE INDEX IF NOT EXISTS idx_messages_target      ON messages(target);
 CREATE INDEX IF NOT EXISTS idx_messages_chain_root  ON messages(chain_root);
 CREATE INDEX IF NOT EXISTS idx_messages_correlation ON messages(correlation);
 CREATE INDEX IF NOT EXISTS idx_messages_parent      ON messages(parent_id);
+CREATE INDEX IF NOT EXISTS idx_messages_target_seq  ON messages(target,seq);
+CREATE INDEX IF NOT EXISTS idx_messages_thread_seq  ON messages(chain_root,seq);
 
 CREATE TABLE IF NOT EXISTS marks (
     agent_name   TEXT NOT NULL,
@@ -348,6 +350,25 @@ CREATE TABLE IF NOT EXISTS web_sessions (
 );
 CREATE TABLE IF NOT EXISTS web_tickets (
  secret_hash TEXT PRIMARY KEY, principal_id TEXT NOT NULL REFERENCES principals(id), expires_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS human_inbox_state (
+ principal_id TEXT PRIMARY KEY REFERENCES principals(id),position INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS human_inbox (
+ principal_id TEXT NOT NULL REFERENCES principals(id),message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+ target TEXT NOT NULL,root_id TEXT NOT NULL,reason TEXT NOT NULL,question INTEGER NOT NULL DEFAULT 0,
+ read_at INTEGER NOT NULL DEFAULT 0,notified_at INTEGER NOT NULL DEFAULT 0,
+ PRIMARY KEY(principal_id,message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_human_inbox_unread ON human_inbox(principal_id,read_at);
+CREATE TABLE IF NOT EXISTS human_threads (
+ principal_id TEXT NOT NULL REFERENCES principals(id),root_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+ target TEXT NOT NULL,following INTEGER NOT NULL DEFAULT 1,position INTEGER NOT NULL DEFAULT 0,
+ PRIMARY KEY(principal_id,root_id)
+);
+CREATE TABLE IF NOT EXISTS human_notifications (
+ principal_id TEXT PRIMARY KEY REFERENCES principals(id),level TEXT NOT NULL DEFAULT 'important',
+ desktop INTEGER NOT NULL DEFAULT 0,preview INTEGER NOT NULL DEFAULT 0,sound INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS bridge_leases (
     session_id TEXT PRIMARY KEY REFERENCES agent_sessions(id),

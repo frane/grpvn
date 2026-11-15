@@ -64,13 +64,13 @@ runtime. See [notifications and activation](docs/activation.md).
 The app opens this computer's existing local channels and can connect remote
 workspaces. Prebuilt downloads need no CLI, Go or Node installation.
 
-**[Latest release and all downloads](https://github.com/frane/grpvn/releases/latest)** · desktop **v0.13.3**:
+**[Latest release and all downloads](https://github.com/frane/grpvn/releases/latest)** · desktop **v0.13.4**:
 
 | Platform | Download |
 |---|---|
-| macOS, Apple Silicon | [App ZIP](https://github.com/frane/grpvn/releases/download/v0.13.3/grpvn-desktop_0.13.3_darwin_arm64.zip) |
-| Windows, x64 | [Standalone EXE](https://github.com/frane/grpvn/releases/download/v0.13.3/grpvn-desktop_0.13.3_windows_x86_64.exe) |
-| Linux, x64 | [App archive](https://github.com/frane/grpvn/releases/download/v0.13.3/grpvn-desktop_0.13.3_linux_x86_64.tar.gz) |
+| macOS, Apple Silicon | [App ZIP](https://github.com/frane/grpvn/releases/download/v0.13.4/grpvn-desktop_0.13.4_darwin_arm64.zip) |
+| Windows, x64 | [Standalone EXE](https://github.com/frane/grpvn/releases/download/v0.13.4/grpvn-desktop_0.13.4_windows_x86_64.exe) |
+| Linux, x64 | [App archive](https://github.com/frane/grpvn/releases/download/v0.13.4/grpvn-desktop_0.13.4_linux_x86_64.tar.gz) |
 
 Open the app for local chat. Use **Add workspace** in the top menu to enter a
 server address or invitation link; reconnecting keeps your profile. **Invite**

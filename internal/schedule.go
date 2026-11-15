@@ -104,7 +104,8 @@ func finishSync(db *sql.DB, r Remote, owner string, base time.Duration, stats Sy
 		return fmt.Errorf("sync lease lost")
 	}
 	var idle, failures int
-	if err := tx.QueryRow("SELECT idle_rounds, failures FROM sync_schedule WHERE remote_name = ?", r.Name).Scan(&idle, &failures); err != nil {
+	var concurrentRetry int64
+	if err := tx.QueryRow("SELECT idle_rounds, failures, retry_at FROM sync_schedule WHERE remote_name = ?", r.Name).Scan(&idle, &failures, &concurrentRetry); err != nil {
 		return err
 	}
 	now := time.Now()
@@ -142,6 +143,11 @@ func finishSync(db *sql.DB, r Remote, owner string, base time.Duration, stats Sy
 		delay = minRemoteInterval
 	}
 	next := now.Add(delay).UnixMilli()
+	// A concurrent push reconnect may receive Retry-After while this sync is
+	// in flight. A successful pull must not erase that coordinator cooldown.
+	if concurrentRetry > now.UnixMilli() && concurrentRetry > retry {
+		retry = concurrentRetry
+	}
 	if retry > next {
 		next = retry
 	}
@@ -187,6 +193,10 @@ func remoteRequestSlot(ctx context.Context, r Remote) error {
 			return err
 		}
 		now := time.Now()
+		if next > now.Add(time.Second).UnixMilli() {
+			tx.Rollback()
+			return &remoteHTTPError{Status: 429, Message: "coordinator cooldown is active", RetryAt: time.UnixMilli(next)}
+		}
 		if next <= now.UnixMilli() {
 			_, err = tx.Exec("UPDATE sync_peers SET next_request_at = ? WHERE server_id = ?", now.Add(minRemoteInterval).UnixMilli(), r.ServerID)
 			if err != nil {

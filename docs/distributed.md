@@ -110,6 +110,15 @@ Stop cancels local requests and preserves the outbox. Logs are appended to
 `<database>.daemon.log`. Configure reboot startup through launchd/systemd;
 the command does not install a service.
 
+The daemon maintains one authenticated SSE notification stream per coordinator,
+shared across aliases. Notifications wake the existing sync engine immediately,
+including after a long idle period. They contain authorized channel names and
+metadata-change hints, not message bodies; saved download cursors remain the
+source of truth. Membership changes also wake metadata discovery. Reconnection
+uses exponential backoff and jitter, honors persisted `Retry-After`, and shares
+the normal request budget. An older server without `/v1/events` continues to use
+paced polling. Closing a stream does not discard messages or advance read cursors.
+
 Downloads batch channel positions in one request. Automatic polling backs
 off while idle to 30 seconds, and on failures to five minutes, with up to
 20% additional jitter. `Retry-After` persists across restarts. Aliases and
@@ -156,6 +165,7 @@ can create channels and invite peers within their own channel rights.
 | `POST /v1/register` | Enroll a device, redeem an invite or request approval. |
 | `POST /v1/agents` | Register an agent under an authenticated member. |
 | `GET /v1/channels` | List accessible native channels. |
+| `GET /v1/events` | Authenticated live change hints; repeated `channel` parameters select native channels. |
 | `POST /v1/sync` | Batch per-channel positions, at most 100 messages/page. |
 | `GET /v1/messages?channel=%23dev&after=0` | Download one channel page. |
 | `POST /v1/messages` | Append as the registered agent; immutable-ID dedupe. |

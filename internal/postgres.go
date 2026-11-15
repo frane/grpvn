@@ -18,7 +18,10 @@ import (
 )
 
 type postgresDriver struct{}
-type postgresConn struct{ driver.Conn }
+type postgresConn struct {
+	driver.Conn
+	dsn string
+}
 type postgresStmt struct{ driver.Stmt }
 
 func init() { sql.Register("grpvn-postgres", postgresDriver{}) }
@@ -27,7 +30,7 @@ func (postgresDriver) Open(dsn string) (driver.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &postgresConn{c}, nil
+	return &postgresConn{Conn: c, dsn: dsn}, nil
 }
 func (c *postgresConn) Prepare(q string) (driver.Stmt, error) {
 	s, err := c.Conn.Prepare(postgresSQL(q))
@@ -199,10 +202,22 @@ CREATE TRIGGER grpvn_message_sequence BEFORE INSERT ON messages FOR EACH ROW EXE
 	if err != nil {
 		return err
 	}
+	if _, err = tx.Exec(`CREATE OR REPLACE FUNCTION grpvn_metadata_notify() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF NEW.key='revision' OR NEW.key LIKE 'personal:%' THEN PERFORM pg_notify('grpvn_messages','changed'); END IF;
+ RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS grpvn_metadata_notify ON chat_metadata;
+CREATE TRIGGER grpvn_metadata_notify AFTER INSERT OR UPDATE ON chat_metadata FOR EACH ROW EXECUTE FUNCTION grpvn_metadata_notify();`); err != nil {
+		return err
+	}
 	if _, err = tx.Exec("INSERT INTO schema_version(version,applied_at) VALUES(?,?) ON CONFLICT DO NOTHING", CurrentSchemaVersion, time.Now().UnixMilli()); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(postgresChatGuard); err != nil {
+		return err
+	}
+	if err = installChatChangeTriggers(tx, true); err != nil {
 		return err
 	}
 	return tx.Commit()

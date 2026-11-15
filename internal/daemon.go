@@ -108,9 +108,12 @@ func RunDaemon(ctx context.Context, db *sql.DB, interval time.Duration, output i
 	}
 	fmt.Fprintf(output, "daemon running pid=%d interval=%s\n", state.PID, interval)
 	workerDone := make(chan struct{})
+	syncWake := make(chan struct{}, 1)
+	pushDone := make(chan struct{})
+	go func() { defer close(pushDone); runRemoteEvents(ctx, db, syncWake) }()
 	go func() {
 		defer close(workerDone)
-		runDaemonSync(ctx, db, interval, output)
+		runDaemonSync(ctx, db, interval, output, syncWake)
 	}()
 	activationDone := make(chan struct{})
 	go func() {
@@ -119,7 +122,7 @@ func RunDaemon(ctx context.Context, db *sql.DB, interval time.Duration, output i
 	}()
 	// Always cancel and join before releasing the lease. A successor must
 	// not overlap network work still belonging to a stopped worker.
-	defer func() { cancel(); <-workerDone; <-activationDone }()
+	defer func() { cancel(); <-workerDone; <-activationDone; <-pushDone }()
 	ticker := time.NewTicker(daemonHeartbeat)
 	defer ticker.Stop()
 	for {
@@ -153,7 +156,7 @@ func RunDaemon(ctx context.Context, db *sql.DB, interval time.Duration, output i
 	}
 }
 
-func runDaemonSync(ctx context.Context, db *sql.DB, interval time.Duration, output io.Writer) {
+func runDaemonSync(ctx context.Context, db *sql.DB, interval time.Duration, output io.Writer, wake <-chan struct{}) {
 	previousError := ""
 	for ctx.Err() == nil {
 		stats, err := SyncDue(ctx, db, "", interval)
@@ -181,6 +184,8 @@ func runDaemonSync(ctx context.Context, db *sql.DB, interval time.Duration, outp
 			timer.Stop()
 			return
 		case <-timer.C:
+		case <-wake:
+			timer.Stop()
 		}
 	}
 }

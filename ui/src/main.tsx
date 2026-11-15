@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Archive,BellOff,Mail,MailOpen,ArrowDown, ArrowLeft, ArrowUp, Bell, Bot, Check, CheckCheck, ChevronDown, ChevronRight, Copy, Globe, Hash, Link, LockKeyhole, LogOut, Menu, MessageCircle, MessageSquare, MoreHorizontal, PanelRightClose, Plus, Search, Settings2, ShieldCheck, Sparkles, Users, WifiOff, X } from 'lucide-react';
-import { api, ApiError, Approval, Channel, color, initials, Message, Person, Session, shortName } from './api';
+import { Archive,Inbox as InboxIcon,BellOff,Mail,MailOpen,ArrowDown, ArrowLeft, ArrowUp, Bell, Bot, Check, CheckCheck, ChevronDown, ChevronRight, Copy, Globe, Hash, Link, LockKeyhole, LogOut, Menu, MessageCircle, MessageSquare, MoreHorizontal, PanelRightClose, Plus, Search, Settings2, ShieldCheck, Sparkles, Users, WifiOff, X } from 'lucide-react';
+import { api, ApiError, Approval, Channel, color,mergeMessagePage, initials, Message, Person, Session, shortName } from './api';
 import './style.css';
 import {openExternal} from './platform';
 import {Composer} from './Composer';
@@ -12,6 +12,7 @@ import {WorkspaceMenu,WorkspaceSource} from './WorkspaceMenu';
 import {ConnectAgent} from './ConnectAgent';
 import {ProfileCard} from './ProfileCard';
 import {ContextAction,ContextMenu} from './ContextMenu';
+import {AttentionInbox,AttentionToast,NotificationPreferences,OpenAttention,useNeedsYou} from './Inbox';
 const Presentation=React.createContext<{people:Person[];name:string;onMention:(name:string)=>void;onContext:(e:React.MouseEvent,m:Message)=>void}>({people:[],name:'',onMention:()=>{},onContext:()=>{}});
 
 function Avatar({ name, human = false, small = false }: { name: string; human?: boolean; small?: boolean }) {
@@ -36,11 +37,19 @@ function App() {
   const [detailsChannel,setDetailsChannel]=useState<Channel|undefined>();
   const [management,setManagement]=useState<'members'|'channel'|'channels'|'invite'|null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const messageCursor=useRef({target:'',seq:0});const messageSnapshot=useRef(messages);messageSnapshot.current=messages;
   const [historyChannel,setHistoryChannel]=useState<Channel|null>(null);
   const historySelection=useRef<Channel|null>(null);
   const [target, setTarget] = useState(new URLSearchParams(location.search).get('target')||localStorage.getItem('grpvn.target')||'#general');
   const [thread, setThread] = useState<Message | null>(null);
-  const [tab, setTab] = useState<'chats' | 'people'>('chats');
+  const threadRef=useRef<Message|null>(null);threadRef.current=thread;
+  const threadTarget=useRef('');const threadRead=useRef({root:'',seq:0});
+  const [threadMessages,setThreadMessages]=useState<Message[]>([]);const threadContent=useRef<Message[]>([]);
+  const [threadMore,setThreadMore]=useState(false);const [threadLoading,setThreadLoading]=useState(false);const [threadFollowing,setThreadFollowing]=useState(false);
+  const pendingThread=useRef<OpenAttention|null>(null);
+  const [notificationSettings,setNotificationSettings]=useState(false);
+  const [tab, setTab] = useState<'chats' | 'people' | 'attention'>('chats');
+  const activeTab=useRef(tab);activeTab.current=tab;
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
   const [connected, setConnected] = useState(false);
@@ -64,50 +73,102 @@ function App() {
   const sourceLabel=session?.local&&!activeWorkspace?'On this computer':new URL(sourceURL).host;
   const profile = session?.profile;
   const scopeAdmin=activeWorkspace?!!workspaceSession?.profile?.admin:!!profile?.admin;
-  const activeName=selected?.account_name || profile?.name || "";
+  const activeName=selected?.account_name || workspaceSession?.profile?.name || profile?.name || "";
   const dm = target.startsWith('@');
   const label = dm ? target.slice(1) : (selected?.label || target).replace(/^#/, '');
   const [toast, setToast] = useState('');
   useEffect(() => { if (toast) { const t = setTimeout(() => setToast(''), 3500); return () => clearTimeout(t); } }, [toast]);
   const fail = useCallback((e: unknown) => { if (e instanceof ApiError && e.status === 401) setSession({ authenticated: false, local: false }); setError(e instanceof Error ? e.message : 'Could not connect'); }, []);
+  const needs=useNeedsYou(session?.authenticated?session.profile?.id:undefined,fail);
   const refreshSession = useCallback(async () => { try { const state=await api<Session>('session');setSession(state);const next=new URLSearchParams(location.search).get('next');if(state.authenticated&&next){const where=new URL(next,location.origin);if(where.origin===location.origin&&where.pathname==='/oauth/authorize'&&where.searchParams.get('actor')==='human'){location.replace(where.pathname+where.search);}} } catch (e) { fail(e); } }, [fail]);
   useEffect(() => {
     const ticket = new URLSearchParams(location.hash.slice(1)).get('ticket');
     if (ticket) { history.replaceState(null, '', '/'); api('bootstrap', { Ticket: ticket }).then(refreshSession).catch(e => { fail(e); refreshSession(); }); }
     else refreshSession();
   }, [refreshSession, fail]);
-  const refreshLists = useCallback(async () => {
-    const [c, p] = await Promise.all([api<{ channels: Channel[] }>('channels'), api<{ people: Person[] }>('people')]);
-    setChannels(c.channels); setPeople(p.people);if(c.channels.length)setLocalChat(true);
+  const refreshLists = useCallback(async (includePeople=true) => {
+    const [c, p] = await Promise.all([api<{ channels: Channel[] }>('channels'), includePeople?api<{ people: Person[] }>('people'):Promise.resolve(null)]);
+    setChannels(c.channels);if(p)setPeople(p.people);if(c.channels.length)setLocalChat(true);
     const source=workspaceSelection.current??c.channels.find(x=>x.name===currentTarget.current)?.source_id;
-    if(source){try{const remote=await api<{people:Person[]}>('people?workspace='+encodeURIComponent(source));setParticipants(remote.people);}catch{setParticipants(p.people);}}else setParticipants(p.people);
+    if(p){if(source){try{const remote=await api<{people:Person[]}>('people?workspace='+encodeURIComponent(source));if(workspaceSelection.current===source)setParticipants(remote.people);}catch{if(workspaceSelection.current===source)setParticipants(p.people);}}else setParticipants(p.people);}
     if(historySelection.current&&c.channels.some(c=>c.name===historySelection.current?.name)){historySelection.current=null;setHistoryChannel(null);}
     if (!currentTarget.current.startsWith('@') && !historySelection.current && !c.channels.some(x => x.name === currentTarget.current)) { const matching=c.channels.filter(c=>(c.source_id||'')===(source||''));setTarget(matching[0]?.name||''); }
   }, []);
-  const refreshMessages = useCallback(async (where: string, fresh=false) => {
-    if(!where){setMessages([]);setMore(false);return;}
-    const page = await api<{ messages: Message[]; more: boolean;read_position:number;read_held:boolean }>('messages?target=' + encodeURIComponent(where)+(fresh?'&refresh=1':''));
-    if (currentTarget.current !== where) return;
-    setMessages(page.messages); setMore(page.more);setReadState({position:page.read_position||0,held:!!page.read_held});
-    if (!page.read_held&&readPaused.current!==where&&page.messages.length && document.visibilityState === 'visible' && document.hasFocus()) api<{held:boolean}>('read', { Target: where, Position: Math.max(...page.messages.map(m => m.seq)) }).then(result=>{if(!result.held&&readPaused.current!==where){setChannels(prev=>prev.map(c=>c.name===where?{...c,unread:0}:c));setPeople(prev=>prev.map(p=>'@'+p.name===where?{...p,unread:0}:p));}}).catch(() => {});
-  }, []);
-  useEffect(() => {
-    if (!session?.authenticated) return;
-    refreshLists().catch(fail);
-    const events = new EventSource('/v1/chat/events');
-    events.addEventListener('connected', () => { setConnected(true); refreshLists().catch(fail); refreshMessages(currentTarget.current).catch(fail); });
-    events.addEventListener('changed', () => { refreshLists().catch(fail); refreshMessages(currentTarget.current).catch(fail); });
-    events.addEventListener('signed-out', () => { events.close(); refreshSession(); });
-    events.onerror = () => setConnected(false);
-    return () => events.close();
-  }, [session?.authenticated, refreshLists, refreshMessages, refreshSession, fail]);
+  const refreshThread=useCallback(async(root:string,where:string,incremental=false,before?:number):Promise<void>=>{
+    let after=Math.max(threadRef.current?.seq||0,...threadContent.current.map(message=>message.seq),0);
+    for(;;){
+      const page=await api<{messages:Message[];root?:Message;more:boolean;following:boolean;thread_position:number}>('messages?target='+encodeURIComponent(where)+'&thread='+encodeURIComponent(root)+(before?'&before='+before:incremental?'&after='+after:''));
+      if(threadRef.current?.chain_root!==root||threadTarget.current!==where||currentTarget.current!==where)return;
+      if(page.root){threadRef.current=page.root;setThread(page.root);}
+      const replies=page.messages.filter(message=>message.id!==root);const merged=mergeMessagePage(threadContent.current,replies,false);
+      threadContent.current=merged;setThreadMessages(merged);setThreadFollowing(page.following);if(!incremental)setThreadMore(page.more);
+      const latest=Math.max(page.root?.seq||0,...merged.map(message=>message.seq),0);
+      if(document.visibilityState==='visible'&&document.hasFocus()&&activeTab.current==='chats'&&latest>page.thread_position&&(threadRead.current.root!==root||threadRead.current.seq<latest)){
+        threadRead.current={root,seq:latest};
+        await api('threads',{RootID:root,Position:latest},'PATCH');
+        setMessages(previous=>previous.map(message=>message.id===root?{...message,reply_unread:0}:message));await needs.refresh(true);
+      }
+      if(!incremental||!page.more||latest<=after)return;after=latest;
+    }
+  },[needs.refresh]);
+  const openThreadID=useCallback(async(where:string,root:string)=>{
+    const known=messageSnapshot.current.find(message=>message.id===root);const placeholder=known||{seq:0,id:root,chain_root:root,target:where,sender:'',body:'',parent_id:null,created_at:Date.now(),kind:'agent',mine:false,pending:false};
+    threadRef.current=placeholder;threadTarget.current=where;threadContent.current=[];threadRead.current={root:'',seq:0};setThread(placeholder);setThreadMessages([]);setThreadLoading(true);setThreadMore(false);
+    try{await refreshThread(root,where);}finally{if(threadRef.current?.chain_root===root)setThreadLoading(false);}
+  },[refreshThread]);
+  const showThread=useCallback((message:Message)=>{void openThreadID(currentTarget.current,message.chain_root).catch(fail);},[openThreadID,fail]);
+  async function toggleThreadFollow(){if(!thread)return;const following=!threadFollowing;await api('threads',{RootID:thread.chain_root,Following:following},'PATCH');setThreadFollowing(following);setMessages(previous=>previous.map(message=>message.id===thread.chain_root?{...message,reply_following:following,reply_unread:0}:message));await needs.refresh(true);}
+  function closeThread(){threadRef.current=null;setThread(null);threadContent.current=[];setThreadMessages([]);}
+  const refreshMessages = useCallback(async (where:string,fresh=false,incremental=false) => {
+    if(!where){setMessages([]);setMore(false);messageCursor.current={target:'',seq:0};return;}
+    const delta=incremental&&messageCursor.current.target===where;
+    let after=delta?messageCursor.current.seq:0;
+    for(;;){
+      const page=await api<{messages:Message[];more:boolean;read_position:number;read_held:boolean}>('messages?target='+encodeURIComponent(where)+(fresh?'&refresh=1':'')+(delta?'&after='+after:''));
+      if(currentTarget.current!==where)return;
+      const merge=messageCursor.current.target===where;
+      const latest=Math.max(after,...page.messages.map(m=>m.seq),0);
+      messageCursor.current={target:where,seq:Math.max(merge?messageCursor.current.seq:0,latest)};
+      setMessages(previous=>{if(!merge)return page.messages;return mergeMessagePage(previous,page.messages,delta,document.hasFocus()?threadRef.current?.chain_root:undefined);});
+      if(!delta)setMore(page.more);
+      setReadState({position:page.read_position||0,held:!!page.read_held});
+      if(!page.read_held&&readPaused.current!==where&&page.messages.length&&document.visibilityState==='visible'&&document.hasFocus()&&activeTab.current==='chats')void api<{held:boolean}>('read',{Target:where,Position:latest}).then(result=>{if(!result.held&&readPaused.current!==where){setChannels(previous=>previous.map(c=>c.name===where?{...c,unread:0}:c));setPeople(previous=>previous.map(p=>'@'+p.name===where?{...p,unread:0}:p));}}).catch(()=>{});
+      if(!delta||!page.more||latest<=after)return;
+      after=latest;
+    }
+  },[]);
+  useEffect(()=>{
+    if(!session?.authenticated)return;
+    let stopped=false;let busy=false;let pending=false;let metadata=false;let personal=false;const targets=new Set<string>();let timer:ReturnType<typeof setTimeout>|undefined;
+    const drain=async()=>{
+      timer=undefined;if(busy||stopped)return;
+      busy=true;
+      try{while(pending&&!stopped){
+        const full=metadata;const own=personal;const changed=new Set(targets);pending=false;metadata=false;personal=false;targets.clear();
+        const where=currentTarget.current;
+        await needs.refresh(full||own);
+        if(document.visibilityState==='visible'){
+          await Promise.all([...(full||changed.size?[refreshLists(full||Array.from(changed).some(target=>target.startsWith('@')))]:[]),...((full||changed.has(where))&&activeTab.current==='chats'?[refreshMessages(where,false,!full)]:[])]);
+          const thread=threadRef.current;if(thread&&activeTab.current==='chats'&&(full||changed.has(where)))await refreshThread(thread.chain_root,where,true);
+        }
+      }}catch(error){if(!stopped)fail(error);}finally{busy=false;}
+    };
+    const enqueue=(full:boolean,changed:string[]=[],own=false)=>{pending=true;metadata=metadata||full;personal=personal||own;for(const target of changed)targets.add(target);if(!busy&&!timer)timer=setTimeout(()=>void drain(),25);};
+    const focused=()=>{if(document.visibilityState==='visible')enqueue(true);};
+    const events=new EventSource('/v1/chat/events');
+    events.addEventListener('connected',()=>{setConnected(true);enqueue(true);});
+    events.addEventListener('changed',event=>{try{const update=JSON.parse((event as MessageEvent).data);enqueue(!!update.metadata||!Array.isArray(update.targets),update.targets||[],!!update.personal);}catch{enqueue(true);}});
+    events.addEventListener('signed-out',()=>{events.close();refreshSession();});
+    events.onerror=()=>setConnected(false);
+    window.addEventListener('focus',focused);document.addEventListener('visibilitychange',focused);
+    return()=>{stopped=true;events.close();if(timer)clearTimeout(timer);window.removeEventListener('focus',focused);document.removeEventListener('visibilitychange',focused);};
+  },[session?.authenticated,refreshLists,refreshMessages,refreshSession,refreshThread,needs.refresh,fail]);
   useEffect(() => {
     if (!session?.authenticated) return;
     setThread(null); setError(''); setMessages([]); setLoading(true); bottom.current = true;
     localStorage.setItem('grpvn.target', target);
-    refreshLists().catch(fail);refreshMessages(target).catch(fail).finally(() => setLoading(false));
-  }, [target, session?.authenticated, refreshMessages, fail]);
-  useEffect(()=>{if(!session?.authenticated)return;const focused=()=>{if(document.visibilityState==='visible'){refreshLists().catch(fail);refreshMessages(currentTarget.current).catch(fail);};};window.addEventListener('focus',focused);document.addEventListener('visibilitychange',focused);return()=>{window.removeEventListener('focus',focused);document.removeEventListener('visibilitychange',focused);};},[session?.authenticated,refreshLists,refreshMessages,fail]);
+    refreshLists().catch(fail);refreshMessages(target).then(()=>{const pending=pendingThread.current;if(pending?.target===target&&pending.root){pendingThread.current=null;return openThreadID(target,pending.root);}}).catch(fail).finally(() => setLoading(false));
+  }, [target, activeWorkspace, session?.authenticated, refreshLists, refreshMessages, fail]);
   const sourceKey=[...new Set(channels.map(c=>c.source_id||''))].sort().join(',');
   useEffect(()=>{if(!session?.authenticated||!session.local)return;api<{sources:WorkspaceSource[]}>('sources').then(result=>setConnections(result.sources)).catch(()=>{});},[session?.authenticated,session?.local,modal,sourceKey]);
   useEffect(()=>{if(workspace===null&&selected)setWorkspace(selected.source_id||'');},[workspace,target,selected?.source_id]);
@@ -115,36 +176,62 @@ function App() {
   useEffect(() => { if (bottom.current) scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: 'instant' }); }, [messages]);
   async function send(body: string, reply?: Message, key?: string) {
     const result = await api<{ pending: boolean }>('messages', { Target: reply?.id || target, Body: body, IdempotencyKey: key || crypto.randomUUID() });
-    await refreshMessages(target); await refreshLists(); setError(''); bottom.current = true;
+    await refreshMessages(target,false,true);if(reply)await refreshThread(reply.chain_root,target,true);await needs.refresh(); await refreshLists(false); setError(''); bottom.current = true;
     if (result.pending) setToast('Saved locally. Delivery will resume when the source is available.');
   }
   async function older() {
     if (!messages.length) return;
     try { const page = await api<{ messages: Message[]; more: boolean }>(`messages?target=${encodeURIComponent(target)}&before=${messages[0].seq}`); setMessages(prev => [...page.messages, ...prev]); setMore(page.more); } catch (e) { fail(e); }
   }
-  function select(where: string, history?:Channel) { readPaused.current='';if(where)void api('read',{Target:where,Resume:true}).then(()=>refreshLists()).catch(fail);const match=channels.find(c=>c.name===where)||history;const scope=match?(match.source_id||''):null;workspaceSelection.current=scope;setWorkspace(scope);currentTarget.current=where;setLocalChat(true);historySelection.current=history||null;setHistoryChannel(history||null);setTarget(where);setTab('chats');setSidebar(false); }
+  function select(where: string, history?:Channel) { readPaused.current='';if(where)void api('read',{Target:where,Resume:true}).then(()=>refreshLists(false)).catch(fail);const match=channels.find(c=>c.name===where)||history;const scope=match?(match.source_id||''):null;workspaceSelection.current=scope;setWorkspace(scope);currentTarget.current=where;setLocalChat(true);historySelection.current=history||null;setHistoryChannel(history||null);setTarget(where);setTab('chats');setSidebar(false); }
   function selectWorkspace(name:string){const where=channels.find(c=>(c.source_id||'')===name)?.name||'';select(where);workspaceSelection.current=name;setWorkspace(name);}
-  function workspaceAction(action:string){if(action==='agent')setAgentSetup(true);else if(action==='members'||action==='channels')setManagement(action);else if(action==='create')createChannel(activeWorkspace||undefined);else if(action==='invite')setManagement('invite');else setModal(action as 'connect'|'approvals');}
+  function workspaceAction(action:string){if(action==='agent')setAgentSetup(true);else if(action==='members'||action==='channels')setManagement(action);else if(action==='create')createChannel(activeWorkspace||undefined);else if(action==='invite')setManagement('invite');else if(action==='notifications')setNotificationSettings(true);else if(action==='browser')void openExternal(sourceURL);else if(action==='connect'||action==='approvals')setModal(action);}
+  useEffect(()=>{
+    const handle=(event:Event)=>{
+      if(!session?.authenticated)return;
+      const action=(event as CustomEvent<string>).detail;
+      if(action==='search'){setSidebar(true);requestAnimationFrame(()=>document.querySelector<HTMLInputElement>('.side-search input')?.focus());}
+      else if(action==='chats'||action==='people'||action==='attention')setTab(action);
+      else if(action==='notifications')setNotificationSettings(true);
+      else if(['agent','create','channels','connect'].includes(action))workspaceAction(action);
+      else if(action==='invite'&&scopeChannels.some(c=>c.write))workspaceAction(action);
+    };
+    window.addEventListener('grpvn:action',handle);
+    return()=>window.removeEventListener('grpvn:action',handle);
+  },[session?.authenticated,activeWorkspace,sourceURL,scopeChannels]);
+  function attentionSource(where:string){const alias=where.startsWith('#')&&where.includes('/')?where.slice(1).split('/')[0]:'';const source=connections.find(source=>source.name===alias);return source?new URL(source.url).host:session?.local?'Local chat':location.host;}
+  function openAttention(item:OpenAttention){
+    if(item.id)void needs.read([item.id]).catch(fail);
+    if(currentTarget.current!==item.target){pendingThread.current=item;select(item.target);}
+    else{setTab('chats');if(item.root)void openThreadID(item.target,item.root).catch(fail);}
+  }
+  const notificationOpen=useRef(openAttention);notificationOpen.current=openAttention;
+  useEffect(()=>{const open=(event:Event)=>{const item=(event as CustomEvent<OpenAttention>).detail;if(item&&typeof item.target==='string'&&(item.target.startsWith('#')||item.target.startsWith('@')))notificationOpen.current(item);};window.addEventListener('grpvn:open-notification',open);return()=>window.removeEventListener('grpvn:open-notification',open);},[]);
   function messagePerson(name:string){setProfileName(null);if(session?.local&&activeWorkspace){void openExternal(sourceURL.replace(/\/$/,'')+'/?target='+encodeURIComponent('@'+name));return;}select('@'+name);}
-  function openContext(e:React.MouseEvent,where:string,channel?:Channel,person?:Person,message?:Message){e.preventDefault();e.stopPropagation();const box=e.currentTarget.getBoundingClientRect();setContext({x:e.clientX||box.left+12,y:e.clientY||box.bottom,target:where,channel,person,message,selection:window.getSelection()?.toString()||''});}
+  function openContext(e:React.MouseEvent,where:string,channel?:Channel,person?:Person,message?:Message){e.preventDefault();e.stopPropagation();const box=e.currentTarget.getBoundingClientRect();const pointer=e.type==='contextmenu';setContext({x:pointer?e.clientX:box.left,y:pointer?e.clientY:box.bottom+5,target:where,channel,person,message,selection:window.getSelection()?.toString()||''});}
   async function markUnread(where:string,position?:number){const previous=readPaused.current;if(where===currentTarget.current)readPaused.current=where;try{await api('read',{Target:where,Unread:true,...(position!==undefined?{Position:position}:{})});await refreshLists();if(where===currentTarget.current)await refreshMessages(where);setToast('Marked as unread.');}catch(error){readPaused.current=previous;throw error;}}
   async function markRead(where:string){if(where===currentTarget.current)readPaused.current='';await api('read',{Target:where,Resume:true});await refreshLists();if(where===currentTarget.current)await refreshMessages(where);setToast('Marked as read.');}
   async function muteConversation(where:string,muted:boolean){await api('preferences',{Target:where,Muted:muted},'PATCH');await refreshLists();setToast(muted?'Conversation muted. Messages keep syncing.':'Conversation unmuted.');}
   async function channelAction(c:Channel,archive=false){const suffix=c.source_id?'?workspace='+encodeURIComponent(c.source_id):'';if(archive)await api('channels'+suffix,{Channel:c.name,Archived:true},'PATCH');else await api('memberships'+suffix,{Channel:c.name,Action:'leave'});await refreshLists();setToast(archive?'Channel archived. History is retained.':'Left '+c.label);}
   async function copyValue(value:string,label:string){await navigator.clipboard.writeText(value);setToast(label+' copied.');}
   const contextItems:ContextAction[]=[];
-  if(context){const c=context.channel;const muted=!!(c?.muted||context.person?.muted);if(context.message){const m=context.message;contextItems.push({label:'Reply in thread',icon:<MessageSquare size={16}/>,onSelect:()=>setThread(m)},{label:'Mark unread from here',icon:<Mail size={16}/>,onSelect:()=>markUnread(context.target,Math.max(0,m.seq-1))},{label:'View profile',icon:<Users size={16}/>,onSelect:()=>setProfileName(m.sender)},{label:'Copy message',icon:<Copy size={16}/>,divider:true,onSelect:()=>copyValue(m.body,'Message')},{label:'Copy message ID',icon:<Link size={16}/>,onSelect:()=>copyValue(m.id,'Message ID')});if(context.selection)contextItems.push({label:'Copy selected text',icon:<Copy size={16}/>,onSelect:()=>copyValue(context.selection||'','Selected text')});}else{contextItems.push({label:'Open conversation',icon:<MessageCircle size={16}/>,onSelect:()=>select(context.target)},{label:'Mark as unread',icon:<Mail size={16}/>,onSelect:()=>markUnread(context.target)},{label:'Mark as read',icon:<MailOpen size={16}/>,onSelect:()=>markRead(context.target)},{label:muted?'Unmute conversation':'Mute conversation',icon:muted?<Bell size={16}/>:<BellOff size={16}/>,onSelect:()=>muteConversation(context.target,!muted)});if(c){contextItems.push({label:'Channel details',icon:<Settings2 size={16}/>,divider:true,onSelect:()=>{setDetailsChannel(c);setManagement('channel');}},{label:'Copy channel name',icon:<Copy size={16}/>,onSelect:()=>copyValue(c.name,'Channel name')},{label:'Leave channel',icon:<LogOut size={16}/>,divider:true,onSelect:()=>channelAction(c)});if(c.manage)contextItems.push({label:'Archive channel',icon:<Archive size={16}/>,danger:true,onSelect:()=>channelAction(c,true)});}else if(context.person)contextItems.push({label:'View profile',icon:<Users size={16}/>,divider:true,onSelect:()=>setProfileName(context.person!.name)});}}
+  if(context){const c=context.channel;const muted=!!(c?.muted||context.person?.muted);if(context.message){const m=context.message;contextItems.push({label:'Reply in thread',icon:<MessageSquare size={16}/>,onSelect:()=>showThread(m)},{label:'Mark unread from here',icon:<Mail size={16}/>,onSelect:()=>markUnread(context.target,Math.max(0,m.seq-1))},{label:'View profile',icon:<Users size={16}/>,onSelect:()=>setProfileName(m.sender)},{label:'Copy message',icon:<Copy size={16}/>,divider:true,onSelect:()=>copyValue(m.body,'Message')},{label:'Copy message ID',icon:<Link size={16}/>,onSelect:()=>copyValue(m.id,'Message ID')});if(context.selection)contextItems.push({label:'Copy selected text',icon:<Copy size={16}/>,onSelect:()=>copyValue(context.selection||'','Selected text')});}else{if(context.target!==target||tab!=='chats')contextItems.push({label:'Open conversation',icon:<MessageCircle size={16}/>,onSelect:()=>select(context.target)});contextItems.push({label:'Mark as unread',icon:<Mail size={16}/>,onSelect:()=>markUnread(context.target)},{label:'Mark as read',icon:<MailOpen size={16}/>,onSelect:()=>markRead(context.target)},{label:muted?'Unmute conversation':'Mute conversation',icon:muted?<Bell size={16}/>:<BellOff size={16}/>,onSelect:()=>muteConversation(context.target,!muted)});if(c){contextItems.push({label:'Channel details',icon:<Settings2 size={16}/>,divider:true,onSelect:()=>{setDetailsChannel(c);setManagement('channel');}},{label:'Copy channel name',icon:<Copy size={16}/>,onSelect:()=>copyValue(c.name,'Channel name')},{label:'Leave channel',icon:<LogOut size={16}/>,divider:true,onSelect:()=>channelAction(c)});if(c.manage)contextItems.push({label:'Archive channel',icon:<Archive size={16}/>,danger:true,onSelect:()=>channelAction(c,true)});}else if(context.person)contextItems.push({label:'View profile',icon:<Users size={16}/>,divider:true,onSelect:()=>setProfileName(context.person!.name)});}}
   const filtered = messages.filter(m => !search || `${m.body} ${m.sender}`.toLowerCase().includes(search.toLowerCase()));
-  const roots = filtered.filter(m => !m.parent_id || !messages.some(p => p.id === m.chain_root));
-  const replies = thread ? messages.filter(m => m.chain_root === thread.chain_root && m.id !== thread.chain_root) : [];
+  const messageIDs=useMemo(()=>new Set(messages.map(m=>m.id)),[messages]);
+  const threadReplies=useMemo(()=>{const groups=new Map<string,Message[]>();for(const message of messages){if(message.parent_id){const group=groups.get(message.chain_root)||[];group.push(message);groups.set(message.chain_root,group);}}return groups;},[messages]);
+  const roots=filtered.filter(m=>!m.parent_id||!messageIDs.has(m.chain_root));
+  const replies=thread?threadMessages:[];
+  const presentationPeople=useMemo(()=>{const known=new Set(participants.map(p=>p.name));const authors:Person[]=[];for(const message of messages){if(!known.has(message.sender)){known.add(message.sender);authors.push({id:message.sender,name:message.sender,kind:message.kind==='human'?'human':'agent',status:'active'});}}return authors.length?[...participants,...authors]:participants;},[participants,messages]);
+  const messageContext=useCallback((event:React.MouseEvent,message:Message)=>openContext(event,target,undefined,undefined,message),[target]);
+  const presentation=useMemo(()=>({people:presentationPeople,name:activeName,onMention:setProfileName,onContext:messageContext}),[presentationPeople,activeName,messageContext]);
   const sources = [...new Set(scopeChannels.map(c => c.source))];
   if (!session) return <div className="startup"><Logo /><span>Opening your conversations…</span>{error && <p role="alert">{error}</p>}</div>;
   if (!session.authenticated) return <SignIn onDone={refreshSession} initialError={error} />;
-  return <Presentation.Provider value={{people:participants,name:activeName,onMention:setProfileName,onContext:(e,m)=>openContext(e,target,undefined,undefined,m)}}><div className="app">
+  return <Presentation.Provider value={presentation}><div className="app">
     <aside className={`sidebar ${sidebar ? 'visible' : ''}`}>
-      <WorkspaceMenu local={session.local} workspace={activeWorkspace} sources={connections} account={activeName} admin={scopeAdmin} onSelect={selectWorkspace} onAction={workspaceAction} onSignOut={async()=>{await api('logout',{});refreshSession();}}/>
+      <WorkspaceMenu local={session.local} workspace={activeWorkspace} sources={connections} account={activeName} admin={scopeAdmin} canInvite={scopeChannels.some(c=>c.write)} onSelect={selectWorkspace} onAction={workspaceAction} onSignOut={async()=>{await api('logout',{});refreshSession();}}/>
       <div className="side-search"><Search size={15} /><input aria-label="Find a conversation" placeholder="Find a conversation" value={search} onChange={e => setSearch(e.target.value)} /></div>
-      <nav className="main-nav"><button className={tab === 'chats' ? 'active' : ''} onClick={() => setTab('chats')}><MessageSquare size={17} />Conversations<span>{(scopeChannels.reduce((a, c) => a + (c.muted?0:c.unread), 0)+(!activeWorkspace?people.filter(p=>p.id!==profile?.id&&!p.muted).reduce((sum,p)=>sum+(p.unread||0),0):0)) || ''}</span></button><button className={tab === 'people' ? 'active' : ''} onClick={() => setTab('people')}><Users size={17} />People & agents<span>{(activeWorkspace?participants:people).length}</span></button><button onClick={()=>setManagement('channels')}><Hash size={18}/>Browse channels</button></nav>
+      <nav className="main-nav"><button className={tab==='attention'?'active':''} onClick={()=>{setTab('attention');setSidebar(false);void needs.refresh(true).catch(fail);}}><InboxIcon size={17}/>Needs you<span>{needs.unread||''}</span></button><button className={tab === 'chats' ? 'active' : ''} onClick={() => setTab('chats')}><MessageSquare size={17} />Conversations<span>{(scopeChannels.reduce((a, c) => a + (c.muted?0:c.unread), 0)+(!activeWorkspace?people.filter(p=>p.id!==profile?.id&&!p.muted).reduce((sum,p)=>sum+(p.unread||0),0):0)) || ''}</span></button><button className={tab === 'people' ? 'active' : ''} onClick={() => setTab('people')}><Users size={17} />People & agents<span>{(activeWorkspace?participants:people).length}</span></button><button onClick={()=>setManagement('channels')}><Hash size={18}/>Browse channels</button></nav>
       <div className="channel-scroll">
         {sources.map(source => <section key={source} className="channel-section"><div className="section-head"><span>{source === 'workspace' ? 'Channels' : source === 'local' ? 'Local channels' : source}</span><button className="icon subtle" aria-label="Create channel" onClick={() => createChannel(scopeChannels.find(c=>c.source===source)?.source_id)}><Plus size={15} /></button></div>{scopeChannels.filter(c => c.source === source && (!search || c.name.toLowerCase().includes(search.toLowerCase()))).map(c => <div className="channel-row" key={c.name} onContextMenu={e=>openContext(e,c.name,c)}><button className={`channel ${target === c.name && tab === 'chats' ? 'selected' : ''} ${c.unread&&!c.muted ? 'unread' : ''} ${c.muted?'muted':''}`} onClick={() => select(c.name)}>{c.open ? <Hash size={17} /> : <LockKeyhole size={15} />}<span>{c.label.replace(/^#/, '')}</span>{c.muted&&<BellOff className="muted-icon" size={13}/>} {c.unread > 0&&!c.muted && <b>{c.unread > 99 ? '99+' : c.unread}</b>}</button><button className="icon channel-options" aria-label={'Actions for '+c.label} onClick={e=>openContext(e,c.name,c)}><MoreHorizontal size={15}/></button></div>)}</section>)}
         {!scopeChannels.length && <section className="channel-section"><div className="section-head"><span>Channels</span></div><button className="channel add" onClick={() => createChannel(activeWorkspace||undefined)}><Plus size={16} />Create channel</button></section>}
@@ -153,8 +240,8 @@ function App() {
 
     </aside>
     <main className="main">
-      {session.local && (setupPending||(!channels.length&&!localChat)) && !historyChannel ? <div className="workspace-setup"><WorkspaceConnect onPending={()=>setSetupPending(true)} onDone={async(where)=>{await refreshLists();if(where)select(where);setLocalChat(true);setSetupPending(false);}}/><button className="text-button" onClick={()=>{setLocalChat(true);setSetupPending(false);setModal('create');}}>Use local chat</button></div> : !scopeChannels.length && !historyChannel && tab==='chats' ? <div className="channel-home"><Hash size={32}/><h2>Choose a conversation</h2><p>Join a channel or create one to get started.</p><div><button className="button primary" onClick={()=>setManagement('channels')}>Browse channels</button><button className="button secondary" onClick={()=>createChannel(activeWorkspace||undefined)}>Create channel</button></div></div> : tab === 'people' ? <><header className="toolbar"><button className="icon mobile-only" aria-label="Open sidebar" onClick={() => setSidebar(true)}><Menu size={19} /></button><Users size={20} /><h1>People & agents</h1><span className="toolbar-detail">Everyone in your workspace</span><button className="button secondary" onClick={() => setManagement('invite')}><Plus size={15} />Invite</button></header><div className="directory"><div className="page-eyebrow">Workspace</div><h2>People & agents</h2><p>Select a person or agent to send a direct message.</p><div className="people-grid">{(activeWorkspace?participants:people).map(p => <button className="person-card" key={p.id} onClick={() => setProfileName(p.name)}><Avatar name={p.name} human={p.kind === 'human'} /><div><strong>{p.name}</strong><span>{p.kind === 'human' ? 'Human' : 'AI agent'} · {p.status === 'active' ? 'Workspace member' : 'Awaiting invitation'}</span></div><MessageCircle size={17} /></button>)}</div></div></> : <>
-      <header className="toolbar"><button className="icon mobile-only" aria-label="Open sidebar" onClick={() => setSidebar(true)}><Menu size={19} /></button>{dm ? <MessageCircle size={20} /> : selected?.open ? <Hash size={20} /> : <LockKeyhole size={18} />}<h1>{label}</h1><span className="toolbar-detail">{dm ? 'Direct conversation' : selected?.archived ? 'Archived channel' : selected?.open ? 'Open channel' : 'Private channel'}</span><div className="toolbar-actions"><button className="button secondary" disabled={!!selected&&!selected.write} onClick={() => setManagement('invite')}><Users size={15} /><span>Invite</span></button><button className="icon" aria-label="Channel details" onClick={() => {if(dm)setToast('Only the participants can read this conversation.');else{setDetailsChannel(selected);setManagement('channel');}}}><MoreHorizontal size={19} /></button></div></header>
+      {session.local && (setupPending||(!channels.length&&!localChat)) && !historyChannel ? <div className="workspace-setup"><WorkspaceConnect onPending={()=>setSetupPending(true)} onDone={async(where)=>{await refreshLists();if(where)select(where);setLocalChat(true);setSetupPending(false);}}/><button className="text-button" onClick={()=>{setLocalChat(true);setSetupPending(false);setModal('create');}}>Use local chat</button></div> : !scopeChannels.length && !historyChannel && tab==='chats' ? <div className="channel-home"><Hash size={32}/><h2>Choose a conversation</h2><p>Join a channel or create one to get started.</p><div><button className="button primary" onClick={()=>setManagement('channels')}>Browse channels</button><button className="button secondary" onClick={()=>createChannel(activeWorkspace||undefined)}>Create channel</button></div></div> : tab==='attention'?<AttentionInbox items={needs.items} unread={needs.unread} onOpen={openAttention} onRead={needs.read} onReadAll={needs.readAll} onSettings={()=>setNotificationSettings(true)} onError={fail} revision={needs.items.reduce((max,item)=>Math.max(max,item.seq),needs.unread)} source={attentionSource} onSidebar={()=>setSidebar(true)} more={needs.more} loadingEarlier={needs.loadingEarlier} onEarlier={needs.loadEarlier}/> : tab === 'people' ? <><header className="toolbar"><button className="icon mobile-only" aria-label="Open sidebar" onClick={() => setSidebar(true)}><Menu size={19} /></button><Users size={20} /><h1>People & agents</h1><span className="toolbar-detail">Everyone in your workspace</span><button className="button secondary" onClick={() => setManagement('invite')}><Plus size={15} />Invite</button></header><div className="directory"><div className="page-eyebrow">Workspace</div><h2>People & agents</h2><p>Select a person or agent to send a direct message.</p><div className="people-grid">{(activeWorkspace?participants:people).map(p => <button className="person-card" key={p.id} onClick={() => setProfileName(p.name)}><Avatar name={p.name} human={p.kind === 'human'} /><div><strong title={p.name}>{shortName(p.name)}</strong><span>{p.kind === 'human' ? 'Human' : 'AI agent'} · {p.status === 'active' ? 'Workspace member' : 'Awaiting invitation'}</span></div><MessageCircle size={17} /></button>)}</div></div></> : <>
+      <header className="toolbar"><button className="icon mobile-only" aria-label="Open sidebar" onClick={() => setSidebar(true)}><Menu size={19} /></button>{dm ? <MessageCircle size={20} /> : selected?.open ? <Hash size={20} /> : <LockKeyhole size={18} />}<h1><button className="conversation-title" aria-label={dm?'View profile of @'+label:'Channel details'} onClick={()=>{if(dm)setProfileName(label);else{setDetailsChannel(selected);setManagement('channel');}}}><span>{dm?shortName(label):label}</span><ChevronDown size={14}/></button></h1><span className="toolbar-detail">{dm ? 'Direct conversation' : selected?.archived ? 'Archived channel' : selected?.open ? 'Open channel' : 'Private channel'}</span><div className="toolbar-actions">{!dm&&<button className="button secondary" disabled={!selected?.write} onClick={() => setManagement('invite')}><Users size={15} /><span>Invite</span></button>}<button className="icon" aria-label={dm?'Conversation actions':'Channel actions'} aria-haspopup="menu" onClick={e=>openContext(e,target,dm?undefined:selected,dm?participants.find(p=>p.name===label):undefined)}><MoreHorizontal size={19} /></button></div></header>
       {!connected && <div className="connection-banner"><WifiOff size={15} />Reconnecting. Your conversations are saved; live updates will resume automatically.</div>}
       {error && <div className="error-banner" role="alert">{error}<button className="icon" aria-label="Dismiss error" onClick={() => setError('')}><X size={15} /></button></div>}
       {readState.held&&<div className="unread-banner"><Mail size={15}/><span>Marked unread</span><button onClick={()=>void markRead(target).catch(fail)}>Resume reading</button></div>}
@@ -162,11 +249,13 @@ function App() {
         {!loading && !messages.length && !error && <div className="channel-intro"><div className="channel-symbol">{dm ? <MessageCircle size={27} /> : <Hash size={28} strokeWidth={1.6} />}</div><h2>No messages yet</h2><p>{dm ? `Send a message to ${shortName(label)}.` : `Send the first message in #${label}.`}</p></div>}
         {more && <button className="load-older" onClick={older}>Load earlier messages</button>}
         {loading && <div className="loading-line">Loading conversation…</div>}
-        {roots.map((m, i) => <React.Fragment key={m.id}>{(i === 0 || new Date(m.created_at).toDateString() !== new Date(roots[i - 1].created_at).toDateString()) && <div className="date-divider"><span>{day(m.created_at)}</span></div>}{readState.held&&m.seq>readState.position&&(i===0||roots[i-1].seq<=readState.position)&&<div className="unread-divider"><span>Unread from here</span></div>}<MessageRow message={m} onReply={() => setThread(m)} replyCount={messages.filter(x => x.chain_root === m.id && x.parent_id).length} /></React.Fragment>)}
+        {roots.map((m, i) => <React.Fragment key={m.id}>{(i === 0 || new Date(m.created_at).toDateString() !== new Date(roots[i - 1].created_at).toDateString()) && <div className="date-divider"><span>{day(m.created_at)}</span></div>}{readState.held&&m.seq>readState.position&&(i===0||roots[i-1].seq<=readState.position)&&<div className="unread-divider"><span>Unread from here</span></div>}<MessageRow message={m} onReply={showThread} replyCount={Math.max(m.reply_count||0,threadReplies.get(m.id)?.length||0)} /></React.Fragment>)}
       </div><div className="composer-wrap"><Composer key={target} target={target} people={participants} placeholder={dm ? `Message ${shortName(label)}` : `Message #${label}`} disabled={!!selected && !selected.write} onSend={(body, key) => send(body, undefined, key)} /><div className="composer-footnote"><span><strong>↵</strong> to send · <strong>⇧ ↵</strong> for a new line</span><span>Shared with {dm ? 'this participant' : 'channel members'}</span></div></div></section>
-      {thread && <section className="thread"><header><div><MessageSquare size={17} /><strong>Thread</strong><span>#{label}</span></div><button className="icon" aria-label="Close thread" onClick={() => setThread(null)}><PanelRightClose size={18} /></button></header><div className="thread-messages"><MessageRow message={messages.find(m => m.id === thread.chain_root) || thread} /><div className="thread-divider">{replies.length} {replies.length === 1 ? 'reply' : 'replies'}</div>{replies.map(m => <MessageRow key={m.id} message={m} />)}</div><div className="thread-compose"><Composer key={thread.id} target={target} people={participants} placeholder="Reply in thread…" disabled={!!selected&&!selected.write} onSend={(body, key) => send(body, thread, key)} /></div></section>}
+      {thread && <section className="thread"><header><div><MessageSquare size={17} /><strong>Thread</strong><span>{dm?shortName(label):'#'+label}</span></div><button className="thread-follow" aria-label={threadFollowing?'Unfollow thread':'Follow thread'} title={threadFollowing?'Unfollow thread':'Follow thread'} onClick={()=>void toggleThreadFollow().catch(fail)}>{threadFollowing?<Bell size={14}/>:<Plus size={14}/>} {threadFollowing?'Following':'Follow thread'}</button><button className="icon" aria-label="Close thread" onClick={closeThread}><PanelRightClose size={18} /></button></header><div className="thread-messages">{threadLoading?<p className="attention-empty">Loading thread…</p>:thread.seq?<MessageRow message={thread}/>:<p className="attention-empty">The original message is no longer available.</p>}{threadMore&&<button className="load-older" onClick={()=>{const first=threadContent.current[0]?.seq;if(first)void refreshThread(thread.chain_root,target,false,first).catch(fail);}}>Load earlier replies</button>}<div className="thread-divider">{replies.length} {replies.length === 1 ? 'reply' : 'replies'}</div>{replies.map(m => <MessageRow key={m.id} message={m} />)}</div><div className="thread-compose"><Composer key={thread.id} target={target} people={participants} placeholder="Reply in thread…" disabled={!thread.seq||!!selected&&!selected.write} onSend={(body, key) => send(body, thread, key)} /></div></section>}
       </div></>}
     </main>
+    {notificationSettings&&<NotificationPreferences settings={needs.settings} onSave={needs.save} onClose={()=>setNotificationSettings(false)}/>}
+    {needs.notice&&<AttentionToast items={needs.notice} onOpen={openAttention} onClose={needs.dismissNotice}/>}
     {modal && <Modal mode={modal} target={target} workspace={activeWorkspace} remote={creationSource} channels={channels} local={session.local&&!selected?.source_id} onClose={closeModal} onDone={async (where?: string) => { await refreshLists(); if (where) select(where); setModal(null); }} toast={setToast} />}
     {management&&<Management mode={management} workspace={management==='channel'&&detailsChannel?(detailsChannel.source_id||''):activeWorkspace} channel={management==='channel'?(detailsChannel||selected):selected} target={management==='channel'&&detailsChannel?detailsChannel.name:target} admin={scopeAdmin} local={session.local} currentName={activeName} onClose={()=>{setManagement(null);setDetailsChannel(undefined);}} onNotice={setToast} onDone={async(where,history)=>{await refreshLists();if(where){select(where,history);if(history)await refreshMessages(where,true);}}}/>}
     {agentSetup&&<ConnectAgent local={session.local&&!activeWorkspace} base={sourceURL} workspace={activeWorkspace} channel={selected?.label||''} writable={!!selected?.write} onClose={()=>setAgentSetup(false)} onNotice={setToast}/>}
@@ -177,10 +266,10 @@ function App() {
   </div></Presentation.Provider>;
 }
 function day(time: number) { const d = new Date(time); const today = new Date(); return d.toDateString() === today.toDateString() ? 'Today' : new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(d); }
-function MessageRow({ message: m, onReply, replyCount = 0 }: { message: Message; onReply?: () => void; replyCount?: number }) {
+const MessageRow=React.memo(function MessageRow({ message: m, onReply, replyCount = 0 }: { message: Message; onReply?: (message:Message) => void; replyCount?: number }) {
   const {people,name,onMention,onContext}=React.useContext(Presentation);
-  return <article className={`message ${m.pending ? 'pending' : ''}`} data-message-id={m.id} onContextMenu={e=>onContext(e,m)}><Avatar name={m.sender} human={m.kind === 'human'} /><div className="message-content"><div className="message-byline"><button className="sender-name" onClick={()=>onMention(m.sender)}>{shortName(m.sender)}</button>{m.kind !== 'human' && <span className="bot-badge">AGENT</span>}{m.mine && <span className="you-label">you</span>}<time dateTime={new Date(m.created_at).toISOString()} title={new Date(m.created_at).toLocaleString()}>{new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(m.created_at)}</time>{m.pending && <span className="queued">Waiting to sync</span>}</div><React.Suspense fallback={<div className="message-body">{m.body}</div>}><MessageBody body={m.body} target={m.target} people={people} currentName={name} onMention={onMention}/></React.Suspense>{replyCount > 0 && <button className="replies" onClick={onReply}><MessageCircle size={14} />{replyCount} {replyCount === 1 ? 'reply' : 'replies'}<ChevronRight size={13} /></button>}</div>{onReply && <div className="message-tools"><button className="icon" aria-label={'Reply to ' + m.sender} title="Reply in thread" onClick={onReply}><MessageSquare size={16}/></button><button className="icon" aria-label={'Message actions for '+m.sender} title="Message actions" onClick={e=>onContext(e,m)}><MoreHorizontal size={17}/></button></div>}</article>;
-}
+  return <article className={`message ${m.pending ? 'pending' : ''}`} data-message-id={m.id} onContextMenu={e=>onContext(e,m)}><Avatar name={m.sender} human={m.kind === 'human'} /><div className="message-content"><div className="message-byline"><button className="sender-name" title={m.sender} onClick={()=>onMention(m.sender)}>{shortName(m.sender)}</button>{m.kind !== 'human' && <span className="bot-badge">AGENT</span>}{m.mine && <span className="you-label">you</span>}<time dateTime={new Date(m.created_at).toISOString()} title={new Date(m.created_at).toLocaleString()}>{new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(m.created_at)}</time>{m.pending && <span className="queued">Waiting to sync</span>}</div><React.Suspense fallback={<div className="message-body">{m.body}</div>}><MessageBody body={m.body} target={m.target} people={people} currentName={name} onMention={onMention}/></React.Suspense>{m.parent_id&&onReply&&<button className="thread-context-link" onClick={()=>onReply(m)}>Reply in thread <ChevronRight size={12}/></button>}{replyCount > 0 && <button className={"replies "+(m.reply_unread?"has-unread":"")} onClick={()=>onReply?.(m)}><MessageCircle size={14} />{replyCount} {replyCount === 1 ? 'reply' : 'replies'}{m.reply_unread? <b>{m.reply_unread} new</b>:null}<ChevronRight size={13} /></button>}</div>{onReply && <div className="message-tools"><button className="icon" aria-label={'Reply to ' + m.sender} title="Reply in thread" onClick={()=>onReply?.(m)}><MessageSquare size={16}/></button><button className="icon" aria-label={'Message actions for '+m.sender} title="Message actions" onClick={e=>onContext(e,m)}><MoreHorizontal size={17}/></button></div>}</article>;
+});
 function SignIn({ onDone, initialError }: { onDone: () => void; initialError: string }) {
   const [signup, setSignup] = useState(new URLSearchParams(location.search).has('invited') || new URLSearchParams(location.hash.slice(1)).has('invite'));
   const [name, setName] = useState(''); const [password, setPassword] = useState(''); const [invitation, setInvitation] = useState(new URLSearchParams(location.hash.slice(1)).get('invite') || ''); const [busy, setBusy] = useState(false); const [error, setError] = useState(initialError);
