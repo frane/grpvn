@@ -194,7 +194,7 @@ func init() {
 	inviteCmd.Flags().DurationVar(&inviteExpiry, "expires", 24*time.Hour, "invitation lifetime")
 	inviteCmd.Flags().IntVar(&inviteUses, "uses", 1, "number of device registrations allowed")
 	for _, cmd := range []*cobra.Command{inviteCmd, approveCmd, grantCmd} {
-		cmd.Flags().StringSliceVar(&memberChannels, "channel", nil, "explicit channel grants (repeat; * means all)")
+		cmd.Flags().StringSliceVar(&memberChannels, "channel", nil, "channel grants (repeat; * grants workspace administration, not private membership)")
 		cmd.Flags().BoolVar(&memberWrite, "write", false, "allow posting; default read-only")
 		cmd.Flags().BoolVar(&memberDM, "dm", false, "allow agent-to-agent DMs (read access is limited to each agent's own inbox)")
 	}
