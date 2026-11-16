@@ -1,9 +1,17 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { spawn, spawnSync, ChildProcess } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
+
+
+async function expectReadableTitle(page:Page){
+  const title=page.locator('.conversation-title>span');
+  await expect(title).toBeVisible();
+  await expect.poll(()=>title.evaluate(element=>element.scrollWidth-element.clientWidth),{message:'A short conversation title must fit without ellipsis'}).toBeLessThanOrEqual(1);
+  await expect.poll(()=>page.locator('.toolbar-actions').evaluate(element=>element.getBoundingClientRect().right-window.innerWidth),{message:'Header actions must remain inside the window'}).toBeLessThanOrEqual(0);
+}
 
 let host:ChildProcess;let link:string;let root:string;let bin:string;let env:NodeJS.ProcessEnv;
 test.beforeAll(async()=>{
@@ -29,6 +37,7 @@ test('human chat, threaded replies, invitations, browser continuity and mobile l
   await page.getByRole('button',{name:'Create channel',exact:true}).first().click();
   await page.getByLabel('Channel name').fill('general');
   await page.getByRole('dialog').getByRole('button',{name:'Create channel',exact:true}).click();
+  await expectReadableTitle(page);
   const compose=page.getByRole('textbox',{name:'Message #general'});
   await compose.fill('A shared place for people and agents.');await compose.press('Enter');
   await expect(page.locator('.message-body').filter({hasText:'A shared place for people and agents.'})).toHaveCount(1);
@@ -53,6 +62,7 @@ test('human chat, threaded replies, invitations, browser continuity and mobile l
   await expect(friend.getByRole('textbox',{name:'Message #general'})).toBeVisible();
   await page.getByRole('button',{name:'People & agents'}).click();
   await expect(page.locator('.person-card').filter({hasText:'alex'})).toBeVisible();await page.locator('.person-card').filter({hasText:'alex'}).click();await page.getByRole('button',{name:'Message @alex',exact:true}).click();
+  await expectReadableTitle(page);
   await page.getByRole('textbox',{name:'Message alex'}).fill('A direct conversation.');await page.getByRole('textbox',{name:'Message alex'}).press('Enter');
   await expect(page.locator('.message-body').filter({hasText:'A direct conversation.'})).toBeVisible();
   await friend.getByRole('button',{name:'People & agents'}).click();await friend.locator('.person-card').filter({hasText:'frane'}).click();await friend.getByRole('button',{name:'Message @frane',exact:true}).click();await friend.getByRole('textbox',{name:'Message frane',exact:true}).fill('A direct reply clears the open inbox badge.');await friend.getByRole('textbox',{name:'Message frane',exact:true}).press('Enter');await page.bringToFront();await expect(page.locator('.message-body').filter({hasText:'A direct reply clears the open inbox badge.'})).toBeVisible();await expect(page.locator('.person-channel').filter({hasText:'alex'}).locator('b')).toHaveCount(0);
@@ -64,6 +74,7 @@ test('human chat, threaded replies, invitations, browser continuity and mobile l
   await page.screenshot({path:join(root,'desktop.png'),fullPage:true});
   await page.screenshot({path:join(process.env.GRPVN_SCREENSHOT_DIR || tmpdir(),'grpvn-ui-desktop.png'),fullPage:true});
   await page.setViewportSize({width:390,height:844});
+  await expectReadableTitle(page);
   await expect(page.getByRole('button',{name:'Open sidebar'})).toBeVisible();
   await page.screenshot({path:join(process.env.GRPVN_SCREENSHOT_DIR || tmpdir(),'grpvn-ui-mobile.png'),fullPage:true});
   // Exercise the same loopback host used by the standalone desktop app.
@@ -79,6 +90,7 @@ test('human chat, threaded replies, invitations, browser continuity and mobile l
     await signin.getByRole('button',{name:'Continue as frane'}).click();
     await expect(signin.getByText('Connected',{exact:true})).toBeVisible();
     await expect(desktop.getByRole('textbox',{name:'Message #general'})).toBeVisible({timeout:15000});
+    await expectReadableTitle(desktop);
     await desktop.evaluate(()=>{(window as any).__drafts=[];(window as any)._wails={invoke:(message:string)=>(window as any).__drafts.push(JSON.parse(message))};});await desktop.getByRole('button',{name:'Invite',exact:true}).click();await desktop.getByLabel('Person or agent').fill('desktop-friend@example.test');await desktop.getByRole('button',{name:'Prepare email invitation',exact:true}).click();expect(await desktop.getByLabel('Invitation link').inputValue()).toMatch(new RegExp('^'+new URL(link).origin+'/join\\?invite='));expect(await desktop.evaluate(()=>(window as any).__drafts[0].Type)).toBe('openEmailDraft');await desktop.getByRole('button',{name:'Close dialog'}).click();await desktop.evaluate(()=>{delete (window as any)._wails;});
 
     await desktop.getByRole('textbox',{name:'Message #general'}).fill('Same profile from the desktop.');await desktop.getByRole('textbox',{name:'Message #general'}).press('Enter');
@@ -88,7 +100,7 @@ test('human chat, threaded replies, invitations, browser continuity and mobile l
     await desktop.getByLabel('Workspace address or invitation').fill(new URL(link).origin);
     await desktop.getByRole('button',{name:'Continue',exact:true}).click();
     await expect(desktop.getByRole('dialog')).toHaveCount(0);
-    await desktop.reload();await expect(desktop.getByRole('textbox',{name:'Message #general'})).toBeVisible();await desktop.getByRole('button',{name:'Workspace menu',exact:true}).click();await desktop.getByRole('menuitemradio',{name:'Local chat',exact:true}).click();await expect(desktop.getByRole('heading',{name:'Choose a conversation',exact:true})).toBeVisible();await desktop.getByRole('button',{name:'Workspace menu',exact:true}).click();await desktop.getByRole('menuitem',{name:'Connect an agent…',exact:true}).click();await expect(desktop.getByLabel('Agent connection prompt')).toContainText('grpvn-cli@0.13.6');await desktop.getByRole('button',{name:'Close dialog',exact:true}).click();await desktop.getByRole('button',{name:'Workspace menu',exact:true}).click();await desktop.getByRole('menuitemradio',{name:new URL(link).host,exact:true}).click();await expect(desktop.getByRole('textbox',{name:'Message #general'})).toBeVisible();
+    await desktop.reload();await expect(desktop.getByRole('textbox',{name:'Message #general'})).toBeVisible();await desktop.getByRole('button',{name:'Workspace menu',exact:true}).click();await desktop.getByRole('menuitemradio',{name:'Local chat',exact:true}).click();await expect(desktop.getByRole('heading',{name:'Choose a conversation',exact:true})).toBeVisible();await desktop.getByRole('button',{name:'Workspace menu',exact:true}).click();await desktop.getByRole('menuitem',{name:'Connect an agent…',exact:true}).click();await expect(desktop.getByLabel('Agent connection prompt')).toContainText('grpvn-cli@0.13.7');await desktop.getByRole('button',{name:'Close dialog',exact:true}).click();await desktop.getByRole('button',{name:'Workspace menu',exact:true}).click();await desktop.getByRole('menuitemradio',{name:new URL(link).host,exact:true}).click();await expect(desktop.getByRole('textbox',{name:'Message #general'})).toBeVisible();
     await desktop.close();await signin.close();
   } finally { native.kill('SIGINT');await new Promise<void>(resolve=>{native.once('exit',()=>resolve());setTimeout(resolve,7000);}); }
   expect(errors).toEqual([]);

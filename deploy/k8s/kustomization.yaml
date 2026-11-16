@@ -11,6 +11,6 @@ resources:
 configMapGenerator:
   - name: grpvn-release
     literals:
-      - VERSION=0.13.6
+      - VERSION=0.13.7
     files:
       - download-release.py
