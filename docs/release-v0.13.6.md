@@ -25,6 +25,8 @@ The onboarding guide and human-client documentation explain the new membership
 model. SQLite remains the default; PostgreSQL uses the same access rules and
 migration.
 
-The member editor keeps workspace administration separate from channel and DM
+The member editor keeps workspace administration separate from channel
 permissions. Changing the role preserves channel membership and read-only
 settings; channel controls remain available while editing an administrator.
+Composer formatting and mention insertion place the caret before the next
+input, avoiding a race that could duplicate a prefix during rapid replacement.

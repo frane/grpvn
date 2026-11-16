@@ -1,4 +1,4 @@
-import React,{useEffect,useId,useRef,useState} from 'react';
+import React,{useEffect,useId,useLayoutEffect,useRef,useState} from 'react';
 import {ArrowUp,AtSign,Bold,Bot,Code2,FileText,LoaderCircle,Paperclip,RotateCw,X} from 'lucide-react';
 import {initials,mentionNames,Person,shortName,UploadedFile,uploadFile} from './api';
 
@@ -7,13 +7,15 @@ export function Composer({placeholder,disabled,onSend,target,people=[]}:{placeho
  const[body,setBody]=useState('');const[files,setFiles]=useState<Attachment[]>([]);const[sending,setSending]=useState(false);const[error,setError]=useState('');const[dragging,setDragging]=useState(false);
  const[cursor,setCursor]=useState(0);const[choice,setChoice]=useState(0);const[dismissed,setDismissed]=useState(false);
  const area=useRef<HTMLTextAreaElement>(null);const picker=useRef<HTMLInputElement>(null);const key=useRef(crypto.randomUUID());const listID=useId();
+ const selection=useRef<number|null>(null);
+ useLayoutEffect(()=>{if(selection.current===null)return;const position=selection.current;selection.current=null;area.current?.focus();area.current?.setSelectionRange(position,position);},[body,cursor]);
  const match=body.slice(0,cursor).match(/(^|[\s([{])@([\p{L}\p{N}_.~\-]*)$/u);const query=match?.[2]||'';
  const suggestions=match&&!dismissed?people.filter(p=>p.status==='active'&&p.name.toLowerCase().includes(query.toLowerCase())).slice(0,8):[];
  useEffect(()=>{setChoice(0);setDismissed(false);},[query]);
  const busy=files.some(f=>f.status==='uploading');const invalid=files.some(f=>f.status==='error');
  function changed(text:string,position:number){setBody(text);setCursor(position);setDismissed(false);key.current=crypto.randomUUID();}
- function insert(text:string,caret?:number){const start=area.current?.selectionStart??body.length;const end=area.current?.selectionEnd??start;const next=body.slice(0,start)+text+body.slice(end);const position=start+(caret??text.length);changed(next,position);requestAnimationFrame(()=>{area.current?.focus();area.current?.setSelectionRange(position,position);});}
- function mention(person:Person){const short=shortName(person.name);const name=mentionNames(people.map(p=>p.name)).get(short)===person.name?short:person.name;const start=cursor-query.length-1;const next=body.slice(0,start)+'@'+name+' '+body.slice(cursor);const position=start+name.length+2;changed(next,position);setDismissed(true);requestAnimationFrame(()=>{area.current?.focus();area.current?.setSelectionRange(position,position);});}
+ function insert(text:string,caret?:number){const start=area.current?.selectionStart??body.length;const end=area.current?.selectionEnd??start;const next=body.slice(0,start)+text+body.slice(end);const position=start+(caret??text.length);selection.current=position;changed(next,position);}
+ function mention(person:Person){const short=shortName(person.name);const name=mentionNames(people.map(p=>p.name)).get(short)===person.name?short:person.name;const start=cursor-query.length-1;const next=body.slice(0,start)+'@'+name+' '+body.slice(cursor);const position=start+name.length+2;selection.current=position;changed(next,position);setDismissed(true);}
  async function transfer(attachment:Attachment){setFiles(prev=>prev.map(f=>f.id===attachment.id?{...f,status:'uploading',error:undefined}:f));try{const uploaded=await uploadFile(attachment.file,target);setFiles(prev=>prev.map(f=>f.id===attachment.id?{...f,status:'done',uploaded}:f));}catch(e){setFiles(prev=>prev.map(f=>f.id===attachment.id?{...f,status:'error',error:(e as Error).message}:f));}}
  async function addFiles(incoming:File[]){if(disabled||sending)return;if(files.length+incoming.length>5){setError('Attach up to five files per message.');return;}if(incoming.some(f=>f.size>10*1024*1024)){setError('Choose files up to 10 MB each.');return;}setError('');key.current=crypto.randomUUID();const added:Attachment[]=incoming.map(file=>({id:crypto.randomUUID(),file,status:'uploading'}));setFiles(prev=>[...prev,...added]);for(const f of added)await transfer(f);area.current?.focus();}
  async function submit(){if((!body.trim()&&!files.length)||sending||disabled||busy||invalid)return;setSending(true);setError('');try{const links=files.map(f=>{const file=f.uploaded!;const name=file.name.replace(/[\\[\]()`!*]/g,'\\$&');return (file.image?'!':'')+'['+name+'](grpvn-file:'+file.id+')';});await onSend([body.trim(),...links].filter(Boolean).join('\n\n'),key.current);setBody('');setFiles([]);setCursor(0);key.current=crypto.randomUUID();if(area.current)area.current.style.height='';}catch(e){setError((e as Error).message);}finally{setSending(false);area.current?.focus();}}
