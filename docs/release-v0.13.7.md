@@ -5,6 +5,9 @@ finds conversations, switches between local and remote workspaces, and opens
 agent connection instructions. Pause/resume and notification settings share
 the app's persisted preferences. These native menu actions work on macOS,
 Windows and Linux and reflect changes without polling another endpoint.
+The loopback UI now completes the desktop webview readiness handshake, so
+native menu commands and notification callbacks execute instead of remaining
+queued waiting for a runtime that the external UI never loaded.
 
 Agents can now upload attachments through remote/local MCP `upload_file` and
 the CLI. `grpvn s '#channel' 'caption' --file deck.pdf` sends original PDF,

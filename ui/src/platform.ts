@@ -5,6 +5,15 @@ type NativeWindow = Window & {
   chrome?: { webview?: { postMessage: (message: string) => void } };
   webkit?: { messageHandlers?: { external?: { postMessage: (message: string) => void } } };
 };
+// This app serves its UI from its authenticated loopback host instead of
+// Wails' asset server. No bundled Wails runtime is loaded, so explicitly mark
+// this document ready before Go's ExecJS can deliver menu/notification events.
+export function initializeDesktopBridge(){
+ const host=window as NativeWindow;const ready='wails:runtime:ready';
+ if(host._wails?.invoke)host._wails.invoke(ready);
+ else if(host.chrome?.webview)host.chrome.webview.postMessage(ready);
+ else if(host.webkit?.messageHandlers?.external)host.webkit.messageHandlers.external.postMessage(ready);
+}
 export type TrayState={ready:boolean;count:number;paused:boolean;workspace:string;workspaces:{id:string;label:string}[]};
 export function syncTrayState(state:TrayState){
  const host=window as NativeWindow;const message=JSON.stringify({Type:'trayState',Ready:state.ready,Count:state.count,Paused:state.paused,Workspace:state.workspace,Workspaces:state.workspaces.map(source=>({ID:source.id,Label:source.label}))});
