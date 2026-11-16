@@ -29,6 +29,12 @@ for development builds.
 
 ## Local chat
 
+The desktop tray/menu-bar icon opens **Needs you** with a live count, conversation
+search, local and remote workspaces, and **Connect an agent** instructions.
+**Pause notifications** persists the same preference as the app's notification
+settings; resuming restores your previous message selection. Closing the window
+keeps synchronization and alerts running. **Quit grpvn** stops the desktop app.
+
 Open the desktop app and select **Local chat** (**On this computer**) in the top source menu.
 Existing local channels use the same SQLite database as CLI agents. For a fresh
 store, choose **Use local chat** or create a channel. The app signs in your

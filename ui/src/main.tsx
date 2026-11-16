@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { Archive,Inbox as InboxIcon,BellOff,Mail,MailOpen,ArrowDown, ArrowLeft, ArrowUp, Bell, Bot, Check, CheckCheck, ChevronDown, ChevronRight, Copy, Globe, Hash, Link, LockKeyhole, LogOut, Menu, MessageCircle, MessageSquare, MoreHorizontal, PanelRightClose, Plus, Search, Settings2, ShieldCheck, Sparkles, Users, WifiOff, X } from 'lucide-react';
 import { api, ApiError, Approval, Channel, color,mergeMessagePage, initials, Message, Person, Session, shortName } from './api';
 import './style.css';
-import {openExternal,setUnreadBadge} from './platform';
+import {openExternal,setUnreadBadge,syncTrayState} from './platform';
 import {AccessRequestToast,useAccessRequests,PendingAccess} from './AccessRequests';
 import {Composer} from './Composer';
 const MessageBody=React.lazy(()=>import('./MessageBody').then(module=>({default:module.MessageBody})));
@@ -84,6 +84,8 @@ function App() {
   const access=useAccessRequests(session||undefined,connections,needs.settings);
   const requestCounts=useMemo(()=>access.items.reduce<Record<string,number>>((counts,item)=>{counts[item.workspace]=(counts[item.workspace]||0)+1;return counts;},{}),[access.items]);
   useEffect(()=>setUnreadBadge(needs.unread+access.items.length),[needs.unread,access.items.length]);
+  const traySources=JSON.stringify(session?.local?[{id:'',label:'Local chat'},...connections.map(source=>({id:source.name,label:new URL(source.url).host+' ('+source.name+')'}))]:[{id:'',label:location.host}]);
+  useEffect(()=>syncTrayState({ready:!!session?.authenticated,count:needs.unread+access.items.length,paused:needs.settings.level==='none',workspace:activeWorkspace,workspaces:session?.authenticated?JSON.parse(traySources):[]}),[session?.authenticated,needs.unread,access.items.length,needs.settings.level,activeWorkspace,traySources]);
   const refreshSession = useCallback(async () => { try { const state=await api<Session>('session');setSession(state);const next=new URLSearchParams(location.search).get('next');if(state.authenticated&&next){const where=new URL(next,location.origin);if(where.origin===location.origin&&where.pathname==='/oauth/authorize'&&where.searchParams.get('actor')==='human'){location.replace(where.pathname+where.search);}} } catch (e) { fail(e); } }, [fail]);
   useEffect(() => {
     const ticket = new URLSearchParams(location.hash.slice(1)).get('ticket');
@@ -191,19 +193,35 @@ function App() {
   function select(where: string, history?:Channel) { readPaused.current='';if(where)void api('read',{Target:where,Resume:true}).then(()=>refreshLists(false)).catch(fail);const match=channels.find(c=>c.name===where)||history;const scope=match?(match.source_id||''):null;workspaceSelection.current=scope;setWorkspace(scope);currentTarget.current=where;setLocalChat(true);historySelection.current=history||null;setHistoryChannel(history||null);setTarget(where);setTab('chats');setSidebar(false); }
   function selectWorkspace(name:string){const where=channels.find(c=>(c.source_id||'')===name)?.name||'';select(where);workspaceSelection.current=name;setWorkspace(name);}
   function workspaceAction(action:string){if(action==='agent')setAgentSetup(true);else if(action==='members'||action==='channels')setManagement(action);else if(action==='create')createChannel(activeWorkspace||undefined);else if(action==='invite')setManagement('invite');else if(action==='notifications')setNotificationSettings(true);else if(action==='browser')void openExternal(sourceURL);else if(action==='connect'||action==='approvals')setModal(action);}
+  const pauseBusy=useRef(false);
+  async function pauseNotifications(paused:boolean){
+    if(pauseBusy.current||paused===(needs.settings.level==='none'))return;
+    pauseBusy.current=true;
+    try{
+      const key='grpvn.notifications.resume.'+profile?.id;
+      if(paused)localStorage.setItem(key,needs.settings.level);
+      await needs.save({...needs.settings,level:paused?'none':localStorage.getItem(key)==='all'?'all':'important'});
+    }catch(error){fail(error);syncTrayState({ready:!!session?.authenticated,count:needs.unread+access.items.length,paused:needs.settings.level==='none',workspace:activeWorkspace,workspaces:JSON.parse(traySources)});}
+    finally{pauseBusy.current=false;}
+  }
   useEffect(()=>{
     const handle=(event:Event)=>{
       if(!session?.authenticated)return;
-      const action=(event as CustomEvent<string>).detail;
+      const detail=(event as CustomEvent<string|{action:string;workspace?:string;paused?:boolean}>).detail;
+      const action=typeof detail==='string'?detail:detail?.action;
+      if(typeof action!=='string')return;
+      if(action!=='pause-notifications'){setModal(null);setManagement(null);setAgentSetup(false);setNotificationSettings(false);setProfileName(null);setContext(null);setDetailsChannel(undefined);}
       if(action==='search'){setSidebar(true);requestAnimationFrame(()=>document.querySelector<HTMLInputElement>('.side-search input')?.focus());}
       else if(action==='chats'||action==='people'||action==='attention')setTab(action);
       else if(action==='notifications')setNotificationSettings(true);
+      else if(action==='workspace'&&typeof detail==='object'&&session.local&&(detail.workspace===''||connections.some(source=>source.name===detail.workspace)))selectWorkspace(detail.workspace!);
+      else if(action==='pause-notifications'&&typeof detail==='object'&&typeof detail.paused==='boolean')void pauseNotifications(detail.paused);
       else if(['agent','create','channels','connect'].includes(action))workspaceAction(action);
       else if(action==='invite'&&scopeChannels.some(c=>c.write))workspaceAction(action);
     };
     window.addEventListener('grpvn:action',handle);
     return()=>window.removeEventListener('grpvn:action',handle);
-  },[session?.authenticated,activeWorkspace,sourceURL,scopeChannels]);
+  },[session?.authenticated,activeWorkspace,sourceURL,scopeChannels,connections,needs.settings,needs.unread,access.items.length,traySources,profile?.id]);
   function attentionSource(where:string){const alias=where.startsWith('#')&&where.includes('/')?where.slice(1).split('/')[0]:'';const source=connections.find(source=>source.name===alias);return source?new URL(source.url).host:session?.local?'Local chat':location.host;}
   function openRequests(source=activeWorkspace){if(session?.local)selectWorkspace(source);setModal('approvals');setSidebar(false);}
   function openAttention(item:OpenAttention){

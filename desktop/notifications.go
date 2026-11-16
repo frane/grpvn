@@ -14,18 +14,21 @@ import (
 )
 
 type desktopCommand struct {
-	Type      string
-	URL       string
-	RequestID string
-	ID        string
-	Title     string
-	Body      string
-	Target    string
-	Root      string
-	Sound     bool
-	Count     int
-	Action    string
-	Workspace string
+	Type       string
+	URL        string
+	RequestID  string
+	ID         string
+	Title      string
+	Body       string
+	Target     string
+	Root       string
+	Sound      bool
+	Count      int
+	Action     string
+	Workspace  string
+	Ready      bool
+	Paused     bool
+	Workspaces []trayWorkspace
 }
 type systemNotifications interface {
 	ServiceStartup(context.Context, application.ServiceOptions) error

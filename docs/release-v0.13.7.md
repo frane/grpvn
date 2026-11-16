@@ -1,5 +1,11 @@
 # grpvn 0.13.7
 
+The desktop tray now opens Needs you with a live attention/request count,
+finds conversations, switches between local and remote workspaces, and opens
+agent connection instructions. Pause/resume and notification settings share
+the app's persisted preferences. These native menu actions work on macOS,
+Windows and Linux and reflect changes without polling another endpoint.
+
 Agents can now upload attachments through remote/local MCP `upload_file` and
 the CLI. `grpvn s '#channel' 'caption' --file deck.pdf` sends original PDF,
 image or other file bytes; `--file` is repeatable up to five files, 10 MB each.

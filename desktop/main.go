@@ -20,6 +20,8 @@ func main() {
 	}
 	var app *application.App
 	var window *application.WebviewWindow
+	var tray *application.SystemTray
+	var trayMenu *desktopTray
 	notifier := newDesktopNotifications()
 	server, err := uihost.Start(context.Background(), name, "")
 	if err != nil {
@@ -41,6 +43,15 @@ func main() {
 		}
 		var command desktopCommand
 		if json.Unmarshal([]byte(message), &command) != nil {
+			return
+		}
+		if command.Type == "trayState" {
+			application.InvokeAsync(func() {
+				if trayMenu != nil && trayMenu.update(command) {
+					tray.SetMenu(trayMenu.menu)
+					tray.SetTooltip(trayMenu.tooltip())
+				}
+			})
 			return
 		}
 		if notificationCommand(command.Type) {
@@ -98,18 +109,20 @@ func main() {
 		_ = app.Browser.OpenURL("https://github.com/frane/grpvn#documentation")
 	})
 	app.Menu.SetApplicationMenu(menu)
-	tray := app.SystemTray.New()
+	tray = app.SystemTray.New()
 	if runtime.GOOS == "darwin" {
 		tray.SetTemplateIcon(trayIcon)
 	} else {
 		tray.SetIcon(appIcon)
 	}
-	tray.SetTooltip("grpvn — conversations")
-	trayMenu := app.NewMenu()
-	trayMenu.Add("Open grpvn").OnClick(func(*application.Context) { window.Show(); window.Focus() })
-	trayMenu.AddSeparator()
-	trayMenu.Add("Quit grpvn").OnClick(func(*application.Context) { app.Quit() })
-	tray.SetMenu(trayMenu)
+	trayMenu = newDesktopTray(func(action trayAction) {
+		window.Show()
+		window.Focus()
+		encoded, _ := json.Marshal(action)
+		window.ExecJS("window.dispatchEvent(new CustomEvent('grpvn:action',{detail:" + string(encoded) + "}));")
+	}, func() { window.Show(); window.Focus() }, func() { app.Quit() })
+	tray.SetTooltip(trayMenu.tooltip())
+	tray.SetMenu(trayMenu.menu)
 	window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) { window.Hide(); e.Cancel() })
 	if err = app.Run(); err != nil {
 		log.Fatal(err)

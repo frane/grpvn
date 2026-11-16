@@ -5,6 +5,13 @@ type NativeWindow = Window & {
   chrome?: { webview?: { postMessage: (message: string) => void } };
   webkit?: { messageHandlers?: { external?: { postMessage: (message: string) => void } } };
 };
+export type TrayState={ready:boolean;count:number;paused:boolean;workspace:string;workspaces:{id:string;label:string}[]};
+export function syncTrayState(state:TrayState){
+ const host=window as NativeWindow;const message=JSON.stringify({Type:'trayState',Ready:state.ready,Count:state.count,Paused:state.paused,Workspace:state.workspace,Workspaces:state.workspaces.map(source=>({ID:source.id,Label:source.label}))});
+ if(host._wails?.invoke)host._wails.invoke(message);
+ else if(host.chrome?.webview)host.chrome.webview.postMessage(message);
+ else if(host.webkit?.messageHandlers?.external)host.webkit.messageHandlers.external.postMessage(message);
+}
 export function openExternal(address: string) {
   const target = new URL(address);
   if (target.protocol !== 'https:' && target.protocol !== 'http:') throw new Error('Invalid address');

@@ -101,6 +101,25 @@ test('human chat, threaded replies, invitations, browser continuity and mobile l
     await desktop.getByRole('button',{name:'Continue',exact:true}).click();
     await expect(desktop.getByRole('dialog')).toHaveCount(0);
     await desktop.reload();await expect(desktop.getByRole('textbox',{name:'Message #general'})).toBeVisible();await desktop.getByRole('button',{name:'Workspace menu',exact:true}).click();await desktop.getByRole('menuitemradio',{name:'Local chat',exact:true}).click();await expect(desktop.getByRole('heading',{name:'Choose a conversation',exact:true})).toBeVisible();await desktop.getByRole('button',{name:'Workspace menu',exact:true}).click();await desktop.getByRole('menuitem',{name:'Connect an agent…',exact:true}).click();await expect(desktop.getByLabel('Agent connection prompt')).toContainText('grpvn-cli@0.13.7');await desktop.getByRole('button',{name:'Close dialog',exact:true}).click();await desktop.getByRole('button',{name:'Workspace menu',exact:true}).click();await desktop.getByRole('menuitemradio',{name:new URL(link).host,exact:true}).click();await expect(desktop.getByRole('textbox',{name:'Message #general'})).toBeVisible();
+    // Exercise native tray routing against the real desktop host. Capture the
+    // bridge state, then issue the same actions sent by each OS's native menu.
+    await desktop.addInitScript(()=>{(window as any).__tray=[];(window as any)._wails={invoke:(message:string)=>{const command=JSON.parse(message);(window as any).__tray.push(command);if(command.Type==='notificationStatus')queueMicrotask(()=>window.dispatchEvent(new CustomEvent('grpvn:native-notification',{detail:{requestID:command.RequestID,supported:true,granted:false}})));}};});
+    await desktop.reload();await expect(desktop.getByRole('textbox',{name:'Message #general'})).toBeVisible();
+    const tray=()=>desktop.evaluate(()=>(window as any).__tray.filter((command:any)=>command.Type==='trayState').at(-1));
+    await expect.poll(async()=>!!(await tray())?.Ready).toBe(true);
+    const remoteTray=await tray();expect(remoteTray.Workspaces.some((source:any)=>source.ID==='')).toBe(true);expect(remoteTray.Workspace).not.toBe('');
+    const action=(action:string,extra:Record<string,unknown>={})=>desktop.evaluate(detail=>window.dispatchEvent(new CustomEvent('grpvn:action',{detail})),{action,...extra});
+    await action('workspace',{workspace:''});await expect(desktop.getByRole('heading',{name:'Choose a conversation',exact:true})).toBeVisible();await expect.poll(async()=>(await tray()).Workspace).toBe('');
+    await action('workspace',{workspace:remoteTray.Workspace});await expect(desktop.getByRole('textbox',{name:'Message #general'})).toBeVisible();
+    await action('search');await expect(desktop.locator('.side-search input')).toBeFocused();
+    await action('attention');await expect(desktop.locator('.attention-view')).toBeVisible();
+    await action('agent');await expect(desktop.getByLabel('Agent connection prompt')).toBeVisible();await desktop.getByRole('button',{name:'Close dialog',exact:true}).click();
+    await action('notifications');await desktop.getByLabel('Notify me about').selectOption('all');await expect(desktop.getByLabel('Notify me about')).toBeEnabled();await expect(desktop.getByLabel('Notify me about')).toHaveValue('all');
+    await desktop.getByRole('button',{name:'Close notification settings',exact:true}).click();
+    await action('pause-notifications',{paused:true});await expect.poll(async()=>(await tray()).Paused).toBe(true);
+    await desktop.reload();await expect.poll(async()=>(await tray())?.Paused).toBe(true);
+    await action('pause-notifications',{paused:false});await expect.poll(async()=>(await tray()).Paused).toBe(false);
+    await action('notifications');await expect(desktop.getByLabel('Notify me about')).toHaveValue('all');await desktop.getByRole('button',{name:'Close notification settings',exact:true}).click();
     await desktop.close();await signin.close();
   } finally { native.kill('SIGINT');await new Promise<void>(resolve=>{native.once('exit',()=>resolve());setTimeout(resolve,7000);}); }
   expect(errors).toEqual([]);
