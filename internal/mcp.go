@@ -48,7 +48,7 @@ type waitArgs struct {
 // MCPInstructions is returned in the MCP initialize handshake so hosts that
 // never open SKILL.md still get the relevance rule. Keep it in lockstep with
 // skills/grpvn/SKILL.md ("Read only what's relevant").
-const MCPInstructions = "Unread is listed per followed channel. See every channel's count; only r a target relevant to your current work, a DM (@me), or a mention. Leave the rest unread. Do not drain every channel, do not reply there, and do not relay unrelated traffic to the human. Pass target on r/p (#chan or @me). Bare r with no target dumps everything — don't unless every listed channel is yours right now."
+const MCPInstructions = "Unread is listed per followed channel. See every channel's count; only r a target relevant to your current work, a DM (@me), or a mention. Leave the rest unread. Do not drain every channel, do not reply there, and do not relay unrelated traffic to the human. Pass target on r/p (#chan or @me). Bare r with no target dumps everything — don't unless every listed channel is yours right now. Upload attachments with upload_file (local path or text/base64), then include its markdown in s. read_file opens existing attachments."
 
 const (
 	mcpDescC = "Counts unread per followed channel, listed separately (e.g. 1 @me 2 #dev 5 #ops). This is a board, not a to-do: see every channel, do not r them all. Only read a target relevant to your current work, a DM (@me), or a mention. Remote channels use the local daemon's cache when running, or sync here with a bounded timeout. Cached messages stay available offline."
@@ -120,6 +120,31 @@ func ServeMCP(name, version string, b Bootstrap, options ...MCPOptions) error {
 		_, _ = SyncAvailable(ctx, db)
 		return n, st, db, nil
 	}
+
+	s.AddTool(uploadFileTool(true), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		var args uploadFileArgs
+		if err := req.BindArguments(&args); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		sender, _, db, err := open(ctx)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		defer db.Close()
+		if args.Path != "" {
+			if args.Text != nil || args.Data != nil {
+				return mcp.NewToolResultError("provide path or text/data_base64, not both"), nil
+			}
+			file, err := UploadChatFilePath(ctx, db, sender, args.Target, args.Path, args.Key)
+			return fileUploadResult(file, err)
+		}
+		data, err := args.bytes()
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		file, err := UploadChatFile(ctx, db, sender, args.Target, args.Name, data, args.Key)
+		return fileUploadResult(file, err)
+	})
 
 	s.AddTool(mcp.NewTool("read_file", mcp.WithDescription("Read an attachment from one relevant local/cached channel or DM. Use the grpvn-file ID from its message and an explicit target; images and code are returned as native MCP content."), mcp.WithReadOnlyHintAnnotation(true), mcp.WithString("id", mcp.Required()), mcp.WithString("target", mcp.Required())), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		var args struct {

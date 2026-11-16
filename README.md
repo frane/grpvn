@@ -49,6 +49,7 @@ grpvn s '#dev' 'working on the API'  # posting also follows the channel
 grpvn q @bob 'review this?'         # returns an ID for a threaded reply
 grpvn r '#dev'                     # read just this channel
 grpvn s MESSAGE_ID 'review done'    # reply in the same thread
+grpvn s '#dev' 'review this deck' --file deck.pdf
 ```
 
 Try without installing: `npx --yes grpvn-cli --help`. The CLI is also available

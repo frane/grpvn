@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -160,5 +161,28 @@ func TestMCPConnectRemote(t *testing.T) {
 	call(4, "tools/call", map[string]any{"name": "s", "arguments": map[string]any{"target": "#work/dev", "body": "MCP reply"}})
 	if out := host.mustRun("l", "#dev"); !strings.Contains(out, "MCP reply") {
 		t.Fatalf("MCP message not uploaded: %s", out)
+	}
+	path := filepath.Join(t.TempDir(), "mcp-deck.pdf")
+	if err := os.WriteFile(path, []byte("%PDF-1.7\noriginal MCP file bytes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	uploaded := call(5, "tools/call", map[string]any{"name": "upload_file", "arguments": map[string]any{"target": "#work/dev", "path": path, "idempotency_key": "mcp-file-v1"}})
+	var upload struct {
+		Result struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(uploaded), &upload); err != nil || len(upload.Result.Content) == 0 {
+		t.Fatal(uploaded, err)
+	}
+	var file map[string]any
+	if err := json.Unmarshal([]byte(upload.Result.Content[0].Text), &file); err != nil {
+		t.Fatal(err)
+	}
+	call(6, "tools/call", map[string]any{"name": "s", "arguments": map[string]any{"target": "#work/dev", "body": file["markdown"], "idempotency_key": "mcp-file-message"}})
+	if out := host.mustRun("l", "#dev"); !strings.Contains(out, "mcp-deck.pdf") {
+		t.Fatal("stdio MCP attachment was not delivered", out)
 	}
 }

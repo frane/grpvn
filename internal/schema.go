@@ -327,6 +327,11 @@ CREATE TABLE IF NOT EXISTS chat_files (
  media_type TEXT NOT NULL, data BLOB NOT NULL, created_at INTEGER NOT NULL,
  PRIMARY KEY(id,target)
 );
+CREATE TABLE IF NOT EXISTS chat_file_uploads (
+ uploader TEXT NOT NULL, target TEXT NOT NULL, upload_key TEXT NOT NULL, file_id TEXT NOT NULL,
+ PRIMARY KEY(uploader,target,upload_key),
+ FOREIGN KEY(file_id,target) REFERENCES chat_files(id,target) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS remote_file_queue (
  remote_name TEXT NOT NULL, file_id TEXT NOT NULL, target TEXT NOT NULL,
  PRIMARY KEY(remote_name,file_id,target)

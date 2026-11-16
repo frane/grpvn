@@ -145,13 +145,18 @@ func (s *webServer) uploadFile(w http.ResponseWriter, r *http.Request, p *Princi
 	}
 	defer r.MultipartForm.RemoveAll()
 	target := r.FormValue("target")
+	key := r.FormValue("idempotency_key")
+	if len(key) > MaxIdempotencyKeyBytes {
+		apiError(w, 400, "Upload idempotency key too long")
+		return
+	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		apiError(w, 400, "Choose a file")
 		return
 	}
 	defer file.Close()
-	if !(strings.HasPrefix(target, "#") || strings.HasPrefix(target, "@")) || !s.can(p, target, true) {
+	if !(strings.HasPrefix(target, "#") || strings.HasPrefix(target, "@")) || (p.scopes != nil && !p.scopes["grpvn.write"]) || !s.can(p, target, true) {
 		apiError(w, 403, "Channel write access required")
 		return
 	}
@@ -160,20 +165,28 @@ func (s *webServer) uploadFile(w http.ResponseWriter, r *http.Request, p *Princi
 		apiError(w, 413, "Choose a file up to 10 MB")
 		return
 	}
-	f := ChatFile{ID: NewMessage("", "", nil).ID, Target: target, Uploader: p.ID, Name: fileName(header.Filename), MediaType: http.DetectContentType(data), Data: data, CreatedAt: time.Now().UnixMilli()}
+	f, err := newChatFile(target, p.ID, header.Filename, data)
+	if err != nil {
+		apiError(w, 400, err.Error())
+		return
+	}
 	if remote, native, ok, err := s.remoteChannel(r.Context(), p, target); ok {
 		if err != nil {
 			apiError(w, 403, err.Error())
 			return
 		}
-		uploaded, err := uploadRemoteFile(r.Context(), remote, native, f)
+		uploaded, err := uploadRemoteFile(r.Context(), remote, native, f, key)
 		if err != nil {
 			apiError(w, 502, "File upload failed. Try again when the workspace is available.")
 			return
 		}
 		f.ID = uploaded.ID
 	}
-	if err = storeChatFile(s.db, f); err != nil {
+	if f, err = storeFileUpload(s.db, f, key); err != nil {
+		if errors.Is(err, errFileUploadKey) {
+			apiError(w, 409, err.Error())
+			return
+		}
 		apiError(w, 500, "Could not save file")
 		return
 	}
@@ -240,10 +253,13 @@ func fileRequest(ctx context.Context, remote Remote, method, path, contentType s
 	}
 	return response, nil
 }
-func uploadRemoteFile(ctx context.Context, remote Remote, target string, f ChatFile) (ChatFile, error) {
+func uploadRemoteFile(ctx context.Context, remote Remote, target string, f ChatFile, keys ...string) (ChatFile, error) {
 	var body bytes.Buffer
 	form := multipart.NewWriter(&body)
 	_ = form.WriteField("target", target)
+	if len(keys) > 0 && keys[0] != "" {
+		_ = form.WriteField("idempotency_key", keys[0])
+	}
 	part, err := form.CreateFormFile("file", f.Name)
 	if err != nil {
 		return f, err

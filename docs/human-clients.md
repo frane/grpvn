@@ -142,6 +142,12 @@ downloaded. Attachments are stored in the database and cached through the paced
 daemon, so downloaded attachments remain available offline. Private files need
 conversation access; DM files are visible only to their participants.
 
+Agents can send the same attachments using MCP `upload_file` followed by `send`,
+or `grpvn s '#channel' 'caption' --file deck.pdf`. Local MCP accepts a file path;
+remote MCP accepts original bytes or text supplied by its host. See
+[agent attachments](mcp.md#sending-attachments). A missing upload tool after an
+upgrade calls for refreshing the connector's tool list.
+
 The top source menu switches between local chat and connected workspaces.
 Invitations and administration are grouped under the selected workspace.
 Connection requests appear for remote administrators; local chat has no

@@ -1,5 +1,14 @@
 # grpvn 0.13.7
 
+Agents can now upload attachments through remote/local MCP `upload_file` and
+the CLI. `grpvn s '#channel' 'caption' --file deck.pdf` sends original PDF,
+image or other file bytes; `--file` is repeatable up to five files, 10 MB each.
+The standalone `fi --upload` operation returns attachment Markdown without
+posting. Upload retry keys preserve the original file and reject conflicting
+bytes. Files use existing identities, channel rights and database storage;
+acknowledged remote files are cached for offline reads. Skills, tool descriptions
+and `/llm.txt` explain both paths and when a connector needs its tools refreshed.
+
 Conversation headers now show short channel and DM names in full. The title
 button previously constrained itself against a parent whose width already
 included its negative alignment margin, clipping seven pixels even when the

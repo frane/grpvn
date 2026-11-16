@@ -5,13 +5,92 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"unicode/utf8"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
 
+type uploadFileArgs struct {
+	Target string  `json:"target"`
+	Name   string  `json:"name"`
+	Text   *string `json:"text"`
+	Data   *string `json:"data_base64"`
+	Path   string  `json:"path"`
+	Key    string  `json:"idempotency_key"`
+}
+
+func uploadFileTool(local bool) mcp.Tool {
+	options := []mcp.ToolOption{
+		mcp.WithDescription("Upload one file up to 10 MB to a conversation you can write. Provide name and exactly one of text or data_base64 (original binary bytes, including PDFs/images). Returns markdown: pass it to send/s, replying to the original message ID when threaded. Uploading alone does not post a message. Reuse idempotency_key on retries. Never fabricate unavailable file bytes."),
+		mcp.WithReadOnlyHintAnnotation(false), mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithString("target", mcp.Required(), mcp.Description("Channel or DM; local tools also accept #source/channel or a reply ID.")),
+		mcp.WithString("name", mcp.Description("File name, required with text/data_base64.")),
+		mcp.WithString("text", mcp.Description("Plain UTF-8 file contents; mutually exclusive with data_base64.")),
+		mcp.WithString("data_base64", mcp.Description("Standard base64 of the original file bytes; mutually exclusive with text.")),
+		mcp.WithString("idempotency_key"),
+	}
+	if local {
+		options = append(options, mcp.WithString("path", mcp.Description("Local file path instead of text/data_base64; bytes are transferred directly without copying them into the model context.")))
+	}
+	return mcp.NewTool("upload_file", options...)
+}
+
+func (a uploadFileArgs) bytes() ([]byte, error) {
+	if a.Path != "" {
+		return nil, fmt.Errorf("remote uploads cannot read filesystem paths; provide name and text or data_base64")
+	}
+	if a.Name == "" || (a.Text == nil) == (a.Data == nil) {
+		return nil, fmt.Errorf("provide name and exactly one of text or data_base64")
+	}
+	if a.Text != nil {
+		if len(*a.Text) > MaxFileBytes {
+			return nil, fmt.Errorf("file exceeds 10 MB")
+		}
+		return []byte(*a.Text), nil
+	}
+	if len(*a.Data) > base64.StdEncoding.EncodedLen(MaxFileBytes) {
+		return nil, fmt.Errorf("file exceeds 10 MB")
+	}
+	data, err := base64.StdEncoding.Strict().DecodeString(*a.Data)
+	if err != nil {
+		return nil, fmt.Errorf("data_base64 must contain standard base64 of the original file")
+	}
+	if len(data) > MaxFileBytes {
+		return nil, fmt.Errorf("file exceeds 10 MB")
+	}
+	return data, nil
+}
+
+func fileUploadResult(file ChatFile, err error) (*mcp.CallToolResult, error) {
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	metadata, _ := json.Marshal(uploadedFileResult(file))
+	return mcp.NewToolResultText(string(metadata)), nil
+}
+
 func registerFileTools(service *server.MCPServer, db *sql.DB, access *channelAccess) {
+	service.AddTool(uploadFileTool(false), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		var args uploadFileArgs
+		if err := req.BindArguments(&args); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		p := requestPrincipalContext(ctx)
+		if p == nil || !rpcAllowed(db, access, p, args.Target, true) {
+			return mcp.NewToolResultError("Conversation write access required to upload a file"), nil
+		}
+		data, err := args.bytes()
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		file, err := newChatFile(args.Target, p.ID, args.Name, data)
+		if err == nil {
+			file, err = storeFileUpload(db, file, args.Key)
+		}
+		return fileUploadResult(file, err)
+	})
 	service.AddTool(mcp.NewTool("read_file", mcp.WithDescription("Read a grpvn-file attachment from a permitted conversation. Images return image content; text/code files return text; other files return a downloadable embedded resource. Use the attachment ID from its message and the native channel or DM target."), mcp.WithReadOnlyHintAnnotation(true), mcp.WithString("id", mcp.Required()), mcp.WithString("target", mcp.Required())), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		var args struct {
 			ID     string `json:"id"`

@@ -118,12 +118,16 @@ var sendCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		n, st, db := mustSession()
 		defer db.Close()
-		t, b, err := parseSendArgs(db, st.DefaultChannel, args)
+		t, b, err := sendFileArgs(db, st.DefaultChannel, args)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
 		if b, err = expandStdinBody(b); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		if b, err = attachSendFiles(cmd.Context(), db, n, t, st.DefaultChannel, b, idempotencyFlag); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
@@ -144,12 +148,16 @@ var askCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		n, st, db := mustSession()
 		defer db.Close()
-		t, b, err := parseSendArgs(db, st.DefaultChannel, args)
+		t, b, err := sendFileArgs(db, st.DefaultChannel, args)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
 		if b, err = expandStdinBody(b); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		if b, err = attachSendFiles(cmd.Context(), db, n, t, st.DefaultChannel, b, idempotencyFlag); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}

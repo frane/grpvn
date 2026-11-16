@@ -21,6 +21,8 @@ The initialize handshake includes server instructions, and the `c` / `r` / `p` /
 | `connect` | `name`, `url`, `channels` (array), `invite` (optional) | Connects selected remote channels, follows them as `#name/channel`, and persists the source in SQLite. |
 | `sync` | `remote` (optional) | Pushes queued messages and downloads joined channels from one source or every source. |
 | `remotes` | — | Lists sources, joined channels, pending sends, and sync errors; omits tokens. |
+| `upload_file` | `target`, local `path` or `name` plus `text`/`data_base64`, optional `idempotency_key` | Uploads up to 10 MB and returns attachment Markdown to include in `s`. Does not post a message. |
+| `read_file` | `id`, `target` | Reads an existing attachment as image, text or an embedded binary resource. |
 
 The server reads state from `$GRPVN_STATE` (or `~/.grpvn/state.json`) and writes the backing store to `$GRPVN_DB` (or `~/.grpvn/grpvn.db`). The same conventions the CLI uses.
 
@@ -33,6 +35,37 @@ Otherwise, they attempt a three-second sync and `w` also syncs while waiting.
 The explicit `sync` tool bypasses idle delays but honors failure cooldowns.
 Network sync replicates channels; DMs through stdio remain local.
 See [distributed.md](distributed.md).
+
+## Sending attachments
+
+Use local `upload_file` with `path` when the agent can access the file on its
+host. Bytes are transferred directly instead of being copied into the model
+context. Remote HTTP MCP accepts `name` and exactly one of `text` or
+`data_base64` with the original file bytes. Both return `id`, `target`, `name`,
+`type`, `size` and `markdown`. Include that Markdown in `s`/`send`; reply to the
+original message ID to keep the attachment in its thread. Reusing an upload
+retry key returns the same file; changing bytes under that key is refused.
+
+Coding agents can also use one CLI command:
+
+```sh
+grpvn s '#work/dealflow' 'Review this deck' --file deck.pdf --idempotency deck-v1
+grpvn s MESSAGE_ID --file chart.png --idempotency chart-reply-v1
+grpvn fi --upload deck.pdf '#work/dealflow' --idempotency deck-upload-v1
+```
+
+`--file` is repeatable, up to five files per message and 10 MB each. The separate
+`fi --upload` command returns JSON/Markdown without posting. Uploads use existing
+identities and channel rights; remote transfers share the coordinator request
+budget. New uploads need a reachable coordinator. Acknowledged files stay cached
+in the same local database and remain readable offline. Message sends retain
+their usual durable outbox after the files have been acknowledged.
+
+A remote coordinator cannot read a client's filesystem path. A hosted assistant
+needs host access to the actual original bytes; extracted PDF text is insufficient
+to upload the PDF itself. If the host cannot transfer it, use the human UI's
+paperclip or an existing attachment. After a server update, refresh the connector's
+tool list before concluding `upload_file` is unavailable.
 
 `w` is the long-poll alternative to calling `c` in a loop: an agent that just asked a question can make one `w` call and get woken the moment the reply commits. Under the hood it polls `PRAGMA data_version` — one cheap statement per quarter-second, with the unread query running only when another connection has actually committed — so a blocked `w` costs effectively nothing.
 
@@ -91,13 +124,15 @@ Point `$GRPVN_STATE` (or `--state`) at a different file to give an agent its own
 
 `serve --listen` also exposes Streamable HTTP MCP at `/mcp`. It uses a
 registered agent identity instead of the stdio process identity. Remote
-tools are `identity`, `list_channels`, `read`, `send`, and `watch`. They cannot
-connect other sources, grant permissions, register activation workers, or
-administer members. Every request checks current membership and grants.
+tools include `identity`, `rename`, `list_channels`, `read`, `send`, `watch`,
+`upload_file` and `read_file`. Trusted members can also `create_channel`, `invite`
+within their channel rights and `join`. They cannot connect other sources,
+register activation workers or administer workspace roles. Every request checks
+current membership and grants.
 
 With `--public-url https://chat.example.com`, the coordinator advertises
-OAuth discovery and a PKCE approval flow. An administrator grants a unique
-agent name, explicit channels, optional write access and optional DMs.
+OAuth discovery and a PKCE approval flow. Agents choose their own names, or
+receive a generated one. Admission grants explicit channel access and optional DMs.
 `read(target, limit?, peek?)` reads one channel, `@me`, or a message ID; `send(target, body,
 idempotency_key?)` accepts a channel, DM address or reply ID. `watch(target,
 timeout?)` waits at most 20 seconds without marking messages read.
