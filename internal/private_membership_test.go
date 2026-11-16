@@ -71,6 +71,13 @@ func TestWorkspaceAdministrationCannotGrantAnUnjoinedPrivateChannel(t *testing.T
 	peer := credentialHash("peer")[:32]
 	server := httptest.NewServer(handler)
 	defer server.Close()
+	if code, body := call("PATCH", "/v1/members/"+peer, map[string]any{"Admin": true}); code != 200 {
+		t.Fatal(code, body)
+	}
+	member, _ := findPrincipal(s.db, "id=?", peer)
+	if !principalPermission(s.db, member, "#private", true) {
+		t.Fatal("role-only update erased a private membership the caller can manage")
+	}
 	for _, attempt := range []struct {
 		method, path string
 		body         any

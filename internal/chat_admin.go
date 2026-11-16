@@ -232,15 +232,11 @@ func (s *webServer) manage(w http.ResponseWriter, r *http.Request, p *Principal)
 				}
 				return true
 			}
-			if a.Admin {
-				a.Channels = []string{"*"}
-				a.Write = true
-			}
 			if a.DM {
 				a.Channels = append(a.Channels, "@*")
 			}
 			rights := map[string]bool{}
-			if a.Grants != nil && !a.Admin {
+			if a.Grants != nil {
 				a.Channels = nil
 				for _, g := range a.Grants {
 					a.Channels = append(a.Channels, g.Channel)
@@ -250,6 +246,26 @@ func (s *webServer) manage(w http.ResponseWriter, r *http.Request, p *Principal)
 			if err := cachePrincipal(s.db, member); err != nil {
 				apiError(w, 500, "Could not load existing access")
 				return true
+			}
+			if a.Admin {
+				// A role-only update keeps channel and DM rights. The editor can
+				// separately submit an explicit grant list alongside the role.
+				if a.Grants == nil {
+					for ch, g := range member.grants {
+						if g[0] {
+							a.Channels = append(a.Channels, ch)
+							rights[ch] = g[1]
+						}
+					}
+				}
+				a.Channels = append(a.Channels, "*")
+				rights["*"] = true
+			}
+			postingFor := func(ch string) bool {
+				if a.Grants != nil || a.Admin {
+					return rights[ch]
+				}
+				return a.Write
 			}
 			protected := map[string][2]bool{}
 			for ch, g := range member.grants {
@@ -263,12 +279,8 @@ func (s *webServer) manage(w http.ResponseWriter, r *http.Request, p *Principal)
 					return true
 				}
 				if strings.HasPrefix(ch, "#") && !s.access.isPublic(ch) && !canManageChannel(s.db, s.access, p, ch) && !prospectiveChannel(s.db, s.access, p, ch) {
-					posting := a.Write
-					if a.Grants != nil && !a.Admin {
-						posting = rights[ch]
-					}
 					existing, ok := protected[ch]
-					if !ok || !existing[0] || existing[1] != posting {
+					if !ok || !existing[0] || existing[1] != postingFor(ch) {
 						apiError(w, 403, "A channel member must grant access to this private channel")
 						return true
 					}
@@ -288,22 +300,13 @@ func (s *webServer) manage(w http.ResponseWriter, r *http.Request, p *Principal)
 				if err != nil {
 					break
 				}
-				_, err = tx.Exec("INSERT INTO permissions(principal_id,channel,can_read,can_write) VALUES(?,?,1,?) ON CONFLICT(principal_id,channel) DO UPDATE SET can_read=1,can_write=excluded.can_write", id, ch, func() bool {
-					if a.Grants != nil && !a.Admin {
-						return rights[ch]
-					}
-					return a.Write
-				}())
+				_, err = tx.Exec("INSERT INTO permissions(principal_id,channel,can_read,can_write) VALUES(?,?,1,?) ON CONFLICT(principal_id,channel) DO UPDATE SET can_read=1,can_write=excluded.can_write", id, ch, postingFor(ch))
 				if err == nil && member.ParentID != "" {
 					parent, findErr := findPrincipal(tx, "id=?", member.ParentID)
 					if findErr != nil {
 						err = findErr
 					} else {
-						posting := a.Write
-						if a.Grants != nil && !a.Admin {
-							posting = rights[ch]
-						}
-						err = channelGrant(tx, parent, ch, posting)
+						err = channelGrant(tx, parent, ch, postingFor(ch))
 					}
 				}
 			}

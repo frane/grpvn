@@ -62,6 +62,22 @@ test('mentions, code, attachments, member access and channel lifecycle',async({p
  await expect(page.getByRole('button',{name:'Save access',exact:true})).toBeHidden();
  const updatedChannels=(await (await friend.request.get(base+'/v1/chat/channels')).json()).channels;expect(updatedChannels.find((c:{name:string})=>c.name==='#project').write).toBe(false);
  await expect(friend.getByRole('textbox',{name:'Message #project'})).toBeDisabled({timeout:10000});
+ // Workspace administration is independent of selected channels and posting.
+ await page.getByRole('button',{name:'Edit access for alex'}).click();
+ await page.getByRole('checkbox',{name:/Workspace administrator/}).check();
+ await expect(page.getByRole('textbox',{name:'Allowed channels'})).toBeEnabled();
+ await expect(page.getByRole('textbox',{name:'Allowed channels'})).toHaveValue(/#project/);
+ await expect(page.getByRole('checkbox',{name:'Can post in #project',exact:true})).not.toBeChecked();
+ await page.getByRole('button',{name:'Save access',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Save access',exact:true})).toBeHidden();
+ expect((await (await friend.request.get(base+'/v1/auth/session')).json()).profile.admin).toBe(true);
+ expect((await (await friend.request.get(base+'/v1/chat/channels')).json()).channels.find((c:any)=>c.name==='#project').write).toBe(false);
+ await page.getByRole('button',{name:'Edit access for alex'}).click();
+ await page.getByRole('checkbox',{name:/Workspace administrator/}).uncheck();
+ await page.getByRole('button',{name:'Save access',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Save access',exact:true})).toBeHidden();
+ expect((await (await friend.request.get(base+'/v1/auth/session')).json()).profile.admin).toBe(false);
+
  await page.getByRole('button',{name:'Remove alex',exact:true}).click();await expect(friend.getByRole('button',{name:'Sign in',exact:true})).toBeVisible({timeout:10000});await page.getByRole('button',{name:'Removed',exact:true}).click();await page.getByRole('button',{name:'Restore',exact:true}).click();
  await friend.getByLabel('Your handle').fill('alex');await friend.getByLabel('Password',{exact:true}).fill('a durable friend password');await friend.getByRole('button',{name:'Sign in',exact:true}).click();await expect(friend.getByRole('textbox',{name:'Message #project'})).toBeVisible();expect((await (await friend.request.get(base+'/v1/auth/session')).json()).profile.id).toBe(friendID);
  await page.getByRole('button',{name:'Close dialog'}).click();await page.locator('button.channel').filter({hasText:'project'}).click({button:'right'});await page.getByRole('menuitem',{name:'Leave channel',exact:true}).click();await expect(page.getByRole('textbox',{name:'Message #general'})).toBeVisible();
