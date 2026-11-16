@@ -38,9 +38,11 @@ func TestRemoteDiscoveryWithLegacyCoordinator(t *testing.T) {
 func testCoordinator(t *testing.T, db *sql.DB, token string, channels ...string) *httptest.Server {
 	t.Helper()
 	if token != "" {
-		seedTestAgent(t, db, token, "alice", []string{"*"})
+		scope := append([]string{"*", "#dev"}, channels...)
+		seedTestAgent(t, db, token, "alice", scope)
+		encoded, _ := json.Marshal(scope)
 		_, err := db.Exec(`INSERT OR IGNORE INTO invites (id,secret_hash,person,channels,can_write,expires_at,uses_left,created_at)
-		VALUES (?,?,?,'["*"]',1,?,1000,?)`, NewMessage("", "", nil).ID, credentialHash(token), "fixture", time.Now().Add(time.Hour).UnixMilli(), time.Now().UnixMilli())
+		VALUES (?,?,?,?,1,?,1000,?)`, NewMessage("", "", nil).ID, credentialHash(token), "fixture", string(encoded), time.Now().Add(time.Hour).UnixMilli(), time.Now().UnixMilli())
 		if err != nil {
 			t.Fatal(err)
 		}

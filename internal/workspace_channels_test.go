@@ -120,8 +120,8 @@ func TestWorkspaceMembersCreateInviteAndCommunicate(t *testing.T) {
 	req := httptest.NewRequest("GET", "https://test/v1/channels", nil)
 	out := httptest.NewRecorder()
 	handler.ServeHTTP(out, req)
-	if out.Code != 200 || !strings.Contains(out.Body.String(), "#public") || strings.Contains(out.Body.String(), "#ftkit") {
-		t.Fatalf("anonymous discovery violated channel visibility: %d %s", out.Code, out.Body.String())
+	if out.Code != 401 || strings.Contains(out.Body.String(), "#public") || strings.Contains(out.Body.String(), "#ftkit") {
+		t.Fatalf("public workspace channels leaked to anonymous internet users: %d %s", out.Code, out.Body.String())
 	}
 	call("alice", "create_channel", map[string]any{"channel": "#public", "open": false})
 	var open bool
@@ -161,8 +161,11 @@ func TestWorkspaceInviteAdmitsRegisteredPeerWithoutAdminCode(t *testing.T) {
 	if value, failed := remoteTool(t, handler, "peer-token", "send", map[string]any{"target": "#project", "body": "joined without code relay"}); failed {
 		t.Fatal(value)
 	}
-	if value, failed := remoteTool(t, handler, "peer-token", "send", map[string]any{"target": "#general", "body": "not invited here"}); !failed {
-		t.Fatalf("invitation exceeded granted channel: %v", value)
+	if value, failed := remoteTool(t, handler, "owner-token", "create_channel", map[string]any{"channel": "#not-invited"}); failed {
+		t.Fatal(value)
+	}
+	if value, failed := remoteTool(t, handler, "peer-token", "send", map[string]any{"target": "#not-invited", "body": "not invited here"}); !failed {
+		t.Fatalf("invitation exceeded granted private channel: %v", value)
 	}
 	if value, failed := remoteTool(t, handler, "peer-token", "send", map[string]any{"target": "#my-project", "body": "can collaborate autonomously"}); failed {
 		t.Fatal(value)

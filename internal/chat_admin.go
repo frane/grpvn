@@ -53,7 +53,10 @@ func setChannelJoined(db dbtx, id, channel string, joined bool) error {
 	_, err := db.Exec("INSERT INTO channel_subscriptions(principal_id,channel,joined) VALUES(?,?,?) ON CONFLICT(principal_id,channel) DO UPDATE SET joined=excluded.joined", id, channel, joined)
 	return err
 }
-func canManageChannel(db dbtx, p *Principal, channel string) bool {
+func canManageChannel(db dbtx, access *channelAccess, p *Principal, channel string) bool {
+	if !access.local && !principalPermission(db, p, channel, false) && !access.publicReadable(db, p, channel) && !access.isOpenWith(db, channel) {
+		return false
+	}
 	if principalPermission(db, p, "*", true) {
 		return true
 	}
@@ -244,10 +247,31 @@ func (s *webServer) manage(w http.ResponseWriter, r *http.Request, p *Principal)
 					rights[g.Channel] = g.Write
 				}
 			}
+			if err := cachePrincipal(s.db, member); err != nil {
+				apiError(w, 500, "Could not load existing access")
+				return true
+			}
+			protected := map[string][2]bool{}
+			for ch, g := range member.grants {
+				if strings.HasPrefix(ch, "#") && !canManageChannel(s.db, s.access, p, ch) {
+					protected[ch] = g
+				}
+			}
 			for _, ch := range a.Channels {
 				if ch != "*" && ch != "@*" && validateChannel(ch) != nil {
 					apiError(w, 400, "Invalid channel")
 					return true
+				}
+				if strings.HasPrefix(ch, "#") && !s.access.isPublic(ch) && !canManageChannel(s.db, s.access, p, ch) && !prospectiveChannel(s.db, s.access, p, ch) {
+					posting := a.Write
+					if a.Grants != nil && !a.Admin {
+						posting = rights[ch]
+					}
+					existing, ok := protected[ch]
+					if !ok || !existing[0] || existing[1] != posting {
+						apiError(w, 403, "A channel member must grant access to this private channel")
+						return true
+					}
 				}
 			}
 			tx, err := beginWrite(s.db)
@@ -258,6 +282,9 @@ func (s *webServer) manage(w http.ResponseWriter, r *http.Request, p *Principal)
 			defer tx.Rollback()
 			_, err = tx.Exec("DELETE FROM permissions WHERE principal_id=?", id)
 			for _, ch := range a.Channels {
+				if _, locked := protected[ch]; locked {
+					continue
+				}
 				if err != nil {
 					break
 				}
@@ -280,6 +307,14 @@ func (s *webServer) manage(w http.ResponseWriter, r *http.Request, p *Principal)
 					}
 				}
 			}
+			for ch, g := range protected {
+				if err == nil {
+					_, err = tx.Exec("INSERT INTO permissions(principal_id,channel,can_read,can_write) VALUES(?,?,?,?) ON CONFLICT(principal_id,channel) DO UPDATE SET can_read=excluded.can_read,can_write=excluded.can_write", id, ch, g[0], g[1])
+				}
+			}
+			if err == nil {
+				err = joinGeneral(tx, id)
+			}
 			if err != nil || tx.Commit() != nil {
 				apiError(w, 500, "Could not update access")
 				return true
@@ -299,7 +334,7 @@ func (s *webServer) manage(w http.ResponseWriter, r *http.Request, p *Principal)
 		if !webDecode(w, r, &a) {
 			return true
 		}
-		if validateChannel(a.Channel) != nil || !canManageChannel(s.db, p, a.Channel) {
+		if validateChannel(a.Channel) != nil || !canManageChannel(s.db, s.access, p, a.Channel) {
 			apiError(w, 403, "A channel owner or workspace administrator is required")
 			return true
 		}
@@ -324,7 +359,7 @@ func (s *webServer) manage(w http.ResponseWriter, r *http.Request, p *Principal)
 				return true
 			}
 			channel = a.Channel
-			if !canManageChannel(s.db, p, channel) {
+			if !canManageChannel(s.db, s.access, p, channel) {
 				apiError(w, 403, "Channel owner or administrator required")
 				return true
 			}
@@ -354,16 +389,24 @@ func (s *webServer) manage(w http.ResponseWriter, r *http.Request, p *Principal)
 				}
 				return true
 			}
-			peer, err := findPrincipal(s.db, "id=?", a.MemberID)
+			_, err := findPrincipal(s.db, "id=?", a.MemberID)
 			if err != nil {
 				apiError(w, 404, "Member not found")
 				return true
 			}
-			if principalPermission(s.db, peer, "*", false) {
-				apiError(w, 409, "This member has workspace-wide access; edit their workspace access instead")
+			tx, err := beginWrite(s.db)
+			if err != nil {
+				apiError(w, 500, "Could not remove member")
 				return true
 			}
-			_, err = s.db.Exec("DELETE FROM permissions WHERE principal_id=? AND channel=?", a.MemberID, channel)
+			defer tx.Rollback()
+			_, err = tx.Exec("DELETE FROM permissions WHERE principal_id=? AND channel=?", a.MemberID, channel)
+			if err == nil {
+				err = setChannelJoined(tx, a.MemberID, channel, false)
+			}
+			if err == nil {
+				err = tx.Commit()
+			}
 			if err != nil {
 				apiError(w, 500, "Could not remove member")
 			} else {
@@ -411,7 +454,22 @@ func (s *webServer) manage(w http.ResponseWriter, r *http.Request, p *Principal)
 			apiError(w, 403, "Channel access denied")
 			return true
 		}
-		if err := setChannelJoined(s.db, p.ID, a.Channel, joined); err != nil {
+		tx, err := beginWrite(s.db)
+		if err != nil {
+			apiError(w, 500, "Could not update membership")
+			return true
+		}
+		defer tx.Rollback()
+		if !joined && !s.local && !s.access.isPublicWith(tx, a.Channel) {
+			_, err = tx.Exec("DELETE FROM permissions WHERE principal_id=? AND channel=?", p.ID, a.Channel)
+		}
+		if err == nil {
+			err = setChannelJoined(tx, p.ID, a.Channel, joined)
+		}
+		if err == nil {
+			err = tx.Commit()
+		}
+		if err != nil {
 			apiError(w, 500, "Could not update membership")
 		} else {
 			writeJSON(w, 200, map[string]bool{"joined": joined})
@@ -442,13 +500,22 @@ func (s *webServer) memberList(w http.ResponseWriter, channel string, viewer *Pr
 		if err != nil || cachePrincipal(s.db, p) != nil {
 			continue
 		}
+		if channel != "" && !isChatParticipant(p) {
+			continue
+		}
 		if channel != "" && (!principalPermission(s.db, p, channel, false) || !channelJoined(s.db, p.ID, channel)) {
+			continue
+		}
+		if channel != "" && p.Status != "active" {
 			continue
 		}
 		seen[principalAddress(p)] = true
 		grants := []map[string]any{}
 		for ch, g := range p.grants {
 			if channel != "" && ch != channel {
+				continue
+			}
+			if channel == "" && strings.HasPrefix(ch, "#") && !s.access.local && !s.access.isPublic(ch) && !principalPermission(s.db, viewer, ch, false) {
 				continue
 			}
 			if g[0] {

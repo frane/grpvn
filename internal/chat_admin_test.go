@@ -9,8 +9,12 @@ import (
 
 func TestChatAdministrationAndChannelLifecycle(t *testing.T) {
 	db := newTestDB(t)
-	seedTestAgent(t, db, "owner-token", "owner", []string{"*"})
+	seedTestAgent(t, db, "owner-token", "owner", []string{"*", "#project", "#audit"})
 	seedTestAgent(t, db, "peer-token", "peer", []string{"#project", "@*"})
+	ownerProfile, _ := findPrincipal(db, "name=?", "owner")
+	if _, err := db.Exec("INSERT INTO workspace_channels(channel,owner_id,creator_id,is_open,created_at) VALUES('#project',?,?,1,0)", ownerProfile.ID, ownerProfile.ID); err != nil {
+		t.Fatal(err)
+	}
 	h, err := CoordinatorHandler(db, CoordinatorOptions{Web: true})
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +153,7 @@ func TestLocalAgentRemovalAndRestorationPreserveHistory(t *testing.T) {
 
 func TestAgentAccessEditExtendsOwnerWithoutPromotingReadOnlyGrants(t *testing.T) {
 	db := newTestDB(t)
-	seedTestAgent(t, db, "admin-token", "admin", []string{"*"})
+	seedTestAgent(t, db, "admin-token", "admin", []string{"*", "#new", "#audit"})
 	seedTestAgent(t, db, "owner-token", "device", []string{"#general"})
 	seedTestAgent(t, db, "child-token", "worker", []string{"#general"})
 	owner, _ := findPrincipal(db, "name=?", "device")
@@ -176,7 +180,7 @@ func TestAgentAccessEditExtendsOwnerWithoutPromotingReadOnlyGrants(t *testing.T)
 
 func TestLocalChannelRosterIncludesAuthorsAndSupportsRemoval(t *testing.T) {
 	db := newTestDB(t)
-	seedTestAgent(t, db, "admin-token", "admin", []string{"*"})
+	seedTestAgent(t, db, "admin-token", "admin", []string{"*", "#project"})
 	_, _ = db.Exec("INSERT INTO principal_approvals(principal_id,approved) SELECT id,1 FROM principals WHERE name='admin'")
 	_, _ = Send(db, "reef", "#project", "Existing local participant", "", false)
 	_, _ = Send(db, "elsewhere", "#other", "Other channel participant", "", false)

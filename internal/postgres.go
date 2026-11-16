@@ -211,6 +211,15 @@ DROP TRIGGER IF EXISTS grpvn_metadata_notify ON chat_metadata;
 CREATE TRIGGER grpvn_metadata_notify AFTER INSERT OR UPDATE ON chat_metadata FOR EACH ROW EXECUTE FUNCTION grpvn_metadata_notify();`); err != nil {
 		return err
 	}
+	var current int
+	if err = tx.QueryRow("SELECT COALESCE(MAX(version),0) FROM schema_version").Scan(&current); err != nil {
+		return err
+	}
+	if current < 4 {
+		if err = preserveParticipatingMembers(tx); err != nil {
+			return err
+		}
+	}
 	if _, err = tx.Exec("INSERT INTO schema_version(version,applied_at) VALUES(?,?) ON CONFLICT DO NOTHING", CurrentSchemaVersion, time.Now().UnixMilli()); err != nil {
 		return err
 	}

@@ -97,7 +97,7 @@ func (s *webServer) fileAllowed(p *Principal, f ChatFile, write bool) bool {
 		return (f.Uploader == p.ID || principalOwnsAddress(p, strings.TrimPrefix(f.Target, "@"))) && principalPermission(s.db, p, "@*", write)
 	}
 	if p.Kind == "member" && !write {
-		return s.access.isServed(f.Target) && (s.access.isOpen(f.Target) || principalPermission(s.db, p, f.Target, false))
+		return s.access.isServed(f.Target) && (s.access.isOpen(f.Target) || s.access.publicReadable(s.db, p, f.Target) || principalPermission(s.db, p, f.Target, false))
 	}
 	return s.can(p, f.Target, write)
 }

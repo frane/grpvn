@@ -180,7 +180,10 @@ func principalPermission(db dbtx, p *Principal, channel string, write bool) bool
 		if write {
 			index = 1
 		}
-		allowed := p.grants[channel][index] || p.grants["*"][index]
+		// Workspace roles never enroll an identity in private conversations.
+		// Open-channel access is handled by channelAccess; channel grants are
+		// exact, including for workspace administrators.
+		allowed := p.grants[channel][index] || (!strings.HasPrefix(channel, "#") && p.grants["*"][index])
 		if p.parent != nil {
 			return allowed && principalPermission(db, p.parent, channel, write)
 		}
@@ -191,7 +194,11 @@ func principalPermission(db dbtx, p *Principal, channel string, write bool) bool
 		column = "can_write"
 	}
 	var allowed bool
-	if err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM permissions WHERE principal_id = ? AND channel IN (?, '*') AND "+column+" = 1)", p.ID, channel).Scan(&allowed); err != nil || !allowed {
+	pattern := channel
+	if !strings.HasPrefix(channel, "#") {
+		pattern = "*"
+	}
+	if err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM permissions WHERE principal_id = ? AND channel IN (?, ?) AND "+column+" = 1)", p.ID, channel, pattern).Scan(&allowed); err != nil || !allowed {
 		return false
 	}
 	if p.ParentID != "" {
@@ -289,7 +296,7 @@ func registerMember(db *sql.DB, access *channelAccess, request registrationReque
 		}
 		prospective := map[string]bool{}
 		for _, ch := range request.Channels {
-			if !access.isServed(ch) || (!access.isOpenWith(tx, ch) && !principalPermission(tx, parent, ch, false)) {
+			if !access.isServed(ch) || (!(access.isPublicWith(tx, ch) && trustedWorkspaceIdentity(tx, parent)) && !principalPermission(tx, parent, ch, false)) {
 				if prospectiveChannel(tx, access, parent, ch) {
 					prospective[ch] = true
 				} else {
@@ -330,7 +337,9 @@ func registerMember(db *sql.DB, access *channelAccess, request registrationReque
 				rows.Close()
 				return nil, err
 			}
-			grants = append(grants, ch)
+			if ch == "@*" || (p.Kind == "human" && ch == "*") {
+				grants = append(grants, ch)
+			}
 		}
 		err = rows.Err()
 		rows.Close()
@@ -386,8 +395,15 @@ func registerMember(db *sql.DB, access *channelAccess, request registrationReque
 	}
 	for _, ch := range grants {
 		canWrite := write
-		if parent != nil && !access.isOpenWith(tx, ch) {
-			canWrite = principalPermission(tx, parent, ch, true)
+		if parent != nil {
+			if !access.isPublicWith(tx, ch) || principalPermission(tx, parent, ch, false) {
+				canWrite = principalPermission(tx, parent, ch, true)
+			}
+			if access.isPublicWith(tx, ch) && strings.HasPrefix(ch, "#") && !principalPermission(tx, parent, ch, false) {
+				if err := channelGrant(tx, parent, ch, canWrite); err != nil {
+					return nil, err
+				}
+			}
 		}
 		if _, err := tx.Exec("INSERT INTO permissions (principal_id,channel,can_read,can_write) VALUES (?,?,1,?) ON CONFLICT(principal_id,channel) DO UPDATE SET can_read=1,can_write=excluded.can_write", p.ID, ch, canWrite); err != nil {
 			return nil, err
@@ -395,6 +411,11 @@ func registerMember(db *sql.DB, access *channelAccess, request registrationReque
 	}
 	if request.Invite != "" && parent == nil {
 		if _, err := tx.Exec("INSERT INTO principal_approvals(principal_id,approved) VALUES(?,1) ON CONFLICT(principal_id) DO UPDATE SET approved=1", p.ID); err != nil {
+			return nil, err
+		}
+	}
+	if p.Status == "active" {
+		if err := joinGeneral(tx, p.ID); err != nil {
 			return nil, err
 		}
 	}
@@ -528,6 +549,9 @@ func ApproveMember(db *sql.DB, code, name string, channels []string, write bool,
 		if _, err := tx.Exec("UPDATE oauth_request_approvals SET approved=1 WHERE request_id=?", requestID); err != nil {
 			return err
 		}
+	}
+	if err := joinGeneral(tx, p.ID); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

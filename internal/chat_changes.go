@@ -8,7 +8,7 @@ import (
 // Membership changes made by CLI administrators must also reach open clients.
 // Read cursors, daemon heartbeats and sync scheduling are deliberately absent.
 func installChatChangeTriggers(db dbtx, postgres bool) error {
-	tables := []string{"principals", "permissions", "principal_aliases", "channel_subscriptions", "channel_archives", "local_participants", "local_channel_grants"}
+	tables := []string{"principals", "permissions", "principal_aliases", "channel_subscriptions", "channel_archives", "local_participants", "local_channel_grants", "oauth_request_approvals"}
 	var query strings.Builder
 	if postgres {
 		query.WriteString(`CREATE OR REPLACE FUNCTION grpvn_chat_revision() RETURNS trigger LANGUAGE plpgsql AS $$

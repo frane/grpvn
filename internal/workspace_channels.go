@@ -101,6 +101,14 @@ func channelGrant(db dbtx, p *Principal, channel string, write bool) error {
 			}
 		}
 	}
+	if err := joinGeneral(db, p.ID); err != nil {
+		return err
+	}
+	if p.ParentID != "" {
+		if err := joinGeneral(db, p.ParentID); err != nil {
+			return err
+		}
+	}
 	return TouchChatMetadata(db)
 }
 
@@ -138,8 +146,14 @@ func CreateWorkspaceChannel(db *sql.DB, access *channelAccess, p *Principal, cha
 	}
 	err = tx.QueryRow("SELECT is_open,owner_id,creator_id FROM workspace_channels WHERE channel=?", channel).Scan(&result.Open, &result.Owner, &result.Creator)
 	if err == nil {
-		if !access.isOpenWith(tx, channel) && !principalPermission(tx, p, channel, false) {
+		result.Open = access.isPublicWith(tx, channel)
+		if !access.isPublicWith(tx, channel) && !principalPermission(tx, p, channel, false) {
 			return result, fmt.Errorf("channel permission denied")
+		}
+		if access.isPublicWith(tx, channel) {
+			if err := joinPublicChannel(tx, p, channel); err != nil {
+				return result, err
+			}
 		}
 		return result, tx.Commit()
 	}
@@ -151,12 +165,17 @@ func CreateWorkspaceChannel(db *sql.DB, access *channelAccess, p *Principal, cha
 		return result, err
 	}
 	if existing {
-		if !access.isOpenWith(tx, channel) && !principalPermission(tx, p, channel, true) {
+		if !access.isPublicWith(tx, channel) && !principalPermission(tx, p, channel, true) {
 			return result, fmt.Errorf("channel permission denied; ask a member to invite you")
 		}
-		result.Open = access.isOpenWith(tx, channel)
+		result.Open = access.isPublicWith(tx, channel)
 		result.Owner = ""
 		result.Creator = ""
+		if result.Open {
+			if err := joinPublicChannel(tx, p, channel); err != nil {
+				return result, err
+			}
+		}
 		return result, tx.Commit()
 	}
 	if configured, ok := access.overrides[channel]; ok && configured != result.Open {
@@ -286,6 +305,9 @@ func InviteWorkspaceAgent(db *sql.DB, access *channelAccess, inviter *Principal,
 		return nil, err
 	}
 	if _, err := tx.Exec(`UPDATE oauth_request_approvals SET approved=1 WHERE request_id IN(SELECT id FROM oauth_requests WHERE principal_id=? AND consumed=0 AND expires_at>?)`, recipient.ID, time.Now().UnixMilli()); err != nil {
+		return nil, err
+	}
+	if err := joinGeneral(tx, recipient.ID); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {

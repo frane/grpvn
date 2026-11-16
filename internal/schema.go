@@ -370,6 +370,10 @@ CREATE TABLE IF NOT EXISTS human_notifications (
  principal_id TEXT PRIMARY KEY REFERENCES principals(id),level TEXT NOT NULL DEFAULT 'important',
  desktop INTEGER NOT NULL DEFAULT 0,preview INTEGER NOT NULL DEFAULT 0,sound INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS human_request_notifications (
+ principal_id TEXT NOT NULL REFERENCES principals(id),request_id TEXT NOT NULL,notified_at INTEGER NOT NULL,
+ PRIMARY KEY(principal_id,request_id)
+);
 CREATE TABLE IF NOT EXISTS bridge_leases (
     session_id TEXT PRIMARY KEY REFERENCES agent_sessions(id),
     owner TEXT NOT NULL, expires_at INTEGER NOT NULL

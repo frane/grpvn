@@ -5,7 +5,7 @@ export type Member = Person & {grants:{channel:string;write:boolean}[];admin:boo
 export type UploadedFile={id:string;name:string;type:string;size:number;image:boolean;url:string};
 export type Person = { id: string; name: string; kind: 'human' | 'agent'; status: string;runtime?:string;last_seen?:number;last_message?:number;muted?:boolean;unread?:number };
 export type Message = { seq: number; id: string; sender: string; target: string; body: string; chain_root: string; parent_id: string | null; created_at: number; kind: string; mine: boolean; pending: boolean;reply_count?:number;reply_unread?:number;last_reply_at?:number;reply_following?:boolean };
-export type Approval = { id: string; name: string; code: string; channels: string[] };
+export type Approval = { id:string;profile_id:string;name:string;code:string;channels:string[];client?:string;redirect?:string;expires_at?:number;notified?:boolean };
 export class ApiError extends Error { constructor(public status: number, message: string) { super(message); } }
 const routes: Record<string,string> = {
  activity:'/v1/chat/activity',threads:'/v1/chat/threads','notification-settings':'/v1/chat/notification-settings',
@@ -14,7 +14,7 @@ const routes: Record<string,string> = {
 };
 export async function api<T>(path: string, body?: unknown, method?:string): Promise<T> {
   const [name,query] = path.split('?');
-  const endpoint=name.startsWith('members/')?'/v1/members/'+name.slice(8):name.startsWith('connections/') ? '/v1/workspace-connections/'+name.slice(12) : name==='sources'&&body!==undefined ? '/v1/workspace-connections' : name==='approvals'&&body!==undefined ? '/v1/access-approvals' : routes[name];
+  const endpoint=name.startsWith('members/')?'/v1/members/'+name.slice(8):name.startsWith('connections/') ? '/v1/workspace-connections/'+name.slice(12) : name==='sources'&&body!==undefined ? '/v1/workspace-connections' : name==='approvals'&&body!==undefined&&method!=='PATCH' ? '/v1/access-approvals' : routes[name];
   const response = await fetch(endpoint + (query ? '?' + query : ''), { credentials: 'same-origin',method:method||(body===undefined?'GET':'POST'), ...(body !== undefined ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}) });
   const data = await response.json();
   if (!response.ok) throw new ApiError(response.status, data.error || 'Something went wrong. Try again.');

@@ -22,12 +22,13 @@ type CoordinatorOptions struct {
 type channelAccess struct {
 	db        *sql.DB
 	open      bool
+	local     bool
 	served    map[string]bool
 	overrides map[string]bool // true = open, false = private
 }
 
 func newChannelAccess(options CoordinatorOptions) (*channelAccess, error) {
-	a := &channelAccess{open: options.Open, served: map[string]bool{}, overrides: map[string]bool{}}
+	a := &channelAccess{open: options.Open, local: options.LocalUI, served: map[string]bool{}, overrides: map[string]bool{}}
 	for _, channel := range options.Channels {
 		if err := validateChannel(channel); err != nil {
 			return nil, err
@@ -73,10 +74,35 @@ func (a *channelAccess) isOpenWith(db dbtx, channel string) bool {
 	if db != nil {
 		var open bool
 		if db.QueryRow("SELECT is_open FROM workspace_channels WHERE channel=?", channel).Scan(&open) == nil {
+			return open && a.open
+		}
+	}
+	return a.open
+}
+
+// Public channels belong to the workspace. Anonymous internet access requires
+// an explicit serve --open/--open-channel setting independently of visibility.
+func (a *channelAccess) isPublicWith(db dbtx, channel string) bool {
+	if open, ok := a.overrides[channel]; ok {
+		return open
+	}
+	if db != nil {
+		if channel == "#general" {
+			var enabled string
+			if db.QueryRow("SELECT value FROM server_meta WHERE key='auto_general'").Scan(&enabled) == nil && enabled == "1" {
+				return true
+			}
+		}
+		var open bool
+		if db.QueryRow("SELECT is_open FROM workspace_channels WHERE channel=?", channel).Scan(&open) == nil {
 			return open
 		}
 	}
 	return a.open
+}
+func (a *channelAccess) isPublic(channel string) bool { return a.isPublicWith(a.db, channel) }
+func (a *channelAccess) publicReadable(db dbtx, p *Principal, channel string) bool {
+	return p != nil && (p.scopes == nil || p.scopes["grpvn.read"]) && a.isPublicWith(db, channel) && trustedWorkspaceIdentity(db, p)
 }
 
 func (a *channelAccess) authenticated(r *http.Request) bool {
@@ -84,7 +110,8 @@ func (a *channelAccess) authenticated(r *http.Request) bool {
 }
 
 func (a *channelAccess) canAccess(r *http.Request, channel string) bool {
-	return a.isServed(channel) && (a.isOpen(channel) || principalPermission(a.db, requestPrincipal(r), channel, false))
+	p := requestPrincipal(r)
+	return a.isServed(channel) && (a.isOpen(channel) || a.publicReadable(a.db, p, channel) || principalPermission(a.db, p, channel, false))
 }
 
 func (a *channelAccess) hasAnonymousAccess() bool {
@@ -111,25 +138,6 @@ func (a *channelAccess) hasAnonymousAccessWith(db dbtx) bool {
 			return true
 		}
 	}
-	if db != nil {
-		rows, err := db.Query("SELECT channel FROM workspace_channels WHERE is_open=1")
-		if err != nil {
-			return false
-		}
-		var channels []string
-		for rows.Next() {
-			var channel string
-			if rows.Scan(&channel) == nil {
-				channels = append(channels, channel)
-			}
-		}
-		rows.Close()
-		for _, channel := range channels {
-			if a.isServed(channel) && a.isOpenWith(db, channel) {
-				return true
-			}
-		}
-	}
 	return false
 }
 
@@ -148,7 +156,11 @@ func (a *channelAccess) authorize(w http.ResponseWriter, r *http.Request, channe
 		apiError(w, http.StatusForbidden, "credential does not grant write scope")
 		return false
 	}
-	if !a.isOpen(channel) && !principalPermission(a.db, p, channel, write) {
+	if write && principalPermission(a.db, p, channel, false) && !principalPermission(a.db, p, channel, true) {
+		apiError(w, 403, "Channel is read-only for this member")
+		return false
+	}
+	if !a.isOpen(channel) && !principalPermission(a.db, p, channel, write) && !(!write && a.publicReadable(a.db, p, channel)) {
 		if write && ensureSendChannel(a.db, a, p, channel) {
 			return true
 		}

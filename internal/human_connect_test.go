@@ -143,7 +143,7 @@ func TestDesktopWorkspaceSignInReusesHumanProfile(t *testing.T) {
 		t.Fatal("desktop posted as another profile", author)
 	}
 	created := "#" + alias + "/desktop-project"
-	call("POST", local.URL+"/v1/chat/channels", local.URL, map[string]any{"Channel": created, "Open": false})
+	call("POST", local.URL+"/v1/chat/channels", local.URL, map[string]any{"Channel": created, "Open": true})
 	invitation := call("POST", local.URL+"/v1/chat/invitations", local.URL, map[string]any{"Channel": created, "Write": true})
 	if !strings.HasPrefix(invitation["url"].(string), remoteBase+"/join?") {
 		t.Fatal("desktop invitation did not use the remote workspace", invitation)
@@ -153,7 +153,10 @@ func TestDesktopWorkspaceSignInReusesHumanProfile(t *testing.T) {
 	messageIn(t, remoteDB, "#desktop-project", "Created from the desktop")
 	management := local.URL + "/v1/chat/channels?workspace=" + url.QueryEscape(alias)
 	call("POST", local.URL+"/v1/chat/memberships?workspace="+url.QueryEscape(alias), local.URL, map[string]string{"Channel": created, "Action": "leave"})
-	call("POST", remoteBase+"/v1/chat/messages", remoteBase, map[string]string{"Target": "#desktop-project", "Body": "History after the desktop left", "IdempotencyKey": "archived-history"})
+	seedTestAgent(t, remoteDB, "history-peer", "history-peer", []string{"#desktop-project"})
+	if _, failed := remoteTool(t, h, "history-peer", "send", map[string]string{"target": "#desktop-project", "body": "History after the desktop left", "idempotency_key": "archived-history"}); failed {
+		t.Fatal("another participant could not post while the desktop was away")
+	}
 	call("PATCH", management, local.URL, map[string]any{"Channel": created, "Archived": true})
 	if !channelArchived(remoteDB, "#desktop-project") || !channelArchived(localDB, created) {
 		t.Fatal("desktop did not archive the remote channel")

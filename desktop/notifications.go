@@ -24,6 +24,8 @@ type desktopCommand struct {
 	Root      string
 	Sound     bool
 	Count     int
+	Action    string
+	Workspace string
 }
 type systemNotifications interface {
 	ServiceStartup(context.Context, application.ServiceOptions) error
@@ -112,7 +114,7 @@ func (n *desktopNotifications) handle(command desktopCommand, reply func(any)) {
 		case "requestNotifications":
 			granted, err = n.service.RequestNotificationAuthorization()
 		case "notify":
-			if !validNotificationTarget(command.Target, command.Root) || command.ID == "" || len(command.ID) > 500 {
+			if !validNotificationTarget(command.Target, command.Root) || command.ID == "" || len(command.ID) > 500 || (command.Action != "" && command.Action != "requests") || len(command.Workspace) > 200 || strings.ContainsAny(command.Workspace, "\r\n\x00") {
 				err = fmt.Errorf("invalid notification target")
 				break
 			}
@@ -124,7 +126,7 @@ func (n *desktopNotifications) handle(command desktopCommand, reply func(any)) {
 				if runtime.GOOS == "windows" {
 					threadID = ""
 				}
-				err = n.service.SendNotification(notifications.NotificationOptions{ID: command.ID, Title: notificationText(command.Title, 140), Body: notificationText(command.Body, 600), ThreadID: threadID, Sound: &notifications.NotificationSound{Silent: !command.Sound}, Data: map[string]interface{}{"target": command.Target, "root": command.Root}})
+				err = n.service.SendNotification(notifications.NotificationOptions{ID: command.ID, Title: notificationText(command.Title, 140), Body: notificationText(command.Body, 600), ThreadID: threadID, Sound: &notifications.NotificationSound{Silent: !command.Sound}, Data: map[string]interface{}{"target": command.Target, "root": command.Root, "action": command.Action, "workspace": command.Workspace}})
 			}
 		}
 	}
@@ -134,15 +136,20 @@ func (n *desktopNotifications) handle(command desktopCommand, reply func(any)) {
 	}
 	reply(result)
 }
-func (n *desktopNotifications) onOpen(open func(string, string)) {
+func (n *desktopNotifications) onOpen(open func(string, string, string, string)) {
 	n.service.OnNotificationResponse(func(result notifications.NotificationResult) {
 		if result.Error != nil || result.Response.ActionIdentifier != notifications.DefaultActionIdentifier {
 			return
 		}
 		target, _ := result.Response.UserInfo["target"].(string)
 		root, _ := result.Response.UserInfo["root"].(string)
+		action, _ := result.Response.UserInfo["action"].(string)
+		workspace, _ := result.Response.UserInfo["workspace"].(string)
 		if validNotificationTarget(target, root) {
-			open(target, root)
+			if action != "" && action != "requests" {
+				return
+			}
+			open(target, root, action, workspace)
 		}
 	})
 }

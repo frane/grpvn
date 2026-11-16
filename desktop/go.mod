@@ -3,7 +3,7 @@ module github.com/frane/grpvn/desktop
 go 1.26.2
 
 require (
-	github.com/frane/grpvn v0.13.4
+	github.com/frane/grpvn v0.13.5
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/tc-hib/winres v0.3.1
 	github.com/wailsapp/wails/v3 v3.0.0

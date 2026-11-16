@@ -62,7 +62,7 @@ func TestDistributedCLI(t *testing.T) {
 	host.mustRun("q", "#dev", "review this")
 	endpoint, stop := startCoordinator(t, host)
 	a, b := newRunner(t, "alice"), newRunner(t, "bob")
-	invite := strings.TrimSpace(host.mustRun("iv", "--to", "team", "--channel", "*", "--write", "--uses", "2"))
+	invite := strings.TrimSpace(host.mustRun("iv", "--to", "team", "--channel", "#dev", "--channel", "#ops", "--write", "--uses", "2"))
 	a.mustRun("j", "work", endpoint, "#dev", "#ops", "--invite", invite)
 	b.mustRun("connect", "work", endpoint, "#dev", "--invite", invite)
 	rootID := strings.Fields(b.mustRun("l", "#work/dev", "--full"))[0]
@@ -108,7 +108,7 @@ func TestMCPConnectRemote(t *testing.T) {
 	host := newRunner(t, "host")
 	host.mustRun("s", "#dev", "remote MCP message")
 	endpoint, _ := startCoordinator(t, host)
-	invite := strings.TrimSpace(host.mustRun("iv", "--to", "team", "--channel", "*", "--write"))
+	invite := strings.TrimSpace(host.mustRun("iv", "--to", "team", "--channel", "#dev", "--write"))
 	client := newRunner(t, "alice")
 	cmd := exec.Command(client.bin, "serve")
 	cmd.Dir, cmd.Env = client.cwd, client.env

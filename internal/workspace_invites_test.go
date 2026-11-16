@@ -202,7 +202,7 @@ func TestOpenChannelRegistrationAndExistingProfileJoin(t *testing.T) {
 	if _, err := db.Exec("INSERT INTO principal_approvals(principal_id,approved) SELECT id,1 FROM principals WHERE name='owner'"); err != nil {
 		t.Fatal(err)
 	}
-	handler, err := CoordinatorHandler(db, CoordinatorOptions{})
+	handler, err := CoordinatorHandler(db, CoordinatorOptions{OpenChannels: []string{"#lobby"}})
 	if err != nil {
 		t.Fatal(err)
 	}

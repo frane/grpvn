@@ -53,10 +53,10 @@ func main() {
 		_ = app.Browser.OpenURL(command.URL)
 	}, Name: "grpvn", Description: "grpvn chat", Icon: appIcon, Services: []application.Service{application.NewService(notifier)}, Linux: application.LinuxOptions{ApplicationID: "com.offbyte.grpvn", DisableQuitOnLastWindowClosed: true}, OnShutdown: func() { server.Close() }})
 	window = app.Window.NewWithOptions(application.WebviewWindowOptions{Title: "grpvn", Width: 1240, Height: 820, MinWidth: 760, MinHeight: 520, URL: server.URL, Linux: application.LinuxWindow{Icon: appIcon}})
-	notifier.onOpen(func(target, root string) {
+	notifier.onOpen(func(target, root, action, workspace string) {
 		window.Show()
 		window.Focus()
-		encoded, _ := json.Marshal(map[string]string{"target": target, "root": root})
+		encoded, _ := json.Marshal(map[string]string{"target": target, "root": root, "action": action, "workspace": workspace})
 		window.ExecJS("window.dispatchEvent(new CustomEvent('grpvn:open-notification',{detail:" + string(encoded) + "}));")
 	})
 	menu := app.NewMenu()

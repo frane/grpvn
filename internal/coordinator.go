@@ -102,6 +102,9 @@ func CoordinatorHandler(db *sql.DB, options CoordinatorOptions) (http.Handler, e
 		return nil, err
 	}
 	access.db = db
+	if err := configureGeneral(db, access); err != nil {
+		return nil, err
+	}
 	id := NewMessage("", "", nil).ID
 	if _, err := db.Exec("INSERT OR IGNORE INTO server_meta (key, value) VALUES ('id', ?)", id); err != nil {
 		return nil, err

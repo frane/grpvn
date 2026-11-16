@@ -27,7 +27,7 @@ export function openEmailDraft(to:string,subject:string,body:string){
 }
 
 export type NotificationPermissionState={supported:boolean;granted:boolean;error?:string};
-export type ChatNotification={id:string;title:string;body:string;target:string;root:string;sound:boolean};
+export type ChatNotification={id:string;title:string;body:string;target:string;root:string;sound:boolean;action?:'requests';workspace?:string};
 function nativeNotification(command:Record<string,unknown>):Promise<NotificationPermissionState>|null{
  const host=window as NativeWindow;
  const send=host._wails?.invoke?host._wails.invoke.bind(host._wails):host.chrome?.webview?.postMessage?host.chrome.webview.postMessage.bind(host.chrome.webview):host.webkit?.messageHandlers?.external?.postMessage?.bind(host.webkit.messageHandlers.external);
@@ -49,10 +49,10 @@ export async function requestNotificationPermission():Promise<NotificationPermis
  return {supported:true,granted:await Notification.requestPermission()==='granted'};
 }
 export async function sendChatNotification(options:ChatNotification){
- const native=nativeNotification({Type:'notify',ID:options.id,Title:options.title,Body:options.body,Target:options.target,Root:options.root,Sound:options.sound});
+ const native=nativeNotification({Type:'notify',ID:options.id,Title:options.title,Body:options.body,Target:options.target,Root:options.root,Sound:options.sound,Action:options.action,Workspace:options.workspace});
  if(native){const result=await native;if(!result.granted)throw Error('Notifications are disabled in system settings.');return;}
  if(!('Notification' in window)||Notification.permission!=='granted')throw Error('Notifications are disabled in browser settings.');
- const notification=new Notification(options.title,{body:options.body,tag:options.id,icon:'/favicon.svg',silent:!options.sound,data:{target:options.target,root:options.root}});
+ const notification=new Notification(options.title,{body:options.body,tag:options.id,icon:'/favicon.svg',silent:!options.sound,data:{target:options.target,root:options.root,action:options.action,workspace:options.workspace}});
  notification.onclick=()=>{window.focus();window.dispatchEvent(new CustomEvent('grpvn:open-notification',{detail:notification.data}));notification.close();};
 }
 export function setUnreadBadge(count:number){

@@ -102,8 +102,7 @@ func mountOAuth(mux *http.ServeMux, db *sql.DB, base string, access *channelAcce
 		id := NewMessage("", "", nil).ID
 		principalID := credentialHash(secret)[:32]
 		code := strings.ToUpper(id[18:])
-		redirect, _ := url.Parse(q.Get("redirect_uri"))
-		requested, _ := json.Marshal([]string{"oauth:" + scope, "redirect:" + redirect.Host, "client:" + name})
+		requested, _ := json.Marshal([]string{})
 		tx, err := beginWrite(db)
 		if err != nil {
 			apiError(w, 500, "cannot create authorization")

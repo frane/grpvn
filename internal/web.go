@@ -122,7 +122,7 @@ func (s *webServer) can(p *Principal, target string, write bool) bool {
 		if alias, native, ok := splitRemoteTarget(target); ok {
 			var read, post bool
 			if err := s.db.QueryRow("SELECT can_read,can_write FROM remote_channel_details WHERE remote_name=? AND channel=?", alias, native).Scan(&read, &post); err == nil {
-				return read && (!write || post) && principalPermission(s.db, p, target, write)
+				return read && (!write || post) && (principalPermission(s.db, p, target, write) || principalPermission(s.db, p, "*", write))
 			}
 		}
 	}
@@ -243,7 +243,7 @@ func mountWeb(mux *http.ServeMux, db *sql.DB, access *channelAccess, base string
 			}
 		}
 		s.handle(w, r, p)
-		if r.Method != "GET" && r.URL.Path != "/v1/chat/read-markers" && r.URL.Path != "/v1/chat/messages" && r.URL.Path != "/v1/chat/activity" && r.URL.Path != "/v1/chat/threads" && r.URL.Path != "/v1/chat/notification-settings" {
+		if r.Method != "GET" && r.URL.Path != "/v1/chat/read-markers" && r.URL.Path != "/v1/chat/messages" && r.URL.Path != "/v1/chat/activity" && r.URL.Path != "/v1/chat/threads" && r.URL.Path != "/v1/chat/notification-settings" && !(r.Method == "PATCH" && r.URL.Path == "/v1/access-requests") {
 			_ = TouchChatMetadata(db)
 		}
 	})
@@ -351,7 +351,18 @@ func (s *webServer) signup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: "grpvn_invite", Path: "/", MaxAge: -1, HttpOnly: true, Secure: strings.HasPrefix(s.base, "https://"), SameSite: http.SameSiteLaxMode})
-	writeJSON(w, 201, map[string]bool{"ok": true})
+	var encoded string
+	_ = s.db.QueryRow("SELECT channels FROM invites WHERE secret_hash=?", credentialHash(secret)).Scan(&encoded)
+	var invited []string
+	_ = json.Unmarshal([]byte(encoded), &invited)
+	preferred := "#general"
+	for _, channel := range invited {
+		if strings.HasPrefix(channel, "#") {
+			preferred = channel
+			break
+		}
+	}
+	writeJSON(w, 201, map[string]any{"ok": true, "target": preferred})
 }
 func (s *webServer) bootstrap(w http.ResponseWriter, r *http.Request) {
 	var a struct{ Ticket string }
@@ -617,7 +628,7 @@ func (s *webServer) handle(w http.ResponseWriter, r *http.Request, p *Principal)
 
 	case "/v1/access-requests", "/v1/access-approvals":
 		if principalPermission(s.db, p, "*", true) {
-			s.approvals(w, r)
+			s.approvals(w, r, p)
 			return
 		}
 	}
@@ -660,6 +671,9 @@ func (s *webServer) channels(w http.ResponseWriter, r *http.Request, p *Principa
 		}
 		archived := channelArchived(s.db, n)
 		joined := channelJoined(s.db, p.ID, n)
+		if !s.local && s.access.isPublic(n) && !principalPermission(s.db, p, n, false) {
+			joined = false
+		}
 		if r.URL.Query().Get("browse") != "1" && (archived || !joined) {
 			continue
 		}
@@ -690,7 +704,7 @@ func (s *webServer) channels(w http.ResponseWriter, r *http.Request, p *Principa
 				source = "local"
 			}
 		}
-		open, manage := s.access.isOpen(n), canManageChannel(s.db, p, n)
+		open, manage := s.access.isPublic(n), canManageChannel(s.db, s.access, p, n)
 		if sourceID != "" {
 			_ = s.db.QueryRow("SELECT is_open,can_manage FROM remote_channel_details WHERE remote_name=? AND channel=?", sourceID, native).Scan(&open, &manage)
 		}
@@ -1025,46 +1039,6 @@ func (s *webServer) people(w http.ResponseWriter, r *http.Request, viewer *Princ
 		person["unread"] = counts[target]
 	}
 	writeJSON(w, 200, map[string]any{"people": people})
-}
-func (s *webServer) approvals(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "POST" {
-		var a struct {
-			Code     string
-			Channels []string
-		}
-		if !webDecode(w, r, &a) {
-			return
-		}
-		if len(a.Channels) == 0 {
-			a.Channels = []string{"#general", "@*"}
-		}
-		if err := ApproveMember(s.db, a.Code, "", a.Channels, true); err != nil {
-			apiError(w, 400, err.Error())
-			return
-		}
-		writeJSON(w, 200, map[string]bool{"ok": true})
-		return
-	}
-	if r.Method != "GET" {
-		apiError(w, 405, "Method not allowed")
-		return
-	}
-	rows, err := s.db.Query("SELECT id,name,approval_code,requested FROM principals WHERE status='pending' ORDER BY created_at DESC LIMIT 100")
-	if err != nil {
-		apiError(w, 500, "Could not list requests")
-		return
-	}
-	defer rows.Close()
-	out := []map[string]any{}
-	for rows.Next() {
-		var id, name, code, requested string
-		if rows.Scan(&id, &name, &code, &requested) == nil {
-			var channels []string
-			_ = json.Unmarshal([]byte(requested), &channels)
-			out = append(out, map[string]any{"id": id, "name": name, "code": code, "channels": channels})
-		}
-	}
-	writeJSON(w, 200, map[string]any{"requests": out})
 }
 
 // changedTargets contains only conversations this authenticated viewer may

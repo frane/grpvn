@@ -3,9 +3,9 @@ import {Bell,Bot,Check,ChevronDown,ExternalLink,Globe,Hash,Laptop,LogOut,Plus,Se
 import {BrandMark} from './Brand';
 
 export type WorkspaceSource={name:string;url:string};
-type Props={local:boolean;workspace:string;sources:WorkspaceSource[];account:string;admin:boolean;canInvite:boolean;onSelect:(name:string)=>void;onAction:(action:string)=>void;onSignOut:()=>void};
+type Props={local:boolean;workspace:string;sources:WorkspaceSource[];account:string;admin:boolean;canInvite:boolean;requestCounts?:Record<string,number>;onSelect:(name:string)=>void;onAction:(action:string)=>void;onSignOut:()=>void};
 
-export function WorkspaceMenu({local,workspace,sources,account,admin,canInvite,onSelect,onAction,onSignOut}:Props){
+export function WorkspaceMenu({local,workspace,sources,account,admin,canInvite,requestCounts={},onSelect,onAction,onSignOut}:Props){
  const[open,setOpen]=useState(false);
  const root=useRef<HTMLDivElement>(null);
  const trigger=useRef<HTMLButtonElement>(null);
@@ -43,7 +43,7 @@ export function WorkspaceMenu({local,workspace,sources,account,admin,canInvite,o
  }
  return <div className="workspace-switcher" ref={root}>
   <button ref={trigger} className="workspace-head" aria-label="Workspace menu" aria-haspopup="menu" aria-expanded={open} aria-controls={open?id:undefined} onClick={()=>open?close():show('selected')} onKeyDown={e=>{if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();show(e.key==='ArrowDown'?'first':'last');}}}>
-   <BrandMark/><span className="workspace-title">{label}<span>{subtitle}</span></span><ChevronDown size={17}/>
+   <BrandMark/><span className="workspace-title">{label}<span>{subtitle}</span></span>{Object.values(requestCounts).some(Boolean)&&<b className="request-badge" aria-label={Object.values(requestCounts).reduce((a,b)=>a+b,0)+' pending connection requests'}>{Object.values(requestCounts).reduce((a,b)=>a+b,0)}</b>}<ChevronDown size={17}/>
   </button>
   {open&&<div ref={menu} id={id} className="workspace-menu" role="menu" aria-label="Workspace menu" onKeyDown={navigate} onBlur={e=>{if(e.relatedTarget&&!root.current?.contains(e.relatedTarget as Node))close();}}>
    {local&&<>
@@ -51,7 +51,7 @@ export function WorkspaceMenu({local,workspace,sources,account,admin,canInvite,o
      <div className="menu-label">Workspaces</div>
      <div className="workspace-choices">
       {[{name:'',url:''},...sources].map(s=>{const name=s.name?new URL(s.url).host:'Local chat';return <button key={s.name} role="menuitemradio" tabIndex={-1} aria-label={name} aria-checked={workspace===s.name} onClick={()=>{close(true);onSelect(s.name);}}>
-       {s.name?<Globe size={17}/>:<Laptop size={17}/>}<span className="menu-workspace-name">{name}<small>{s.name?s.url:'On this computer'}</small></span>{workspace===s.name&&<Check size={16}/>}
+       {s.name?<Globe size={17}/>:<Laptop size={17}/>}<span className="menu-workspace-name">{name}<small>{s.name?s.url:'On this computer'}</small></span>{!!requestCounts[s.name]&&<b className="request-badge">{requestCounts[s.name]}</b>}{workspace===s.name&&<Check size={16}/>}
       </button>;})}
      </div>
      <button role="menuitem" tabIndex={-1} onClick={()=>action('connect')}><Plus size={17}/><span>Add workspace…</span></button>
@@ -71,7 +71,7 @@ export function WorkspaceMenu({local,workspace,sources,account,admin,canInvite,o
     <div className="menu-rule" role="separator"/>
     <div role="group" aria-label="Administration"><div className="menu-label">Administration</div>
      <button role="menuitem" tabIndex={-1} onClick={()=>action('members')}><Settings2 size={17}/><span>Manage members…</span></button>
-     {remote&&<button role="menuitem" tabIndex={-1} onClick={()=>action('approvals')}><ShieldCheck size={17}/><span>Connection requests…</span></button>}
+     {remote&&<button role="menuitem" aria-label="Connection requests…" tabIndex={-1} onClick={()=>action('approvals')}><ShieldCheck size={17}/><span>Connection requests…</span>{!!requestCounts[workspace]&&<b className="request-badge">{requestCounts[workspace]}</b>}</button>}
     </div>
    </>}
    {!local&&<><div className="menu-rule" role="separator"/><button role="menuitem" tabIndex={-1} onClick={()=>{close(true);onSignOut();}}><LogOut size={17}/><span>Sign out of this workspace</span></button></>}

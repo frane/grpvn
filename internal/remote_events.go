@@ -126,6 +126,7 @@ func watchRemoteEvents(ctx context.Context, db *sql.DB, remote Remote, aliases, 
 	notify := func(metadata bool) {
 		if metadata {
 			_, _ = db.ExecContext(ctx, "UPDATE chat_metadata SET value=0 WHERE key=?", "remote:"+remote.ServerID)
+			_ = TouchChatMetadata(db)
 		}
 		for _, alias := range aliases {
 			_ = wakeRemote(db, alias)

@@ -66,7 +66,7 @@ func TestNativeNotificationPreservesRouteAndRequiresExplicitClick(t *testing.T) 
 		t.Fatal(service.sent)
 	}
 	opened := 0
-	n.onOpen(func(target, root string) {
+	n.onOpen(func(target, root, action, workspace string) {
 		opened++
 		if target != command.Target || root != command.Root {
 			t.Fatal(target, root)
@@ -89,5 +89,22 @@ func TestNativeNotificationPreservesRouteAndRequiresExplicitClick(t *testing.T) 
 	n.handle(desktopCommand{Type: "notificationStatus"}, func(value any) { result = value.(map[string]any) })
 	if result["supported"] != false || result["error"] == nil {
 		t.Fatal(result)
+	}
+}
+
+func TestNativeConnectionRequestNotificationOpensItsWorkspace(t *testing.T) {
+	service := &fakeSystemNotifications{granted: true}
+	n := &desktopNotifications{service: service}
+	n.handle(desktopCommand{Type: "notify", ID: "requests:work", Target: "@me", Action: "requests", Workspace: "work", Title: "Agent wants to connect"}, func(any) {})
+	if len(service.sent) != 1 {
+		t.Fatal("request alert not delivered", service.sent)
+	}
+	opened := false
+	n.onOpen(func(target, root, action, workspace string) {
+		opened = target == "@me" && root == "" && action == "requests" && workspace == "work"
+	})
+	service.callback(notifications.NotificationResult{Response: notifications.NotificationResponse{ActionIdentifier: notifications.DefaultActionIdentifier, UserInfo: service.sent[0].Data}})
+	if !opened {
+		t.Fatal("click lost the workspace request destination")
 	}
 }

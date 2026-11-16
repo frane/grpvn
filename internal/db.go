@@ -13,7 +13,9 @@ import (
 
 // v3 adds remote configuration, replication cursors, an outbox, and the
 // optional daemon lease without rebuilding the log or changing read positions.
-const CurrentSchemaVersion = 3
+// v4 separates workspace roles from private membership, retaining contributors
+// and explicit joins while removing unused, inherited channel enrollments.
+const CurrentSchemaVersion = 4
 
 func dbPath() (string, error) {
 	if env := os.Getenv("GRPVN_DB"); env != "" {
@@ -162,6 +164,11 @@ func migrateOnce(db *sql.DB) error {
 		return fmt.Errorf("read schema_version: %w", err)
 	}
 	if current < CurrentSchemaVersion {
+		if current < 4 {
+			if err := preserveParticipatingMembers(db); err != nil {
+				return err
+			}
+		}
 		// OR IGNORE so concurrent first-time migrations across processes race
 		// harmlessly: one wins, the rest no-op.
 		if _, err := db.Exec(

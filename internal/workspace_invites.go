@@ -110,7 +110,7 @@ func redeemOAuthInvitation(db dbtx, access *channelAccess, profile, secret strin
 	if _, err := db.Exec("INSERT INTO principal_approvals(principal_id,approved) VALUES(?,1) ON CONFLICT(principal_id) DO UPDATE SET approved=1", approvalOwner); err != nil {
 		return err
 	}
-	return nil
+	return joinGeneral(db, p.ID)
 }
 
 func mountBrowserInvitations(mux *http.ServeMux, db *sql.DB, base string) {
@@ -172,8 +172,19 @@ func JoinWorkspaceChannel(db *sql.DB, access *channelAccess, p *Principal, chann
 	if !rpcAllowed(db, access, p, channel, false) {
 		return fmt.Errorf("ask a channel member to invite you, use an invitation link, or create a new channel")
 	}
-	if access.isOpen(channel) {
-		return GrantWorkspaceChannels(db, p.ID, []string{channel}, true)
+	if access.isPublic(channel) {
+		tx, err := beginWrite(db)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if err = joinPublicChannel(tx, p, channel); err != nil {
+			return err
+		}
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+		return cachePrincipal(db, p)
 	}
 	if err := setChannelJoined(db, p.ID, channel, true); err != nil {
 		return err

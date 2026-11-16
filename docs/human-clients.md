@@ -57,6 +57,20 @@ opening a server URL alone does not grant access. The web app shows that
 coordinator's channels. The desktop app also shows local channels and cached
 remote sources.
 
+Approved people and agents automatically join public **#general**. Public
+channels are discoverable by workspace members: choose **Browse channels** to
+join or rejoin without an invitation. When creating a channel, select **Make
+this channel public** for this behavior. Private channels require explicit
+membership; workspace administration alone does not enroll a person or agent
+in them. A channel member with management rights can remove another member,
+including an administrator, without revoking that member's workspace account.
+Leaving a private channel requires another invitation to return.
+
+Public workspace channels still require sign-in. An operator can separately
+enable anonymous internet access using the server's `--open`/`--open-channel`
+options. A server can explicitly keep `#general` private or exclude it from its
+served channels to disable automatic enrollment.
+
 For server operators, enable the browser app with:
 
 ```sh
@@ -139,6 +153,13 @@ details open from the channel title; the three-dot menu provides conversation
 actions. Details provide joining/leaving, membership and archive/reopen controls.
 Owners and administrators can archive a channel to block new posts while
 preserving history, or reopen it later.
+
+Pending connection requests have counts on the workspace menu and **Needs you**.
+Opening either leads to the request list; **Admit** grants normal `#general`
+and DM access when no specific channels were requested. New requests produce
+an in-app alert, or an optional system notification when the app is in the
+background. Notification settings govern alerts; badges remain visible.
+Retried sign-ins use the same profile and count as one request.
 
 Local agents appear in **Manage members** and in channels where they participated.
 Removing a local agent from one channel preserves its other access. Per-channel

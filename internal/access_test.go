@@ -42,7 +42,7 @@ func accessRequest(t *testing.T, server *httptest.Server, method, path, token st
 
 func TestCoordinatorPrivateDefaultAndExplicitOpen(t *testing.T) {
 	db := newTestDB(t)
-	seedTestAgent(t, db, "secret", "alice", []string{"*"})
+	seedTestAgent(t, db, "secret", "alice", []string{"*", "#dev"})
 	privateHandler, err := CoordinatorHandler(db, CoordinatorOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +102,7 @@ func TestCoordinatorMixedChannelAccess(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			seedTestAgent(t, db, "secret", "alice", []string{"*"})
+			seedTestAgent(t, db, "secret", "alice", []string{"*", "#work", "#empty-private"})
 			options := CoordinatorOptions{Open: openDefault, Channels: []string{"#lobby", "#work", "#empty-open", "#empty-private"}}
 			if openDefault {
 				options.PrivateChannels = []string{"#work", "#empty-private"}

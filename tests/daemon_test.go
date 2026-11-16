@@ -17,7 +17,7 @@ func TestBackgroundDaemonLifecycle(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "client.db")
 	client := newRunner(t, "alice").withSharedDB(dbPath)
 	other := newRunner(t, "bob").withSharedDB(dbPath)
-	invite := strings.TrimSpace(host.mustRun("iv", "--to", "team", "--channel", "*", "--write"))
+	invite := strings.TrimSpace(host.mustRun("iv", "--to", "team", "--channel", "#dev", "--write"))
 	client.mustRun("connect", "work", endpoint, "#dev", "--invite", invite)
 	if out := client.mustRun("d", "s", "--interval", "250ms"); !strings.Contains(out, "daemon running pid=") {
 		t.Fatalf("start: %s", out)
