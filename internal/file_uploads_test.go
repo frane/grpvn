@@ -20,7 +20,8 @@ func TestMCPUploadsOriginalFilesWithPermissionsAndRetryKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Larger than the message-body limit: files are transferred separately.
-	pdf := append([]byte("%PDF-1.7\n"), bytes.Repeat([]byte("original deck bytes\n"), 16000)...)
+	prefix := []byte("%PDF-1.7\n")
+	pdf := append(prefix, bytes.Repeat([]byte("p"), MaxFileBytes-len(prefix))...)
 	args := map[string]any{"target": "#project", "name": "../deck.pdf", "data_base64": base64.StdEncoding.EncodeToString(pdf), "idempotency_key": "deck-v1"}
 	first, failed := remoteTool(t, h, "writer", "upload_file", args)
 	if failed {
@@ -95,5 +96,26 @@ func TestMCPFilePayloadLimitsAndTextUploads(t *testing.T) {
 	oversized = strings.Repeat("A", base64.StdEncoding.EncodedLen(MaxFileBytes)+4)
 	if _, err := (uploadFileArgs{Name: "x", Data: &oversized}).bytes(); err == nil {
 		t.Fatal("oversized encoded file accepted")
+	}
+}
+
+func TestAttachmentAccessRespectsOAuthScopesForDMs(t *testing.T) {
+	db := newTestDB(t)
+	seedTestAgent(t, db, "dm-agent", "dm-agent", []string{"@*"})
+	p, err := findPrincipal(db, "id=?", credentialHash("dm-agent")[:32])
+	if err != nil {
+		t.Fatal(err)
+	}
+	access, _ := newChannelAccess(CoordinatorOptions{})
+	access.db = db
+	s := &webServer{db: db, access: access}
+	f := ChatFile{Target: "@peer", Uploader: p.ID}
+	p.scopes = map[string]bool{"grpvn.write": true}
+	if s.fileAllowed(p, f, false) || !s.fileAllowed(p, f, true) {
+		t.Fatal("attachment access ignored write-only token scope")
+	}
+	p.scopes = map[string]bool{"grpvn.read": true}
+	if !s.fileAllowed(p, f, false) || s.fileAllowed(p, f, true) {
+		t.Fatal("attachment access ignored read-only token scope")
 	}
 }

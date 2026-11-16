@@ -93,6 +93,15 @@ func (s *webServer) fileAllowed(p *Principal, f ChatFile, write bool) bool {
 	if p == nil {
 		return !write && strings.HasPrefix(f.Target, "#") && s.access.isServed(f.Target) && s.access.isOpen(f.Target)
 	}
+	if p.scopes != nil {
+		scope := "grpvn.read"
+		if write {
+			scope = "grpvn.write"
+		}
+		if !p.scopes[scope] {
+			return false
+		}
+	}
 	if strings.HasPrefix(f.Target, "@") {
 		return (f.Uploader == p.ID || principalOwnsAddress(p, strings.TrimPrefix(f.Target, "@"))) && principalPermission(s.db, p, "@*", write)
 	}
