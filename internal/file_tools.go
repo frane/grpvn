@@ -78,7 +78,7 @@ func registerFileTools(service *server.MCPServer, db *sql.DB, access *channelAcc
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 		p := requestPrincipalContext(ctx)
-		if p == nil || !rpcAllowed(db, access, p, args.Target, true) {
+		if p == nil || !ensureSendChannel(db, access, p, args.Target) {
 			return mcp.NewToolResultError("Conversation write access required to upload a file"), nil
 		}
 		data, err := args.bytes()

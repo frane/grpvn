@@ -6,10 +6,11 @@ import rehypeHighlight from 'rehype-highlight';
 import {visit} from 'unist-util-visit';
 import {Check,Copy,Download,FileText,X} from 'lucide-react';
 import {fileURL,mentionNames,Person,shortName} from './api';
+import {mentionGroup,mentionGroups} from './mentionGroups';
 const highlightOptions={detect:false,aliases:{typescript:['tsx'],javascript:['jsx']}};
 
 function mentions(options:{aliases:[string,string][]}){
- const names=new Map(options.aliases);
+ const names=new Map(options.aliases);for(const group of mentionGroups)names.set(group.name,group.name);
  return (tree:any)=>{visit(tree,'text',(node:any,index:number|undefined,parent:any)=>{
   if(index===undefined||!parent||parent.type==='link')return;
   const parts:any[]=[];let last=0;const re=/(^|[\s([{])@([\p{L}\p{N}_.~\-]+(?:@[\p{L}\p{N}_.~\-]+)?)/gu;let match;
@@ -39,6 +40,7 @@ function FileLink({href,name}:{href:string;name:string}){
 const MemberContext=React.createContext<{currentName:string;onMention?:(name:string)=>void}>({currentName:''});
 function MessageLink({href,children}:{href?:string;children?:React.ReactNode}){
  const {currentName,onMention}=React.useContext(MemberContext);
+ if(href?.startsWith('grpvn-mention:')){const group=mentionGroup(decodeURIComponent(href.slice(14)));if(group)return <span className="mention mention-group" title={group.description}>{children}</span>;}
  return href?.startsWith('grpvn-mention:')?<button type="button" className={'mention '+(decodeURIComponent(href.slice(14))===currentName?'mention-me':'')} title={'View @'+decodeURIComponent(href.slice(14))} onClick={()=>onMention?.(decodeURIComponent(href.slice(14)))}>{children}</button>:href?.startsWith('/v1/files/')?<FileLink href={href} name={String(children)}/>:<a href={href} target="_blank" rel="noreferrer noopener">{children}</a>;
 }
 function MessageImage({src,alt}:{src?:string|Blob;alt?:string}){
@@ -47,11 +49,11 @@ function MessageImage({src,alt}:{src?:string|Blob;alt?:string}){
 const markdownComponents={pre:CodeBlock,a:MessageLink,img:MessageImage};
 type MessageBodyProps={body:string;target:string;people?:Person[];currentName?:string;onMention?:(name:string)=>void};
 export const MessageBody=React.memo(function MessageBody({body,target,people=[],currentName='',onMention}:MessageBodyProps){
- const nameKey=[...people.map(p=>p.name),currentName].filter(Boolean).sort().join('\0');
+ const nameKey=[...people.flatMap(p=>[p.name,...p.aliases||[]]),currentName].filter(Boolean).sort().join('\0');
  const names=useMemo(()=>nameKey.split('\0').filter(Boolean),[nameKey]);
  const aliases=useMemo(()=>Array.from(mentionNames(names)),[names]);
  const plugins=useMemo(()=>[remarkGfm,[mentions,{aliases}]] as NonNullable<React.ComponentProps<typeof Markdown>['remarkPlugins']>,[aliases]);
  return <MemberContext.Provider value={{currentName,onMention}}><div className="message-body markdown"><Markdown skipHtml remarkPlugins={plugins} rehypePlugins={[[rehypeHighlight,highlightOptions]]}
-  urlTransform={url=>{if(/^grpvn-file:[0-9A-HJKMNP-TV-Z]{26}$/.test(url))return fileURL(url.slice(11),target);if(url.startsWith('grpvn-mention:')){try{const name=decodeURIComponent(url.slice(14));return names.includes(name)?'grpvn-mention:'+encodeURIComponent(name):'';}catch{return '';}}return defaultUrlTransform(url);}}
+  urlTransform={url=>{if(/^grpvn-file:[0-9A-HJKMNP-TV-Z]{26}$/.test(url))return fileURL(url.slice(11),target);if(url.startsWith('grpvn-mention:')){try{const name=decodeURIComponent(url.slice(14));return names.includes(name)||mentionGroup(name)?'grpvn-mention:'+encodeURIComponent(name):'';}catch{return '';}}return defaultUrlTransform(url);}}
   components={markdownComponents}>{body}</Markdown></div></MemberContext.Provider>;
 },(before,after)=>before.body===after.body&&before.target===after.target&&before.currentName===after.currentName&&before.onMention===after.onMention&&(before.people||[]).map(p=>p.name).join('\0')===(after.people||[]).map(p=>p.name).join('\0'));

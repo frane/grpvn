@@ -189,6 +189,7 @@ func migratePostgres(db *sql.DB) error {
 	// A transactional row counter, rather than a sequence, serializes message
 	// append commits. Thus seq>N cursors cannot skip an earlier pending commit.
 	_, err = tx.Exec(`CREATE OR REPLACE FUNCTION instr(bytea,text) RETURNS integer LANGUAGE sql IMMUTABLE STRICT AS $$ SELECT POSITION(convert_to($2,'UTF8') IN $1) $$;
+CREATE OR REPLACE FUNCTION instr(text,text) RETURNS integer LANGUAGE sql IMMUTABLE STRICT AS $$ SELECT POSITION($2 IN $1) $$;
 CREATE TABLE IF NOT EXISTS message_sequence(singleton BIGINT PRIMARY KEY CHECK(singleton=1),position BIGINT NOT NULL);
 INSERT INTO message_sequence(singleton,position) SELECT 1,COALESCE(MAX(seq),0) FROM messages ON CONFLICT DO NOTHING;
 CREATE OR REPLACE FUNCTION grpvn_message_sequence() RETURNS trigger LANGUAGE plpgsql AS $$

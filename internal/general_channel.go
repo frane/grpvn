@@ -62,9 +62,14 @@ func joinGeneral(db dbtx, id string) error {
 }
 
 func joinPublicChannel(db dbtx, p *Principal, channel string) error {
-	var read, write bool
-	if db.QueryRow("SELECT can_read,can_write FROM permissions WHERE principal_id=? AND channel=?", p.ID, channel).Scan(&read, &write) == nil && read && !write {
-		return setChannelJoined(db, p.ID, channel, true)
+	for _, id := range []string{p.ID, p.ParentID} {
+		if id == "" {
+			continue
+		}
+		var read, write bool
+		if db.QueryRow("SELECT can_read,can_write FROM permissions WHERE principal_id=? AND channel=?", id, channel).Scan(&read, &write) == nil && read && !write {
+			return setChannelJoined(db, p.ID, channel, true)
+		}
 	}
 	return channelGrant(db, p, channel, true)
 }

@@ -98,6 +98,9 @@ func renamePrincipal(tx dbtx, p *Principal, name string) error {
 			return err
 		}
 	}
+	if groupNames[name] {
+		return fmt.Errorf("%s is a conversation mention group; choose another name", name)
+	}
 	oldAddress := principalAddress(p)
 	p.Name = name
 	address := principalAddress(p)
@@ -128,6 +131,19 @@ func renamePrincipal(tx dbtx, p *Principal, name string) error {
 		return err
 	}
 	if oldAddress != address {
+		if _, err := tx.Exec("INSERT INTO marks(agent_name,message_id,marked_at) SELECT ?,message_id,marked_at FROM marks WHERE agent_name=? ON CONFLICT(agent_name,message_id) DO NOTHING", address, oldAddress); err != nil {
+			return err
+		}
+		if strings.HasPrefix(p.ID, "local:") {
+			for _, table := range []string{"local_participants", "local_channel_grants"} {
+				if _, err := tx.Exec("UPDATE "+table+" SET name=? WHERE name=?", address, oldAddress); err != nil {
+					return err
+				}
+			}
+			if _, err := tx.Exec("UPDATE local_credentials SET agent_name=? WHERE agent_name=?", address, oldAddress); err != nil {
+				return err
+			}
+		}
 		if _, err := tx.Exec("UPDATE agent_sessions SET agent_name=? WHERE agent_name=?", address, oldAddress); err != nil {
 			return err
 		}

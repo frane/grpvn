@@ -227,7 +227,7 @@ func remoteChatTool(ctx context.Context, remote Remote, name string, args any) (
 	return out, nil
 }
 func (s *webServer) remoteChannel(ctx context.Context, p *Principal, target string) (Remote, string, bool, error) {
-	alias, channel, ok := splitRemoteTarget(target)
+	alias, channel, ok := splitRemoteConversation(target)
 	if !s.local || !ok {
 		return Remote{}, "", false, nil
 	}

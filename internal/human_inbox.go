@@ -45,7 +45,7 @@ func loadInboxSelf(db dbtx, p *Principal) inboxSelf {
 	return self
 }
 func (s inboxSelf) name(target string) string {
-	if alias, _, ok := splitRemoteTarget(target); ok {
+	if alias, _, ok := splitRemoteConversation(target); ok {
 		if name := s.remote[alias]; name != "" {
 			return name
 		}
@@ -53,7 +53,7 @@ func (s inboxSelf) name(target string) string {
 	return principalAddress(s.p)
 }
 func (s inboxSelf) owns(sender, target string) bool {
-	if alias, _, ok := splitRemoteTarget(target); ok && s.remote[alias] != "" {
+	if alias, _, ok := splitRemoteConversation(target); ok && s.remote[alias] != "" {
 		return sender == s.remote[alias]
 	}
 	return principalOwnsAddress(s.p, sender)
@@ -155,7 +155,8 @@ func (s *webServer) materializeInbox(p *Principal) error {
 		for _, m := range messages {
 			position = m.Seq
 			target := m.Target
-			if strings.HasPrefix(target, "@") {
+			_, _, scopedDM := splitRemoteDMTarget(target)
+			if strings.HasPrefix(target, "@") && !scopedDM {
 				if self.owns(strings.TrimPrefix(target, "@"), target) {
 					target = "@" + m.Sender
 				} else if !self.owns(m.Sender, target) {
@@ -181,7 +182,7 @@ func (s *webServer) materializeInbox(p *Principal) error {
 			thread, followed := threads[m.ChainRoot]
 			if strings.HasPrefix(target, "@") {
 				reason = "dm"
-			} else if self.mentioned(string(m.Body), m.Target) {
+			} else if self.mentioned(string(m.Body), m.Target) || groupMentioned(s.db, m, self.name(m.Target), p.ID) {
 				reason = "mention"
 			} else if m.ParentID != nil && followed && thread.following {
 				reason = "reply"

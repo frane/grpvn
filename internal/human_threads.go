@@ -67,7 +67,8 @@ func (s *webServer) threads(w http.ResponseWriter, r *http.Request, p *Principal
 			return
 		}
 		self := loadInboxSelf(s.db, p)
-		if strings.HasPrefix(root.Target, "@") && !self.owns(root.Sender, root.Target) && !self.owns(strings.TrimPrefix(root.Target, "@"), root.Target) {
+		_, _, scopedDM := splitRemoteDMTarget(root.Target)
+		if strings.HasPrefix(root.Target, "@") && !scopedDM && !self.owns(root.Sender, root.Target) && !self.owns(strings.TrimPrefix(root.Target, "@"), root.Target) {
 			apiError(w, 403, "Thread access denied")
 			return
 		}

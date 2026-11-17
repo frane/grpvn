@@ -8,11 +8,17 @@ import (
 
 func (s *webServer) inviteLocalAgent(p *Principal, channel, address string) error {
 	name := strings.TrimPrefix(strings.TrimSpace(address), "@")
+	id := "local:" + name
+	local, _ := participantByAddress(s.db, name)
+	promoted := local != nil && strings.HasPrefix(local.ID, "local:")
+	if promoted {
+		name, id = local.Name, local.ID
+	}
 	if validateChannel(channel) != nil || !s.can(p, channel, true) {
 		return fmt.Errorf("Channel write access required")
 	}
 	var known bool
-	if s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM messages m WHERE sender=? AND NOT EXISTS(SELECT 1 FROM remote_messages rm WHERE rm.local_id=m.id)) OR EXISTS(SELECT 1 FROM agent_sessions WHERE agent_name=?)", name, name).Scan(&known) != nil || !known {
+	if s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM messages m WHERE sender=? AND NOT EXISTS(SELECT 1 FROM remote_messages rm WHERE rm.local_id=m.id)) OR EXISTS(SELECT 1 FROM agent_sessions WHERE agent_name=?)", name, name).Scan(&known) != nil || !known && !promoted {
 		return fmt.Errorf("This agent is not connected on this computer yet. Copy the local agent setup prompt instead")
 	}
 	if _, err := CreateWorkspaceChannel(s.db, s.access, p, channel, false); err != nil {
@@ -41,7 +47,15 @@ func (s *webServer) inviteLocalAgent(p *Principal, channel, address string) erro
 	if _, err = tx.Exec("INSERT INTO local_channel_grants(name,channel,can_write) VALUES(?,?,1) ON CONFLICT(name,channel) DO UPDATE SET can_write=1", name, channel); err != nil {
 		return err
 	}
-	if err = setChannelJoined(tx, "local:"+name, channel, true); err != nil {
+	if promoted {
+		if _, err = tx.Exec("UPDATE principals SET status='active' WHERE id=?", id); err != nil {
+			return err
+		}
+		if _, err = tx.Exec("INSERT INTO permissions(principal_id,channel,can_read,can_write) VALUES(?,?,1,1) ON CONFLICT(principal_id,channel) DO UPDATE SET can_read=1,can_write=1", id, channel); err != nil {
+			return err
+		}
+	}
+	if err = setChannelJoined(tx, id, channel, true); err != nil {
 		return err
 	}
 	if notify {

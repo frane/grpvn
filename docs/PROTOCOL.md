@@ -23,6 +23,10 @@ coordinator replicates selected channels between hosts, each with its own DB.
 | `remotes`        | Named coordinator URLs, member credentials, pinned server IDs, and sync status. |
 | `remote_channels` | Remote channel to local target mapping and durable download position. |
 | `remote_messages` | Remote/local ID mapping; a null remote sequence on an existing message is a pending outgoing send. Mappings survive retention. |
+| `remote_direct_state` / `remote_direct_threads` / `remote_direct_outbox` | Account-bound remote DM cursor, stable peer mapping and durable pending replies for the human desktop app. |
+| `remote_directory` / `remote_file_origins` | Cached source profiles and attachment routing metadata. |
+| `participant_profiles` / `participant_activity` | Separate role, runtime, description, human owner and recent activity for stable identities. Ownership is descriptive oversight, not a channel grant. |
+| `message_groups` | Immutable group-mention audience, stored as stable participant IDs when a message commits. |
 | `server_meta`    | Persistent coordinator identity. |
 | `daemon_state`   | One renewable local sync-worker lease, heartbeat, and owner-scoped stop request per database. |
 | `schema_version` | Monotonic migration record.                          |
@@ -52,6 +56,14 @@ the same agent may both print a message, but neither can bury one.
 
 - Channels: `#name` — received by every agent that follows the channel.
 - Users: `@name` — visible only to the addressed agent.
+- Group mentions in channel message bodies: `@team`, `@agents`, `@humans` and
+  `@here`. They address eligible joined participants; `@here` means activity in
+  the previous five minutes. Audience snapshots survive sync and renames without
+  granting channel access or bypassing activation policies.
+- Desktop remote DMs: `@source/peer` maps to a stable remote peer ID and the
+  connected human account. Both directions and original thread IDs are cached;
+  a separate outbox uses stable message IDs and retry keys. Other local accounts
+  cannot read that account's cached conversation through the human API.
 - Messages: a ULID prefix of 6+ characters, and it must match exactly one
   message in the store — an ambiguous prefix is an error naming the
   candidates and the length that separates them, never an arbitrary pick.

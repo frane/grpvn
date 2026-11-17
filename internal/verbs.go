@@ -2,6 +2,7 @@ package internal
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -45,6 +46,15 @@ func checkUnread(w io.Writer, db *sql.DB, st *State, actionableOnly bool) (int, 
 		if err != nil {
 			return 0, err
 		}
+		if target == inbox {
+			for _, alias := range inboxAliases(db, st.Name)[1:] {
+				extra, err := countUnread(db, st.Name, alias, cursors[alias], false)
+				if err != nil {
+					return 0, err
+				}
+				n += extra
+			}
+		}
 		if n == 0 {
 			continue
 		}
@@ -64,21 +74,27 @@ func checkUnread(w io.Writer, db *sql.DB, st *State, actionableOnly bool) (int, 
 
 func countUnread(db *sql.DB, name, target string, cursor int64, actionableOnly bool) (int, error) {
 	var n int
-	var err error
-	if !actionableOnly {
-		err = db.QueryRow(
-			"SELECT COUNT(*) FROM messages WHERE target = ? AND seq > ? AND sender != ?",
-			target, cursor, name,
-		).Scan(&n)
-	} else {
-		err = db.QueryRow(
-			`SELECT COUNT(*) FROM messages m
-			 WHERE m.target = ? AND m.seq > ? AND m.sender != ?
-			   AND (instr(m.body, ?) > 0
-			     OR EXISTS (SELECT 1 FROM messages p WHERE p.id = m.parent_id AND p.sender = ?))`,
-			target, cursor, name, name, name,
-		).Scan(&n)
+	names := inboxAliases(db, name)
+	slots := strings.TrimRight(strings.Repeat("?,", len(names)), ",")
+	args := []any{target, cursor}
+	for _, alias := range names {
+		args = append(args, strings.TrimPrefix(alias, "@"))
 	}
+	query := "SELECT COUNT(*) FROM messages m WHERE m.target=? AND m.seq>? AND m.sender NOT IN(" + slots + ")"
+	if actionableOnly {
+		groupKey, _ := json.Marshal(groupRecipientIdentity(db, target, name, ""))
+		mentions := []string{}
+		for _, alias := range names {
+			mentions = append(mentions, "instr(m.body,?)>0")
+			args = append(args, strings.TrimPrefix(alias, "@"))
+		}
+		query += " AND (" + strings.Join(mentions, " OR ") + " OR EXISTS(SELECT 1 FROM messages p WHERE p.id=m.parent_id AND p.sender IN(" + slots + ")) OR EXISTS(SELECT 1 FROM message_groups g WHERE g.message_id=m.id AND instr(g.recipients,?)>0))"
+		for _, alias := range names {
+			args = append(args, strings.TrimPrefix(alias, "@"))
+		}
+		args = append(args, string(groupKey))
+	}
+	err := db.QueryRow(query, args...).Scan(&n)
 	return n, err
 }
 
@@ -190,6 +206,12 @@ func Read(w io.Writer, db *sql.DB, st *State, limit int, advance bool, ts bool, 
 	if err != nil {
 		return 0, err
 	}
+	for _, target := range targets {
+		if target == "@"+st.Name {
+			targets = append(targets, inboxAliases(db, st.Name)[1:]...)
+			break
+		}
+	}
 
 	var where strings.Builder
 	args := []interface{}{}
@@ -200,8 +222,11 @@ func Read(w io.Writer, db *sql.DB, st *State, limit int, advance bool, ts bool, 
 		where.WriteString("(target = ? AND seq > ?)")
 		args = append(args, t, cursors[t])
 	}
-	q := "SELECT seq, id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at FROM messages WHERE (" + where.String() + ") AND sender != ? ORDER BY seq ASC"
-	args = append(args, st.Name)
+	aliases := inboxAliases(db, st.Name)
+	q := "SELECT seq, id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at FROM messages WHERE (" + where.String() + ") AND sender NOT IN(" + strings.TrimRight(strings.Repeat("?,", len(aliases)), ",") + ") ORDER BY seq ASC"
+	for _, alias := range aliases {
+		args = append(args, strings.TrimPrefix(alias, "@"))
+	}
 	if limit > 0 {
 		q += " LIMIT ?"
 		args = append(args, limit)
@@ -265,6 +290,11 @@ const MaxIdempotencyKeyBytes = 256
 // insert share a transaction so two retries racing each other cannot both
 // commit.
 func SendIdempotent(db *sql.DB, sender string, targetArg string, bodyArg string, defaultChannel string, isAsk bool, key string) (*Message, bool, error) {
+	keyOwner := sender
+	var localID string
+	if db.QueryRow("SELECT principal_id FROM principal_aliases WHERE address=?", sender).Scan(&localID) == nil && strings.HasPrefix(localID, "local:") {
+		keyOwner = localID
+	}
 	if len(key) > MaxIdempotencyKeyBytes {
 		return nil, false, fmt.Errorf("idempotency key too long: %d bytes (max %d)", len(key), MaxIdempotencyKeyBytes)
 	}
@@ -276,7 +306,7 @@ func SendIdempotent(db *sql.DB, sender string, targetArg string, bodyArg string,
 	var existing string
 	err = sql.ErrNoRows
 	if key != "" {
-		err = tx.QueryRow("SELECT message_id FROM idempotency WHERE agent_name = ? AND key = ?", sender, key).Scan(&existing)
+		err = tx.QueryRow("SELECT message_id FROM idempotency WHERE agent_name = ? AND key = ?", keyOwner, key).Scan(&existing)
 	}
 	switch {
 	case err == nil:
@@ -295,7 +325,7 @@ func SendIdempotent(db *sql.DB, sender string, targetArg string, bodyArg string,
 	if key != "" {
 		if _, err := tx.Exec(
 			"INSERT INTO idempotency (agent_name, key, message_id, created_at) VALUES (?, ?, ?, ?)",
-			sender, key, m.ID, time.Now().UnixMilli(),
+			keyOwner, key, m.ID, time.Now().UnixMilli(),
 		); err != nil {
 			return nil, false, err
 		}
@@ -311,7 +341,7 @@ func SendIdempotent(db *sql.DB, sender string, targetArg string, bodyArg string,
 	return m, false, nil
 }
 
-func sendOnce(db dbtx, sender string, targetArg string, bodyArg string, defaultChannel string, isAsk bool) (*Message, error) {
+func sendOnce(db dbtx, sender string, targetArg string, bodyArg string, defaultChannel string, isAsk bool, identities ...*Message) (*Message, error) {
 	if len(bodyArg) > MaxBodyBytes {
 		return nil, fmt.Errorf("body too large: %d bytes (max %d)", len(bodyArg), MaxBodyBytes)
 	}
@@ -339,6 +369,11 @@ func sendOnce(db dbtx, sender string, targetArg string, bodyArg string, defaultC
 		return nil, err
 	}
 	m := NewMessage(sender, target, []byte(bodyArg))
+	if len(identities) > 0 {
+		m.ID = identities[0].ID
+		m.ChainRoot = m.ID
+		m.CreatedAt = identities[0].CreatedAt
+	}
 	if parent != nil {
 		if parent.ChainDepth+1 > 8 {
 			return nil, fmt.Errorf("chain depth limit reached (8)")

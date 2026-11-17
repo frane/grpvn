@@ -382,6 +382,38 @@ CREATE TABLE IF NOT EXISTS human_request_notifications (
 CREATE TABLE IF NOT EXISTS bridge_leases (
     session_id TEXT PRIMARY KEY REFERENCES agent_sessions(id),
     owner TEXT NOT NULL, expires_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS message_groups (
+ message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+ recipients TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS participant_activity (
+ identity TEXT PRIMARY KEY,last_seen INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS participant_profiles (
+ identity TEXT PRIMARY KEY,role TEXT NOT NULL DEFAULT '',runtime TEXT NOT NULL DEFAULT '',
+ description TEXT NOT NULL DEFAULT '',owner_id TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS remote_direct_state (
+ remote_name TEXT PRIMARY KEY REFERENCES remotes(name) ON DELETE CASCADE,
+ local_principal_id TEXT NOT NULL,position INTEGER NOT NULL DEFAULT 0,can_write INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS remote_direct_threads (
+ remote_name TEXT NOT NULL REFERENCES remotes(name) ON DELETE CASCADE,
+ peer_id TEXT NOT NULL,peer_name TEXT NOT NULL,peer_kind TEXT NOT NULL,target TEXT NOT NULL UNIQUE,
+ local_principal_id TEXT NOT NULL,PRIMARY KEY(remote_name,peer_id)
+);
+CREATE TABLE IF NOT EXISTS remote_direct_outbox (
+ local_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+ remote_name TEXT NOT NULL,peer_name TEXT NOT NULL,idempotency_key TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS remote_file_origins (
+ remote_name TEXT NOT NULL,file_id TEXT NOT NULL,target TEXT NOT NULL,native_target TEXT NOT NULL,
+ PRIMARY KEY(remote_name,file_id,target)
+);
+CREATE TABLE IF NOT EXISTS remote_directory (
+ remote_name TEXT NOT NULL REFERENCES remotes(name) ON DELETE CASCADE,
+ profile_id TEXT NOT NULL,profile TEXT NOT NULL,PRIMARY KEY(remote_name,profile_id)
 );`
 
 // migrateV1toV2 rebuilds the messages table to add the seq column and is

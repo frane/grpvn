@@ -155,7 +155,10 @@ func CreateWorkspaceChannel(db *sql.DB, access *channelAccess, p *Principal, cha
 				return result, err
 			}
 		}
-		return result, tx.Commit()
+		if err := tx.Commit(); err != nil {
+			return result, err
+		}
+		return result, cachePrincipal(db, p)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return result, err
@@ -176,7 +179,10 @@ func CreateWorkspaceChannel(db *sql.DB, access *channelAccess, p *Principal, cha
 				return result, err
 			}
 		}
-		return result, tx.Commit()
+		if err := tx.Commit(); err != nil {
+			return result, err
+		}
+		return result, cachePrincipal(db, p)
 	}
 	if configured, ok := access.overrides[channel]; ok && configured != result.Open {
 		return result, fmt.Errorf("this channel's visibility is configured by the server")

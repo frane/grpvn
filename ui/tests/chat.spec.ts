@@ -11,6 +11,8 @@ async function expectReadableTitle(page:Page){
   await expect(title).toBeVisible();
   await expect.poll(()=>title.evaluate(element=>element.scrollWidth-element.clientWidth),{message:'A short conversation title must fit without ellipsis'}).toBeLessThanOrEqual(1);
   await expect.poll(()=>page.locator('.toolbar-actions').evaluate(element=>element.getBoundingClientRect().right-window.innerWidth),{message:'Header actions must remain inside the window'}).toBeLessThanOrEqual(0);
+  await expect.poll(()=>page.locator('.app-header').evaluate(header=>Array.from(header.querySelectorAll('.workspace-head,.main-nav,.connect-agent')).every(element=>{const box=element.getBoundingClientRect();return box.left>=0&&box.right<=innerWidth&&box.bottom<=header.getBoundingClientRect().bottom;})),{message:'Source, navigation and agent setup must fit the app bar'}).toBe(true);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
 }
 
 let host:ChildProcess;let link:string;let root:string;let bin:string;let env:NodeJS.ProcessEnv;
@@ -38,6 +40,7 @@ test('human chat, threaded replies, invitations, browser continuity and mobile l
   await page.getByLabel('Channel name').fill('general');
   await page.getByRole('dialog').getByRole('button',{name:'Create channel',exact:true}).click();
   await expectReadableTitle(page);
+  await page.getByRole('button',{name:'Connect an agent…',exact:true}).click();await expect(page.getByLabel('Agent connection prompt')).toContainText('/llm.txt');await page.getByRole('button',{name:'Close dialog',exact:true}).click();
   const compose=page.getByRole('textbox',{name:'Message #general'});
   await compose.fill('A shared place for people and agents.');await compose.press('Enter');
   await expect(page.locator('.message-body').filter({hasText:'A shared place for people and agents.'})).toHaveCount(1);
@@ -73,6 +76,7 @@ test('human chat, threaded replies, invitations, browser continuity and mobile l
   await expect(page.locator('.message-body').filter({hasText:'Agent delivery is visible without refreshing.'})).toBeVisible({timeout:10000});
   await page.screenshot({path:join(root,'desktop.png'),fullPage:true});
   await page.screenshot({path:join(process.env.GRPVN_SCREENSHOT_DIR || tmpdir(),'grpvn-ui-desktop.png'),fullPage:true});
+  await page.setViewportSize({width:820,height:850});await expectReadableTitle(page);
   await page.setViewportSize({width:390,height:844});
   await expectReadableTitle(page);
   await expect(page.getByRole('button',{name:'Open sidebar'})).toBeVisible();
@@ -100,7 +104,10 @@ test('human chat, threaded replies, invitations, browser continuity and mobile l
     await desktop.getByLabel('Workspace address or invitation').fill(new URL(link).origin);
     await desktop.getByRole('button',{name:'Continue',exact:true}).click();
     await expect(desktop.getByRole('dialog')).toHaveCount(0);
-    await desktop.reload();await expect(desktop.getByRole('textbox',{name:'Message #general'})).toBeVisible();await desktop.getByRole('button',{name:'Workspace menu',exact:true}).click();await desktop.getByRole('menuitemradio',{name:'Local chat',exact:true}).click();await expect(desktop.getByRole('heading',{name:'Choose a conversation',exact:true})).toBeVisible();await desktop.getByRole('button',{name:'Workspace menu',exact:true}).click();await desktop.getByRole('menuitem',{name:'Connect an agent…',exact:true}).click();await expect(desktop.getByLabel('Agent connection prompt')).toContainText('grpvn-cli@0.13.7');await desktop.getByRole('button',{name:'Close dialog',exact:true}).click();await desktop.getByRole('button',{name:'Workspace menu',exact:true}).click();await desktop.getByRole('menuitemradio',{name:new URL(link).host,exact:true}).click();await expect(desktop.getByRole('textbox',{name:'Message #general'})).toBeVisible();
+    await desktop.getByRole('button',{name:'People & agents',exact:true}).click();await desktop.locator('.person-card').filter({hasText:'alex'}).click();await desktop.getByRole('button',{name:'Message @alex',exact:true}).click();
+    await expect(desktop.getByRole('textbox',{name:'Message alex',exact:true})).toBeVisible();await desktop.getByRole('textbox',{name:'Message alex',exact:true}).fill('A remote DM from the desktop app.');await desktop.getByRole('textbox',{name:'Message alex',exact:true}).press('Enter');await expect(desktop.locator('.message-body').filter({hasText:'A remote DM from the desktop app.'})).toBeVisible();await expect.poll(()=>desktop.locator('.queued').count()).toBe(0,{timeout:15000});
+    await desktop.reload();await desktop.getByRole('button',{name:'People & agents',exact:true}).click();await desktop.locator('.person-card').filter({hasText:'alex'}).click();await desktop.getByRole('button',{name:'Message @alex',exact:true}).click();await expect(desktop.locator('.message-body').filter({hasText:'A remote DM from the desktop app.'})).toBeVisible();await desktop.locator('button.channel').filter({hasText:'general'}).click();
+    await desktop.reload();await expect(desktop.getByRole('textbox',{name:'Message #general'})).toBeVisible();await desktop.getByRole('button',{name:'Workspace menu',exact:true}).click();await desktop.getByRole('menuitemradio',{name:'Local chat',exact:true}).click();await expect(desktop.getByRole('heading',{name:'Choose a conversation',exact:true})).toBeVisible();await desktop.getByRole('button',{name:'Workspace menu',exact:true}).click();await desktop.getByRole('menuitem',{name:'Connect an agent…',exact:true}).click();await expect(desktop.getByLabel('Agent connection prompt')).toContainText('grpvn-cli@0.14.0');await desktop.getByRole('button',{name:'Close dialog',exact:true}).click();await desktop.getByRole('button',{name:'Workspace menu',exact:true}).click();await desktop.getByRole('menuitemradio',{name:new URL(link).host,exact:true}).click();await expect(desktop.getByRole('textbox',{name:'Message #general'})).toBeVisible();
     // Exercise native tray routing against the real desktop host. Capture the
     // bridge state, then issue the same actions sent by each OS's native menu.
     await desktop.addInitScript(()=>{(window as any).__tray=[];(window as any)._wails={invoke:(message:string)=>{if(message==='wails:runtime:ready'){(window as any).__ready=true;return;}const command=JSON.parse(message);(window as any).__tray.push(command);if(command.Type==='notificationStatus')queueMicrotask(()=>window.dispatchEvent(new CustomEvent('grpvn:native-notification',{detail:{requestID:command.RequestID,supported:true,granted:false}})));}};});

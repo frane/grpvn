@@ -102,6 +102,10 @@ func SyncRemotes(ctx context.Context, db *sql.DB, name string) (SyncStats, error
 // SyncTarget is an explicit history request, including a channel the human
 // has left. It uses the same coordinator lease, pacing and delivery cursor.
 func SyncTarget(ctx context.Context, db *sql.DB, target string) error {
+	if alias, _, direct := splitRemoteDMTarget(target); direct {
+		_, err := SyncRemotes(ctx, db, alias)
+		return err
+	}
 	alias, _, ok := splitRemoteTarget(target)
 	if !ok {
 		return nil
@@ -251,10 +255,17 @@ func syncRemote(ctx context.Context, db *sql.DB, remote Remote) (SyncStats, erro
 	if err := refreshWorkspaceMetadata(ctx, db, remote); err != nil {
 		failures = append(failures, err)
 	}
+	if direct, err := syncDirectMessages(ctx, db, remote); err != nil {
+		failures = append(failures, err)
+	} else {
+		stats.Pushed += direct.Pushed
+		stats.Pulled += direct.Pulled
+	}
 	if err := syncWorkspacePreferences(ctx, db, remote); err != nil {
 		failures = append(failures, err)
 	}
-	stats.Pushed, err = pushOutgoing(ctx, db, remote)
+	pushed, err := pushOutgoing(ctx, db, remote)
+	stats.Pushed += pushed
 	if err != nil {
 		failures = append(failures, err)
 	}
@@ -274,9 +285,10 @@ func syncRemote(ctx context.Context, db *sql.DB, remote Remote) (SyncStats, erro
 		}
 		channels = active
 	}
-	stats.Pulled, err = pullBatch(remote, db, func(request syncBatchRequest, response *syncBatchResponse) error {
+	pulled, err := pullBatch(remote, db, func(request syncBatchRequest, response *syncBatchResponse) error {
 		return remoteRequest(ctx, remote, "POST", "/v1/sync", request, response)
 	}, channels)
+	stats.Pulled += pulled
 	if err != nil {
 		failures = append(failures, err)
 	}

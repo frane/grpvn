@@ -88,7 +88,7 @@ func (s *webServer) workspaceAccount(ctx context.Context, p *Principal, alias st
 // OAuth identity. The coordinator applies exactly the same rights as the web app.
 func (s *webServer) manage(w http.ResponseWriter, r *http.Request, p *Principal) bool {
 	path := r.URL.Path
-	supported := strings.HasPrefix(path, "/v1/members") || path == "/v1/chat/channels" || path == "/v1/chat/memberships" || path == "/v1/chat/participants" || path == "/v1/chat/invitations" || path == "/v1/access-requests" || path == "/v1/access-approvals"
+	supported := strings.HasPrefix(path, "/v1/members") || path == "/v1/chat/channels" || path == "/v1/chat/memberships" || strings.HasPrefix(path, "/v1/chat/participants") || path == "/v1/chat/invitations" || path == "/v1/access-requests" || path == "/v1/access-approvals"
 	if s.local && supported && r.URL.Query().Get("workspace") != "" {
 		alias := r.URL.Query().Get("workspace")
 		remote, err := s.workspaceAccount(r.Context(), p, alias)
@@ -128,6 +128,22 @@ func (s *webServer) manage(w http.ResponseWriter, r *http.Request, p *Principal)
 			endpoint += "?" + q.Encode()
 		}
 		err = remoteRequest(r.Context(), remote, r.Method, endpoint, body, &result)
+		if path == "/v1/chat/participants" && r.Method == "GET" {
+			if err == nil {
+				cacheRemoteDirectory(s.db, alias, result)
+			} else {
+				denied := false
+				if failure, ok := err.(*remoteHTTPError); ok {
+					denied = failure.Status == 401 || failure.Status == 403
+				}
+				if !denied {
+					if cached, ok := cachedRemoteDirectory(s.db, alias, r.URL.Query().Get("name")); ok {
+						writeJSON(w, 200, cached)
+						return true
+					}
+				}
+			}
+		}
 		if err != nil && path == "/v1/chat/invitations" && strings.Contains(strings.ToLower(err.Error()), "agent not found") {
 			body["Agent"] = ""
 			err = remoteRequest(r.Context(), remote, r.Method, endpoint, body, &result)
@@ -186,7 +202,11 @@ func (s *webServer) manage(w http.ResponseWriter, r *http.Request, p *Principal)
 		}
 		id := strings.TrimPrefix(path, "/v1/members/")
 		if s.local && strings.HasPrefix(id, "local:") {
-			s.localMember(w, r, strings.TrimPrefix(id, "local:"))
+			name := strings.TrimPrefix(id, "local:")
+			if local, err := findPrincipal(s.db, "id=?", id); err == nil {
+				name = local.Name
+			}
+			s.localMember(w, r, name)
 			return true
 		}
 		if id == p.ID || id == p.ParentID {
@@ -372,6 +392,9 @@ func (s *webServer) manage(w http.ResponseWriter, r *http.Request, p *Principal)
 			}
 			if s.local && strings.HasPrefix(a.MemberID, "local:") {
 				name := strings.TrimPrefix(a.MemberID, "local:")
+				if local, err := findPrincipal(s.db, "id=?", a.MemberID); err == nil {
+					name = local.Name
+				}
 				tx, err := beginWrite(s.db)
 				if err != nil {
 					apiError(w, 500, "Could not remove agent")
@@ -506,13 +529,23 @@ func (s *webServer) memberList(w http.ResponseWriter, channel string, viewer *Pr
 		if channel != "" && !isChatParticipant(p) {
 			continue
 		}
-		if channel != "" && (!principalPermission(s.db, p, channel, false) || !channelJoined(s.db, p.ID, channel)) {
-			continue
+		local := s.local && strings.HasPrefix(p.ID, "local:")
+		if channel != "" {
+			member := principalPermission(s.db, p, channel, false)
+			if local {
+				_ = s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM messages m WHERE m.target=? AND (m.sender=? OR m.sender IN(SELECT address FROM principal_aliases WHERE principal_id=?)) AND NOT EXISTS(SELECT 1 FROM remote_messages r WHERE r.local_id=m.id)) OR EXISTS(SELECT 1 FROM local_channel_grants WHERE name=? AND channel=?) OR EXISTS(SELECT 1 FROM cursors WHERE agent_name=? AND target=?)`, channel, p.Name, p.ID, p.Name, channel, p.Name, channel).Scan(&member)
+			}
+			if !member || !channelJoined(s.db, p.ID, channel) {
+				continue
+			}
 		}
 		if channel != "" && p.Status != "active" {
 			continue
 		}
 		seen[principalAddress(p)] = true
+		for alias := range p.aliases {
+			seen[alias] = true
+		}
 		grants := []map[string]any{}
 		for ch, g := range p.grants {
 			if channel != "" && ch != channel {
@@ -525,7 +558,14 @@ func (s *webServer) memberList(w http.ResponseWriter, channel string, viewer *Pr
 				grants = append(grants, map[string]any{"channel": ch, "write": g[1]})
 			}
 		}
-		list = append(list, map[string]any{"id": p.ID, "name": principalAddress(p), "kind": p.Kind, "status": p.Status, "grants": grants, "admin": principalPermission(s.db, p, "*", true), "self": p.ID == viewer.ID || p.ID == viewer.ParentID})
+		if local && channel == "" {
+			var restricted bool
+			_ = s.db.QueryRow("SELECT restricted FROM local_participants WHERE name=?", p.Name).Scan(&restricted)
+			if !restricted {
+				grants = append(grants, map[string]any{"channel": "*", "write": true})
+			}
+		}
+		list = append(list, map[string]any{"id": p.ID, "name": principalAddress(p), "kind": p.Kind, "status": p.Status, "grants": grants, "admin": !local && principalPermission(s.db, p, "*", true), "self": p.ID == viewer.ID || p.ID == viewer.ParentID, "local": local})
 	}
 	if s.local {
 		rows, err := s.db.Query("SELECT DISTINCT sender FROM messages m WHERE NOT EXISTS(SELECT 1 FROM remote_messages rm WHERE rm.local_id=m.id) UNION SELECT name FROM local_participants UNION SELECT agent_name FROM agent_sessions ORDER BY 1")
@@ -578,6 +618,9 @@ func (s *webServer) memberList(w http.ResponseWriter, channel string, viewer *Pr
 			}
 		}
 	}
+	for _, person := range list {
+		enrichParticipant(s.db, person, viewer)
+	}
 	writeJSON(w, 200, map[string]any{"members": list})
 }
 func (s *webServer) localMember(w http.ResponseWriter, r *http.Request, name string) {
@@ -586,12 +629,34 @@ func (s *webServer) localMember(w http.ResponseWriter, r *http.Request, name str
 		return
 	}
 	var registered bool
-	if s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM principals WHERE name=? AND parent_id IS NULL) OR EXISTS(SELECT 1 FROM principal_aliases WHERE address=?)", name, name).Scan(&registered) != nil || registered {
+	local, _ := participantByAddress(s.db, name)
+	promoted := local != nil && strings.HasPrefix(local.ID, "local:")
+	if err := s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM principals WHERE name=? AND parent_id IS NULL) OR EXISTS(SELECT 1 FROM principal_aliases WHERE address=?)", name, name).Scan(&registered); err != nil || registered && !promoted {
 		apiError(w, 409, "Manage this registered profile using its profile ID")
 		return
 	}
+	setActive := func(active bool) error {
+		tx, err := beginWrite(s.db)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if _, err = tx.Exec("INSERT INTO local_participants(name,enabled) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET enabled=excluded.enabled", name, active); err != nil {
+			return err
+		}
+		if promoted {
+			status := "revoked"
+			if active {
+				status = "active"
+			}
+			if _, err = tx.Exec("UPDATE principals SET status=? WHERE id=?", status, local.ID); err != nil {
+				return err
+			}
+		}
+		return tx.Commit()
+	}
 	if r.Method == "DELETE" {
-		_, err := s.db.Exec("INSERT INTO local_participants(name,enabled) VALUES(?,0) ON CONFLICT(name) DO UPDATE SET enabled=0", name)
+		err := setActive(false)
 		if err != nil {
 			apiError(w, 500, "Could not remove agent")
 		} else {
@@ -616,7 +681,7 @@ func (s *webServer) localMember(w http.ResponseWriter, r *http.Request, name str
 		return
 	}
 	if a.Active != nil {
-		_, err := s.db.Exec("INSERT INTO local_participants(name,enabled) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET enabled=excluded.enabled", name, *a.Active)
+		err := setActive(*a.Active)
 		if err != nil {
 			apiError(w, 500, "Could not restore agent")
 		} else {
@@ -655,6 +720,9 @@ func (s *webServer) localMember(w http.ResponseWriter, r *http.Request, name str
 	if err == nil {
 		_, err = tx.Exec("DELETE FROM local_channel_grants WHERE name=?", name)
 	}
+	if err == nil && promoted {
+		_, err = tx.Exec("DELETE FROM permissions WHERE principal_id=?", local.ID)
+	}
 	for _, ch := range a.Channels {
 		if err != nil {
 			break
@@ -665,6 +733,9 @@ func (s *webServer) localMember(w http.ResponseWriter, r *http.Request, name str
 			}
 			return a.Write
 		}())
+		if err == nil && promoted {
+			_, err = tx.Exec("INSERT INTO permissions(principal_id,channel,can_read,can_write) SELECT ?,channel,1,can_write FROM local_channel_grants WHERE name=? AND channel=? ON CONFLICT(principal_id,channel) DO UPDATE SET can_read=1,can_write=excluded.can_write", local.ID, name, ch)
+		}
 	}
 	if err != nil || tx.Commit() != nil {
 		apiError(w, 500, "Could not update agent")

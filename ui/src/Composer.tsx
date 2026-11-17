@@ -1,6 +1,7 @@
 import React,{useEffect,useId,useLayoutEffect,useRef,useState} from 'react';
 import {ArrowUp,AtSign,Bold,Bot,Code2,FileText,LoaderCircle,Paperclip,RotateCw,X} from 'lucide-react';
 import {initials,mentionNames,Person,shortName,UploadedFile,uploadFile} from './api';
+import {mentionGroups} from './mentionGroups';
 
 type Attachment={id:string;file:File;status:'uploading'|'done'|'error';uploaded?:UploadedFile;error?:string};
 export function Composer({placeholder,disabled,onSend,target,people=[]}:{placeholder:string;disabled?:boolean;target:string;people?:Person[];onSend:(body:string,key:string)=>Promise<void>}){
@@ -10,7 +11,7 @@ export function Composer({placeholder,disabled,onSend,target,people=[]}:{placeho
  const selection=useRef<number|null>(null);
  useLayoutEffect(()=>{if(selection.current===null)return;const position=selection.current;selection.current=null;area.current?.focus();area.current?.setSelectionRange(position,position);},[body,cursor]);
  const match=body.slice(0,cursor).match(/(^|[\s([{])@([\p{L}\p{N}_.~\-]*)$/u);const query=match?.[2]||'';
- const suggestions=match&&!dismissed?people.filter(p=>p.status==='active'&&p.name.toLowerCase().includes(query.toLowerCase())).slice(0,8):[];
+ const suggestions:(Person&{description?:string})[]=match&&!dismissed?[...(!target.startsWith('@')?mentionGroups.filter(group=>group.name.includes(query.toLowerCase())).map(group=>({id:'group:'+group.name,name:group.name,kind:'agent' as const,status:'active',description:group.description})):[]),...people.filter(p=>p.status==='active'&&p.name.toLowerCase().includes(query.toLowerCase()))].slice(0,8):[];
  useEffect(()=>{setChoice(0);setDismissed(false);},[query]);
  const busy=files.some(f=>f.status==='uploading');const invalid=files.some(f=>f.status==='error');
  function changed(text:string,position:number){setBody(text);setCursor(position);setDismissed(false);key.current=crypto.randomUUID();}
@@ -21,7 +22,7 @@ export function Composer({placeholder,disabled,onSend,target,people=[]}:{placeho
  async function submit(){if((!body.trim()&&!files.length)||sending||disabled||busy||invalid)return;setSending(true);setError('');try{const links=files.map(f=>{const file=f.uploaded!;const name=file.name.replace(/[\\[\]()`!*]/g,'\\$&');return (file.image?'!':'')+'['+name+'](grpvn-file:'+file.id+')';});await onSend([body.trim(),...links].filter(Boolean).join('\n\n'),key.current);setBody('');setFiles([]);setCursor(0);key.current=crypto.randomUUID();if(area.current)area.current.style.height='';}catch(e){setError((e as Error).message);}finally{setSending(false);area.current?.focus();}}
  return <><div className={'composer '+(disabled?'disabled ':'')+(dragging?'dragging':'')} onDragOver={e=>{if(e.dataTransfer.types.includes('Files')){e.preventDefault();setDragging(true);}}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget as Node))setDragging(false);}} onDrop={e=>{e.preventDefault();setDragging(false);void addFiles(Array.from(e.dataTransfer.files));}}>
   {dragging&&<div className="drop-files"><Paperclip size={22}/>Drop files to attach</div>}
-  {suggestions.length>0&&<div className="mention-picker" id={listID} role="listbox" aria-label="Mention a member"><div className="picker-heading">People & agents</div>{suggestions.map((p,i)=><button key={p.id} role="option" aria-selected={i===choice} className={i===choice?'active':''} onMouseDown={e=>e.preventDefault()} onClick={()=>mention(p)}><span className="mention-avatar">{p.kind==='human'?initials(p.name):<Bot size={17}/>}</span><strong title={p.name}>{shortName(p.name)}</strong><span>{p.kind==='human'?'Person':'Agent'}</span></button>)}<div className="picker-footnote">↑ ↓ to choose · Enter to mention</div></div>}
+  {suggestions.length>0&&<div className="mention-picker" id={listID} role="listbox" aria-label="Mention a member"><div className="picker-heading">People & agents</div>{suggestions.map((p,i)=><button key={p.id} role="option" aria-selected={i===choice} className={i===choice?'active':''} onMouseDown={e=>e.preventDefault()} onClick={()=>mention(p)}><span className="mention-avatar">{p.kind==='human'?initials(p.name):<Bot size={17}/>}</span><strong title={p.name}>{shortName(p.name)}</strong><span>{p.description||(p.kind==='human'?'Person':'Agent')}</span></button>)}<div className="picker-footnote">↑ ↓ to choose · Enter to mention</div></div>}
   <textarea ref={area} aria-label={placeholder} aria-autocomplete="list" aria-expanded={suggestions.length>0} aria-controls={suggestions.length?listID:undefined} placeholder={disabled?'You have read-only access to this channel':placeholder} value={body} disabled={disabled||sending} rows={2} maxLength={65536}
    onChange={e=>{changed(e.target.value,e.target.selectionStart);e.currentTarget.style.height='auto';e.currentTarget.style.height=Math.min(e.currentTarget.scrollHeight,240)+'px';}} onClick={e=>setCursor(e.currentTarget.selectionStart)} onKeyUp={e=>setCursor(e.currentTarget.selectionStart)}
    onPaste={e=>{const pasted=Array.from(e.clipboardData.files);if(pasted.length){e.preventDefault();void addFiles(pasted);}}}

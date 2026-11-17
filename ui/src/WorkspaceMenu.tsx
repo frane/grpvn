@@ -1,6 +1,5 @@
 import React,{useEffect,useId,useLayoutEffect,useRef,useState} from 'react';
 import {Bell,Bot,Check,ChevronDown,ExternalLink,Globe,Hash,Laptop,LogOut,Plus,Settings2,ShieldCheck,Users} from 'lucide-react';
-import {BrandMark} from './Brand';
 
 export type WorkspaceSource={name:string;url:string};
 type Props={local:boolean;workspace:string;sources:WorkspaceSource[];account:string;admin:boolean;canInvite:boolean;requestCounts?:Record<string,number>;onSelect:(name:string)=>void;onAction:(action:string)=>void;onSignOut:()=>void};
@@ -43,7 +42,7 @@ export function WorkspaceMenu({local,workspace,sources,account,admin,canInvite,r
  }
  return <div className="workspace-switcher" ref={root}>
   <button ref={trigger} className="workspace-head" aria-label="Workspace menu" aria-haspopup="menu" aria-expanded={open} aria-controls={open?id:undefined} onClick={()=>open?close():show('selected')} onKeyDown={e=>{if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();show(e.key==='ArrowDown'?'first':'last');}}}>
-   <BrandMark/><span className="workspace-title">{label}<span>{subtitle}</span></span>{Object.values(requestCounts).some(Boolean)&&<b className="request-badge" aria-label={Object.values(requestCounts).reduce((a,b)=>a+b,0)+' pending connection requests'}>{Object.values(requestCounts).reduce((a,b)=>a+b,0)}</b>}<ChevronDown size={17}/>
+   <span className="source-symbol">{remote?<Globe size={16}/>:<Laptop size={16}/>}</span><span className="workspace-title">{label}<span>{subtitle}</span></span>{Object.values(requestCounts).some(Boolean)&&<b className="request-badge" aria-label={Object.values(requestCounts).reduce((a,b)=>a+b,0)+' pending connection requests'}>{Object.values(requestCounts).reduce((a,b)=>a+b,0)}</b>}<ChevronDown size={15}/>
   </button>
   {open&&<div ref={menu} id={id} className="workspace-menu" role="menu" aria-label="Workspace menu" onKeyDown={navigate} onBlur={e=>{if(e.relatedTarget&&!root.current?.contains(e.relatedTarget as Node))close();}}>
    {local&&<>

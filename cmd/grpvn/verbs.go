@@ -27,6 +27,11 @@ func session() (string, *internal.State, *sql.DB, error) {
 	if err != nil {
 		return "", nil, nil, err
 	}
+	n, err = internal.RefreshLocalStateIdentity(db, st, internal.ResolveStatePath(statePathFlag), n)
+	if err != nil {
+		db.Close()
+		return "", nil, nil, err
+	}
 	if err := internal.MigrateLegacyCursors(db, st, internal.ResolveStatePath(statePathFlag)); err != nil {
 		db.Close()
 		return "", nil, nil, err

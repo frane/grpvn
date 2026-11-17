@@ -69,7 +69,7 @@ func (s *webServer) preferences(w http.ResponseWriter, r *http.Request, p *Princ
 	}
 	dirty := false
 	if s.local {
-		if alias, _, ok := splitRemoteTarget(a.Target); ok {
+		if alias, _, ok := splitRemoteConversation(a.Target); ok {
 			_ = s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM remote_human_sessions h JOIN remotes r ON r.server_id=h.server_id WHERE r.name=? AND h.local_principal_id=?)", alias, p.ID).Scan(&dirty)
 		}
 	}
@@ -94,8 +94,10 @@ func (s *webServer) readMarker(w http.ResponseWriter, r *http.Request, p *Princi
 		return
 	}
 	var max int64
-	if strings.HasPrefix(a.Target, "@") {
-		_ = s.db.QueryRow("SELECT COALESCE(MAX(seq),0) FROM messages WHERE (sender=? AND target=?) OR (sender=? AND target=?)", principalAddress(p), a.Target, strings.TrimPrefix(a.Target, "@"), "@"+principalAddress(p)).Scan(&max)
+	_, _, scopedDM := splitRemoteDMTarget(a.Target)
+	if strings.HasPrefix(a.Target, "@") && !scopedDM {
+		predicate, args := directConversationPredicate(s.db, principalAddress(p), strings.TrimPrefix(a.Target, "@"))
+		_ = s.db.QueryRow("SELECT COALESCE(MAX(seq),0) FROM messages m WHERE "+predicate, args...).Scan(&max)
 	} else {
 		_ = s.db.QueryRow("SELECT COALESCE(MAX(seq),0) FROM messages WHERE target=?", a.Target).Scan(&max)
 	}
@@ -147,7 +149,8 @@ func syncWorkspacePreferences(ctx context.Context, db *sql.DB, remote Remote) er
 		return nil
 	}
 	prefix := "#" + remote.Name + "/"
-	rows, err := db.Query("SELECT target,muted FROM conversation_preferences WHERE principal_id=? AND mute_dirty=1 AND target LIKE ? ESCAPE '!' ORDER BY target LIMIT 10", owner, strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(prefix)+"%")
+	escape := strings.NewReplacer("!", "!!", "%", "!%", "_", "!_")
+	rows, err := db.Query("SELECT target,muted FROM conversation_preferences WHERE principal_id=? AND mute_dirty=1 AND (target LIKE ? ESCAPE '!' OR target LIKE ? ESCAPE '!') ORDER BY target LIMIT 10", owner, escape.Replace(prefix)+"%", escape.Replace("@"+remote.Name+"/")+"%")
 	if err != nil {
 		return err
 	}
@@ -171,7 +174,8 @@ func syncWorkspacePreferences(ctx context.Context, db *sql.DB, remote Remote) er
 	}
 	for _, u := range changes {
 		var result map[string]any
-		if err = remoteRequest(ctx, remote, "PATCH", "/v1/chat/preferences", map[string]any{"Target": "#" + strings.TrimPrefix(u.target, prefix), "Muted": u.muted}, &result); err != nil {
+		_, native, _ := splitRemoteConversation(u.target)
+		if err = remoteRequest(ctx, remote, "PATCH", "/v1/chat/preferences", map[string]any{"Target": native, "Muted": u.muted}, &result); err != nil {
 			return err
 		}
 		if _, err = db.Exec("UPDATE conversation_preferences SET mute_dirty=0 WHERE principal_id=? AND target=? AND muted=?", owner, u.target, u.muted); err != nil {

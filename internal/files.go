@@ -70,7 +70,7 @@ func ReadChatFile(ctx context.Context, db *sql.DB, id, target string) (ChatFile,
 	if err != sql.ErrNoRows {
 		return f, err
 	}
-	alias, native, ok := splitRemoteTarget(target)
+	alias, native, ok := splitRemoteConversation(target)
 	if !ok {
 		return f, err
 	}
@@ -79,6 +79,7 @@ func ReadChatFile(ctx context.Context, db *sql.DB, id, target string) (ChatFile,
 		return f, err
 	}
 	remote.DB = db
+	_ = db.QueryRow("SELECT native_target FROM remote_file_origins WHERE remote_name=? AND file_id=? AND target=?", remote.Name, id, target).Scan(&native)
 	f, err = downloadRemoteFile(ctx, *remote, id, native)
 	if err != nil {
 		return f, err
@@ -103,6 +104,11 @@ func (s *webServer) fileAllowed(p *Principal, f ChatFile, write bool) bool {
 		}
 	}
 	if strings.HasPrefix(f.Target, "@") {
+		if s.local {
+			if _, _, direct := splitRemoteDMTarget(f.Target); direct {
+				return s.can(p, f.Target, write)
+			}
+		}
 		return (f.Uploader == p.ID || principalOwnsAddress(p, strings.TrimPrefix(f.Target, "@"))) && principalPermission(s.db, p, "@*", write)
 	}
 	if p.Kind == "member" && !write {
@@ -165,7 +171,7 @@ func (s *webServer) uploadFile(w http.ResponseWriter, r *http.Request, p *Princi
 		return
 	}
 	defer file.Close()
-	if !(strings.HasPrefix(target, "#") || strings.HasPrefix(target, "@")) || (p.scopes != nil && !p.scopes["grpvn.write"]) || !s.can(p, target, true) {
+	if !(strings.HasPrefix(target, "#") || strings.HasPrefix(target, "@")) || (p.scopes != nil && !p.scopes["grpvn.write"]) || (!s.can(p, target, true) && !ensureSendChannel(s.db, s.access, p, target)) {
 		apiError(w, 403, "Channel write access required")
 		return
 	}
@@ -211,6 +217,7 @@ func (s *webServer) downloadFile(w http.ResponseWriter, r *http.Request, p *Prin
 	f, err := loadChatFile(s.db, id, target)
 	if err == sql.ErrNoRows && s.local && s.can(p, target, false) {
 		if remote, native, ok, accessErr := s.remoteChannel(r.Context(), p, target); ok && accessErr == nil {
+			_ = s.db.QueryRow("SELECT native_target FROM remote_file_origins WHERE remote_name=? AND file_id=? AND target=?", remote.Name, id, target).Scan(&native)
 			f, err = downloadRemoteFile(r.Context(), remote, id, native)
 			if err == nil {
 				f.Target = target
@@ -332,7 +339,8 @@ func syncRemoteFiles(ctx context.Context, db *sql.DB, remote Remote) error {
 		var exists bool
 		_ = db.QueryRow("SELECT EXISTS(SELECT 1 FROM chat_files WHERE id=? AND target=?)", q.id, q.target).Scan(&exists)
 		if !exists {
-			_, native, _ := splitRemoteTarget(q.target)
+			_, native, _ := splitRemoteConversation(q.target)
+			_ = db.QueryRow("SELECT native_target FROM remote_file_origins WHERE remote_name=? AND file_id=? AND target=?", remote.Name, q.id, q.target).Scan(&native)
 			f, err := downloadRemoteFile(ctx, remote, q.id, native)
 			if err != nil {
 				var failure *remoteHTTPError

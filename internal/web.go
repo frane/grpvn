@@ -54,6 +54,7 @@ func (s *webServer) principal(r *http.Request) *Principal {
 	if cachePrincipal(s.db, p) != nil {
 		return nil
 	}
+	touchParticipant(s.db, p.ID)
 	return p
 }
 func (s *webServer) actor(r *http.Request) *Principal {
@@ -119,6 +120,14 @@ func (s *webServer) can(p *Principal, target string, write bool) bool {
 		return false
 	}
 	if s.local {
+		if _, _, direct := splitRemoteDMTarget(target); direct {
+			var owner string
+			var post bool
+			if s.db.QueryRow("SELECT d.local_principal_id,COALESCE(s.can_write,1) FROM remote_direct_threads d LEFT JOIN remote_direct_state s ON s.remote_name=d.remote_name WHERE d.target=?", target).Scan(&owner, &post) != nil {
+				return false
+			}
+			return owner == p.ID && (!write || post)
+		}
 		if alias, native, ok := splitRemoteTarget(target); ok {
 			var read, post bool
 			if err := s.db.QueryRow("SELECT can_read,can_write FROM remote_channel_details WHERE remote_name=? AND channel=?", alias, native).Scan(&read, &post); err == nil {
@@ -445,6 +454,12 @@ func (s *webServer) handle(w http.ResponseWriter, r *http.Request, p *Principal)
 	if s.manage(w, r, p) {
 		return
 	}
+	if s.participantProfile(w, r, p) {
+		return
+	}
+	if s.directMessages(w, r, p) || s.directConversations(w, r, p) {
+		return
+	}
 	if s.local && r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/v1/workspace-connections/") {
 		s.workspaceStatus(w, r, p)
 		return
@@ -561,7 +576,8 @@ func (s *webServer) handle(w http.ResponseWriter, r *http.Request, p *Principal)
 					apiError(w, 400, "Choose a remote workspace to invite someone on another device")
 					return
 				}
-				if _, err := participantByAddress(s.db, normalized); err != nil {
+				local, lookupErr := participantByAddress(s.db, normalized)
+				if lookupErr != nil || strings.HasPrefix(local.ID, "local:") {
 					if !write {
 						apiError(w, 400, "Use Manage members to edit local posting access")
 						return
@@ -722,6 +738,11 @@ func (s *webServer) messages(w http.ResponseWriter, r *http.Request, p *Principa
 	if target == "@me" {
 		target = "@" + principalAddress(p)
 	}
+	if _, _, remote := splitRemoteDMTarget(target); !remote && strings.HasPrefix(target, "@") {
+		if canonical, err := canonicalDMTarget(s.db, target); err == nil {
+			target = canonical
+		}
+	}
 	if !s.can(p, target, false) {
 		apiError(w, 403, "Channel access denied")
 		return
@@ -757,7 +778,8 @@ func (s *webServer) messages(w http.ResponseWriter, r *http.Request, p *Principa
 	// Both sides of the human's DM conversation are visible, including aliases.
 	peer := strings.TrimPrefix(target, "@")
 	dm := strings.HasPrefix(target, "@")
-	if dm && peer != principalAddress(p) {
+	_, _, scopedDM := splitRemoteDMTarget(target)
+	if dm && !scopedDM && peer != principalAddress(p) {
 		if !principalPermission(s.db, p, "@*", false) {
 			apiError(w, 403, "DM access denied")
 			return
@@ -765,12 +787,8 @@ func (s *webServer) messages(w http.ResponseWriter, r *http.Request, p *Principa
 	}
 	predicate := "m.target=?"
 	args := []any{target}
-	if dm && peer == principalAddress(p) {
-		predicate = "m.target=?"
-		args = []any{"@" + principalAddress(p)}
-	} else if dm {
-		predicate = `((m.sender=? AND m.target=?) OR (m.sender=? AND m.target=?))`
-		args = []any{principalAddress(p), target, peer, "@" + principalAddress(p)}
+	if dm && !scopedDM {
+		predicate, args = directConversationPredicate(s.db, principalAddress(p), peer)
 	}
 	rootPredicate := predicate
 	rootArgs := append([]any(nil), args...)
@@ -837,7 +855,8 @@ func (s *webServer) messagePage(ctx context.Context, p *Principal, predicate str
  COALESCE((SELECT p.kind FROM principals p JOIN message_principals mp ON mp.principal_id=p.id WHERE mp.message_id=m.id),'agent'),
  COALESCE((SELECT h.name FROM remote_human_sessions h JOIN remotes r ON r.server_id=h.server_id JOIN remote_channels c ON c.remote_name=r.name WHERE c.target=m.target AND h.local_principal_id=?),''),
  COALESCE((SELECT h.name FROM remote_attributions a JOIN remote_messages rm ON rm.local_id=a.local_id JOIN remotes r ON r.name=rm.remote_name JOIN remote_human_sessions h ON h.server_id=r.server_id AND h.principal_id=a.principal_id WHERE a.local_id=m.id AND h.local_principal_id=?),''),
- EXISTS(SELECT 1 FROM remote_messages rm WHERE rm.local_id=m.id AND rm.remote_seq IS NULL)
+ EXISTS(SELECT 1 FROM remote_messages rm WHERE rm.local_id=m.id AND rm.remote_seq IS NULL),
+ COALESCE((SELECT principal_id FROM message_principals WHERE message_id=m.id),(SELECT principal_id FROM remote_attributions WHERE local_id=m.id),'')
  FROM messages m WHERE ` + predicate + " ORDER BY m.seq " + order + " LIMIT " + strconv.Itoa(limit)
 	args = append([]any{p.ID, p.ID}, args...)
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -848,15 +867,15 @@ func (s *webServer) messagePage(ctx context.Context, p *Principal, predicate str
 	for rows.Next() {
 		var m Message
 		var parent, corr sql.NullString
-		var kind, remoteSelf, remoteAccount string
-		if err = rows.Scan(&m.Seq, &m.ID, &m.Sender, &m.Target, &m.Body, &m.ChainRoot, &m.ChainDepth, &parent, &corr, &m.CreatedAt, &kind, &remoteSelf, &remoteAccount, &m.Pending); err != nil {
+		var kind, remoteSelf, remoteAccount, profileID string
+		if err = rows.Scan(&m.Seq, &m.ID, &m.Sender, &m.Target, &m.Body, &m.ChainRoot, &m.ChainDepth, &parent, &corr, &m.CreatedAt, &kind, &remoteSelf, &remoteAccount, &m.Pending, &profileID); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		if parent.Valid {
 			m.ParentID = &parent.String
 		}
-		mine := m.Sender == principalAddress(p)
+		mine := profileID == p.ID || principalOwnsAddress(p, m.Sender)
 		sender := m.Sender
 		if remoteSelf != "" && m.Sender == remoteSelf {
 			kind = "human"
@@ -867,7 +886,7 @@ func (s *webServer) messagePage(ctx context.Context, p *Principal, predicate str
 			mine = true
 			sender = remoteAccount
 		}
-		list = append(list, map[string]any{"seq": m.Seq, "id": m.ID, "sender": sender, "target": m.Target, "body": string(m.Body), "chain_root": m.ChainRoot, "parent_id": m.ParentID, "created_at": m.CreatedAt, "kind": kind, "mine": mine, "pending": m.Pending})
+		list = append(list, map[string]any{"seq": m.Seq, "id": m.ID, "sender": sender, "profile_id": profileID, "target": m.Target, "body": string(m.Body), "chain_root": m.ChainRoot, "parent_id": m.ParentID, "created_at": m.CreatedAt, "kind": kind, "mine": mine, "pending": m.Pending})
 	}
 	err = rows.Err()
 	rows.Close()
@@ -891,7 +910,8 @@ func (s *webServer) send(w http.ResponseWriter, r *http.Request, p *Principal) {
 		apiError(w, 400, err.Error())
 		return
 	}
-	if parent != nil && strings.HasPrefix(target, "@") && !principalOwnsAddress(p, parent.Sender) {
+	_, _, scopedDM := splitRemoteDMTarget(target)
+	if parent != nil && !scopedDM && strings.HasPrefix(target, "@") && !principalOwnsAddress(p, parent.Sender) {
 		if !principalOwnsAddress(p, strings.TrimPrefix(target, "@")) {
 			apiError(w, 403, "Private conversation")
 			return
@@ -905,6 +925,17 @@ func (s *webServer) send(w http.ResponseWriter, r *http.Request, p *Principal) {
 	var m *Message
 	var replay bool
 	if s.local {
+		if scopedDM {
+			m, replay, err = queueDirectMessage(s.db, p, target, a.Body, a.IdempotencyKey, parent)
+			if err != nil {
+				apiError(w, 400, err.Error())
+				return
+			}
+			alias, _, _ := splitRemoteDMTarget(target)
+			_ = wakeRemote(s.db, alias)
+			writeJSON(w, 201, map[string]any{"id": m.ID, "replayed": replay, "pending": m.Pending})
+			return
+		}
 		if err := JoinRemoteTargets(s.db, target); err != nil {
 			apiError(w, 400, err.Error())
 			return
@@ -966,6 +997,9 @@ func (s *webServer) people(w http.ResponseWriter, r *http.Request, viewer *Princ
 		}
 		name := principalAddress(p)
 		seen[name] = true
+		for alias := range p.aliases {
+			seen[alias] = true
+		}
 		people = append(people, map[string]any{"id": p.ID, "name": name, "kind": p.Kind, "status": p.Status})
 	}
 	if s.local {
@@ -1038,6 +1072,9 @@ func (s *webServer) people(w http.ResponseWriter, r *http.Request, viewer *Princ
 		person["muted"] = muted[target]
 		person["unread"] = counts[target]
 	}
+	for _, person := range people {
+		enrichParticipant(s.db, person, viewer)
+	}
 	writeJSON(w, 200, map[string]any{"people": people})
 }
 
@@ -1087,7 +1124,8 @@ func (s *webServer) changedTargets(r *http.Request, p *Principal, after, through
 				allowed[target] = s.access.canAccess(r, target)
 			}
 		} else {
-			if strings.HasPrefix(target, "@") {
+			_, _, scopedDM := splitRemoteDMTarget(target)
+			if strings.HasPrefix(target, "@") && !scopedDM {
 				if principalOwnsAddress(p, strings.TrimPrefix(target, "@")) {
 					target = "@" + c.sender
 				} else if !principalOwnsAddress(p, c.sender) {

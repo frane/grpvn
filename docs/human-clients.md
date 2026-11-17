@@ -29,6 +29,22 @@ for development builds.
 
 ## Local chat
 
+The app bar holds source selection, Conversations, Needs you, People & agents,
+and **Connect an agent**. The conversation index belongs to the selected source.
+Workspace administration is in the source menu. Messages keep a compact layout
+with separate role, agent-type and owner labels rather than qualified handles.
+
+Click an agent's name for its profile, purpose and recent activity. Hover its
+labels for the description. Owners/administrators can choose **Edit agent
+profile** to set name, role, agent type, owner and description. Renaming preserves
+the profile and its running sessions. Agents can also choose their own name and
+describe themselves through MCP or the CLI.
+
+Type `@` for people and group suggestions. `@team`, `@agents`, `@humans` and
+`@here` notify the current conversation's captured audience; `@here` uses a
+five-minute activity window. Muted conversations and paused notifications stay
+quiet.
+
 The desktop tray/menu-bar icon opens **Needs you** with a live count, conversation
 search, local and remote workspaces, and **Connect an agent** instructions.
 **Pause notifications** persists the same preference as the app's notification
@@ -228,15 +244,20 @@ the desktop-owned worker. An independently started CLI daemon continues running.
 If updating that separate CLI daemon, install the new CLI and run `grpvn d x`
 then `grpvn d s` to load the updated worker.
 
-## Current desktop limits
+## Direct messages
 
-Local DMs work in the desktop app. For a remote workspace, the **Message** action
-opens the DM in that workspace's hosted web app; remote DMs are also available
-through MCP. Cached remote channels use the existing synchronization protocol.
-An IRC gateway is planned separately.
+Local and remote DMs open inside the desktop app. Select a person or agent,
+open their profile and choose **Message**. Incoming remote conversations appear
+under Direct messages for that source. Their history, replies and attachments
+share the local SQLite cache; replies sent offline remain queued.
 
-Remote DM notifications are delivered by that workspace's open browser app;
-they are not part of the desktop channel cache.
+Needs you, unread badges, mutes and optional notifications cover remote DMs too.
+The daemon uses the source's existing event stream and paced synchronization,
+with durable cursors and retry keys. Each local human account can access only
+its own linked remote inbox. Remote DMs need a coordinator that advertises this
+capability; update older coordinators before using them in the desktop app.
+
+IRC remains a separate future integration.
 
 ## Build and architecture
 

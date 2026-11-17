@@ -106,6 +106,7 @@ func authenticateMember(db *sql.DB, r *http.Request) (*Principal, error) {
 			p.scopes[s] = true
 		}
 	}
+	touchParticipant(db, p.ID)
 	return p, nil
 }
 

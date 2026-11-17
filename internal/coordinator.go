@@ -19,29 +19,31 @@ const syncProtocol = 1
 const syncPageSize = 100
 
 type serverInfo struct {
-	Protocol int    `json:"protocol"`
-	ServerID string `json:"server_id"`
-	Web      bool   `json:"web,omitempty"`
+	Protocol       int    `json:"protocol"`
+	ServerID       string `json:"server_id"`
+	Web            bool   `json:"web,omitempty"`
+	DirectMessages bool   `json:"direct_messages,omitempty"`
 }
 
 // wireMessage uses the coordinator's IDs and commit sequence. Each client
 // maps these IDs to its own log, independently of every other remote.
 type wireMessage struct {
-	Seq           int64   `json:"seq"`
-	ID            string  `json:"id"`
-	Sender        string  `json:"sender"`
-	Target        string  `json:"target"`
-	Body          string  `json:"body"`
-	ChainRoot     string  `json:"chain_root"`
-	ChainDepth    int     `json:"chain_depth"`
-	ParentID      *string `json:"parent_id,omitempty"`
-	Correlation   *string `json:"correlation,omitempty"`
-	CreatedAt     int64   `json:"created_at"`
-	PrincipalID   string  `json:"principal_id,omitempty"`
-	OwnerID       string  `json:"owner_id,omitempty"`
-	OwnerName     string  `json:"owner_name,omitempty"`
-	OwnerApproved bool    `json:"owner_approved,omitempty"`
-	Automated     bool    `json:"automated,omitempty"`
+	Seq             int64     `json:"seq"`
+	ID              string    `json:"id"`
+	Sender          string    `json:"sender"`
+	Target          string    `json:"target"`
+	Body            string    `json:"body"`
+	ChainRoot       string    `json:"chain_root"`
+	ChainDepth      int       `json:"chain_depth"`
+	ParentID        *string   `json:"parent_id,omitempty"`
+	Correlation     *string   `json:"correlation,omitempty"`
+	CreatedAt       int64     `json:"created_at"`
+	PrincipalID     string    `json:"principal_id,omitempty"`
+	OwnerID         string    `json:"owner_id,omitempty"`
+	OwnerName       string    `json:"owner_name,omitempty"`
+	OwnerApproved   bool      `json:"owner_approved,omitempty"`
+	Automated       bool      `json:"automated,omitempty"`
+	GroupRecipients *[]string `json:"group_recipients,omitempty"`
 }
 
 type messagePage struct {
@@ -49,13 +51,24 @@ type messagePage struct {
 	Cursor   int64         `json:"cursor"`
 }
 
-func toWire(m *Message) wireMessage {
-	return wireMessage{Seq: m.Seq, ID: m.ID, Sender: m.Sender, Target: m.Target, Body: string(m.Body), ChainRoot: m.ChainRoot, ChainDepth: m.ChainDepth, ParentID: m.ParentID, Correlation: m.Correlation, CreatedAt: m.CreatedAt}
+func toWire(m *Message, databases ...dbtx) wireMessage {
+	w := wireMessage{Seq: m.Seq, ID: m.ID, Sender: m.Sender, Target: m.Target, Body: string(m.Body), ChainRoot: m.ChainRoot, ChainDepth: m.ChainDepth, ParentID: m.ParentID, Correlation: m.Correlation, CreatedAt: m.CreatedAt}
+	if m.groupSnapshot {
+		w.GroupRecipients = &m.groupRecipients
+	} else if len(databases) > 0 && len(mentionedGroups(string(m.Body))) > 0 {
+		w.GroupRecipients = loadGroupRecipients(databases[0], m.ID)
+	}
+	return w
 }
 
 func (m wireMessage) message() *Message {
-	return &Message{Seq: m.Seq, ID: m.ID, Sender: m.Sender, Target: m.Target, Body: []byte(m.Body), ChainRoot: m.ChainRoot,
+	message := &Message{Seq: m.Seq, ID: m.ID, Sender: m.Sender, Target: m.Target, Body: []byte(m.Body), ChainRoot: m.ChainRoot,
 		ChainDepth: m.ChainDepth, ParentID: m.ParentID, Correlation: m.Correlation, CreatedAt: m.CreatedAt}
+	if m.GroupRecipients != nil {
+		message.groupSnapshot = true
+		message.groupRecipients = *m.GroupRecipients
+	}
+	return message
 }
 
 func validMessageID(id string) bool {
@@ -142,7 +155,7 @@ func CoordinatorHandler(db *sql.DB, options CoordinatorOptions) (http.Handler, e
 		(&webServer{db: db, access: access}).events(w, r, p)
 	})
 	serverMetadata := func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, serverInfo{Protocol: syncProtocol, ServerID: id, Web: options.Web})
+		writeJSON(w, http.StatusOK, serverInfo{Protocol: syncProtocol, ServerID: id, Web: options.Web, DirectMessages: options.Web || options.LocalUI})
 	}
 	mux.HandleFunc("GET /v1/server", serverMetadata)
 	// Compatibility with coordinators and clients released before v0.12.
@@ -279,6 +292,7 @@ func sameWire(a, b wireMessage) bool {
 	a.PrincipalID, a.OwnerID, a.OwnerName = "", "", ""
 	b.PrincipalID, b.OwnerID, b.OwnerName = "", "", ""
 	a.OwnerApproved, b.OwnerApproved = false, false
+	a.GroupRecipients, b.GroupRecipients = nil, nil
 	aa, _ := json.Marshal(a)
 	bb, _ := json.Marshal(b)
 	return string(aa) == string(bb)
@@ -347,6 +361,9 @@ func acceptAttributedMessage(db *sql.DB, wire wireMessage, principal *Principal)
 		}
 	}
 	m := wire.message()
+	// Only the coordinator decides the audience of a posted group mention.
+	m.groupSnapshot = false
+	m.groupRecipients = nil
 	if principal != nil {
 		owner := principal
 		if principal.ParentID != "" {
@@ -385,7 +402,7 @@ func registeredSender(name, owner, id string) string {
 }
 
 func attributedWire(db dbtx, m *Message) wireMessage {
-	w := toWire(m)
+	w := toWire(m, db)
 	_ = db.QueryRow("SELECT EXISTS(SELECT 1 FROM automated_messages WHERE message_id=?)", m.ID).Scan(&w.Automated)
 	var name string
 	err := db.QueryRow(`SELECT p.id,p.name,COALESCE(owner.id,p.id),COALESCE(owner.name,p.name)

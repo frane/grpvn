@@ -156,7 +156,13 @@ func watchRemoteEvents(ctx context.Context, db *sql.DB, remote Remote, aliases, 
 			for _, channel := range channels {
 				query.Add("channel", channel)
 			}
-			request, _ := http.NewRequestWithContext(ctx, "GET", remote.URL+"/v1/events?"+query.Encode(), nil)
+			endpoint := "/v1/events"
+			var human bool
+			_ = db.QueryRow("SELECT EXISTS(SELECT 1 FROM remote_human_sessions WHERE server_id=?)", remote.ServerID).Scan(&human)
+			if human {
+				endpoint = "/v1/chat/events"
+			}
+			request, _ := http.NewRequestWithContext(ctx, "GET", remote.URL+endpoint+"?"+query.Encode(), nil)
 			request.Header.Set("Authorization", "Bearer "+remote.Token)
 			request.Header.Set("X-Grpvn-Server", remote.ServerID)
 			request.Header.Set("Accept", "text/event-stream")

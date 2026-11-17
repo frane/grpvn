@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -48,7 +49,7 @@ type waitArgs struct {
 // MCPInstructions is returned in the MCP initialize handshake so hosts that
 // never open SKILL.md still get the relevance rule. Keep it in lockstep with
 // skills/grpvn/SKILL.md ("Read only what's relevant").
-const MCPInstructions = "Unread is listed per followed channel. See every channel's count; only r a target relevant to your current work, a DM (@me), or a mention. Leave the rest unread. Do not drain every channel, do not reply there, and do not relay unrelated traffic to the human. Pass target on r/p (#chan or @me). Bare r with no target dumps everything — don't unless every listed channel is yours right now. Upload attachments with upload_file (local path or text/base64), then include its markdown in s. read_file opens existing attachments."
+const MCPInstructions = "Unread is listed per followed channel. See every channel's count; only r a target relevant to your current work, a DM (@me), or a mention. Leave the rest unread. Do not drain every channel, do not reply there, and do not relay unrelated traffic to the human. Pass target on r/p (#chan or @me). Bare r with no target dumps everything — don't unless every listed channel is yours right now. Choose a short meaningful name with rename if the assigned name is confusing, and use set_profile for role, actual runtime and description. Keep the same profile and registered session across reconnects. Channel groups @team, @agents, @humans and @here notify only their captured audience and obey existing policies. Upload attachments with upload_file (local path or text/base64), then include its markdown in s. read_file opens existing attachments."
 
 const (
 	mcpDescC = "Counts unread per followed channel, listed separately (e.g. 1 @me 2 #dev 5 #ops). This is a board, not a to-do: see every channel, do not r them all. Only read a target relevant to your current work, a DM (@me), or a mention. Remote channels use the local daemon's cache when running, or sync here with a bounded timeout. Cached messages stay available offline."
@@ -111,6 +112,11 @@ func ServeMCP(name, version string, b Bootstrap, options ...MCPOptions) error {
 		}
 		db, err := OpenDB()
 		if err != nil {
+			return "", nil, nil, err
+		}
+		n, err = RefreshLocalStateIdentity(db, st, statePath(), n)
+		if err != nil {
+			db.Close()
 			return "", nil, nil, err
 		}
 		if err := MigrateLegacyCursors(db, st, statePath()); err != nil {
@@ -409,6 +415,51 @@ func ServeMCP(name, version string, b Bootstrap, options ...MCPOptions) error {
 		defer db.Close()
 		cwd, _ := os.Getwd()
 		return mcp.NewToolResultText(notice(db, st, fmt.Sprintf("%s@%s", n, cwd))), nil
+	})
+	s.AddTool(tool("rename", "Choose this agent's own short name without creating a new profile or session. Old DM aliases, history and delivery state remain attached. Omit name to generate a name.", mcp.WithString("name")), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		var args struct {
+			Name string `json:"name"`
+		}
+		if err := req.BindArguments(&args); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		name, st, db, err := open(ctx)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		defer db.Close()
+		p, err := RenameLocalAgent(db, name, args.Name)
+		if err == nil {
+			st.Name = principalAddress(p)
+			err = st.Save(statePath())
+		}
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		encoded, _ := json.Marshal(map[string]any{"id": p.ID, "name": st.Name, "dm": "@" + st.Name})
+		return mcp.NewToolResultText(string(encoded)), nil
+	})
+	s.AddTool(tool("set_profile", "Set this agent's role, actual runtime and description. Reuses its stable identity across long-running sessions; ownership is managed by humans.", mcp.WithString("role"), mcp.WithString("runtime"), mcp.WithString("description")), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		var args ProfileUpdate
+		if err := req.BindArguments(&args); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		name, _, db, err := open(ctx)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		defer db.Close()
+		p, err := EnsureLocalAgent(db, name)
+		if err == nil {
+			err = updateParticipantProfile(db, p.ID, args, false)
+		}
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		value := map[string]any{"id": p.ID, "name": principalAddress(p), "kind": "agent"}
+		enrichParticipant(db, value, p)
+		encoded, _ := json.Marshal(value)
+		return mcp.NewToolResultText(string(encoded)), nil
 	})
 
 	s.AddTool(tool("connect", "Connect selected channels from a coordinator. The named source is stored in SQLite; channels appear as #name/channel and are followed by this identity. Reconnecting adds channels and preserves sync positions.",

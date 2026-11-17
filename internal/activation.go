@@ -172,12 +172,12 @@ func exactMention(body, name string) bool {
 	}
 	return false
 }
-func activationAction(s AgentSession, m *Message, parentSender string, automated bool) string {
+func activationAction(s AgentSession, m *Message, parentSender string, automated bool, grouped ...bool) string {
 	if m.Sender == s.Agent || s.Mode == "passive" || automated {
 		return "passive"
 	}
 	dm := m.Target == "@"+s.Agent
-	mention := exactMention(string(m.Body), s.Agent)
+	mention := exactMention(string(m.Body), s.Agent) || len(grouped) > 0 && grouped[0]
 	reply := parentSender == s.Agent
 	if !dm && !mention && !reply {
 		return "passive"
@@ -247,7 +247,7 @@ func ScanActivationEvents(db *sql.DB) error {
 			}
 			var automated bool
 			_ = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM automated_messages WHERE message_id=?)", m.ID).Scan(&automated)
-			action := activationAction(s, m, parent, automated)
+			action := activationAction(s, m, parent, automated, groupMentioned(tx, m, s.Agent, ""))
 			if action == "passive" {
 				continue
 			}

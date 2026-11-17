@@ -3,6 +3,7 @@ package internal
 import (
 	"crypto/rand"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -23,17 +24,19 @@ var ulidEntropy = &ulid.LockedMonotonicReader{
 }
 
 type Message struct {
-	Seq         int64 // commit-ordered sequence; 0 until saved/loaded
-	Pending     bool  // remote send committed locally, not yet acknowledged
-	ID          string
-	Sender      string
-	Target      string
-	Body        []byte
-	ChainRoot   string
-	ChainDepth  int
-	ParentID    *string
-	Correlation *string
-	CreatedAt   int64
+	Seq             int64 // commit-ordered sequence; 0 until saved/loaded
+	Pending         bool  // remote send committed locally, not yet acknowledged
+	ID              string
+	Sender          string
+	Target          string
+	Body            []byte
+	ChainRoot       string
+	ChainDepth      int
+	ParentID        *string
+	Correlation     *string
+	CreatedAt       int64
+	groupSnapshot   bool
+	groupRecipients []string
 }
 
 func NewMessage(sender, target string, body []byte) *Message {
@@ -55,8 +58,39 @@ func (m *Message) Save(db *sql.DB) error {
 }
 
 func (m *Message) save(db dbtx) error {
-	return db.QueryRow("INSERT INTO messages (id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq",
-		m.ID, m.Sender, m.Target, m.Body, m.ChainRoot, m.ChainDepth, m.ParentID, m.Correlation, m.CreatedAt).Scan(&m.Seq)
+	grouped := len(mentionedGroups(string(m.Body))) > 0
+	if handle, ok := db.(*sql.DB); ok && grouped {
+		tx, err := beginWrite(handle)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if err = m.save(tx); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+	if err := db.QueryRow("INSERT INTO messages (id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq",
+		m.ID, m.Sender, m.Target, m.Body, m.ChainRoot, m.ChainDepth, m.ParentID, m.Correlation, m.CreatedAt).Scan(&m.Seq); err != nil {
+		return err
+	}
+	if !grouped {
+		return nil
+	}
+	if !m.groupSnapshot {
+		var err error
+		m.groupRecipients, err = groupRecipients(db, m)
+		if err != nil {
+			return err
+		}
+		m.groupSnapshot = true
+	}
+	encoded, err := json.Marshal(m.groupRecipients)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec("INSERT INTO message_groups(message_id,recipients) VALUES(?,?)", m.ID, string(encoded))
+	return err
 }
 
 // dbtx is *sql.DB or *sql.Tx. Send uses a transaction when an idempotency

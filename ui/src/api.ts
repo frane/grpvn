@@ -2,19 +2,20 @@ export type Profile = { id: string; name: string; kind: 'human'; admin: boolean 
 export type Session = { authenticated: boolean; profile?: Profile; local: boolean };
 export type Channel = { name: string; label: string; source: string; source_id?:string;account_name?:string; unread: number; write: boolean; open: boolean; joined?:boolean; archived?:boolean;manage?:boolean;muted?:boolean;read_position?:number;read_held?:boolean };
 export type Member = Person & {grants:{channel:string;write:boolean}[];admin:boolean;local?:boolean;self?:boolean};
+export type DirectConversation=Channel&{kind:'human'|'agent';peer_id:string};
 export type UploadedFile={id:string;name:string;type:string;size:number;image:boolean;url:string};
-export type Person = { id: string; name: string; kind: 'human' | 'agent'; status: string;runtime?:string;last_seen?:number;last_message?:number;muted?:boolean;unread?:number };
-export type Message = { seq: number; id: string; sender: string; target: string; body: string; chain_root: string; parent_id: string | null; created_at: number; kind: string; mine: boolean; pending: boolean;reply_count?:number;reply_unread?:number;last_reply_at?:number;reply_following?:boolean };
+export type Person = { id: string; name: string; kind: 'human' | 'agent'; status: string;runtime?:string;role?:string;description?:string;owner_id?:string;owner_name?:string;aliases?:string[];can_edit?:boolean;last_seen?:number;last_message?:number;muted?:boolean;unread?:number };
+export type Message = { seq: number; id: string; sender: string;profile_id?:string; target: string; body: string; chain_root: string; parent_id: string | null; created_at: number; kind: string; mine: boolean; pending: boolean;reply_count?:number;reply_unread?:number;last_reply_at?:number;reply_following?:boolean };
 export type Approval = { id:string;profile_id:string;name:string;code:string;channels:string[];client?:string;redirect?:string;expires_at?:number;notified?:boolean };
 export class ApiError extends Error { constructor(public status: number, message: string) { super(message); } }
 const routes: Record<string,string> = {
- activity:'/v1/chat/activity',threads:'/v1/chat/threads','notification-settings':'/v1/chat/notification-settings',
+ activity:'/v1/chat/activity',threads:'/v1/chat/threads','notification-settings':'/v1/chat/notification-settings','direct-conversations':'/v1/chat/direct-conversations',
  session:'/v1/auth/session',login:'/v1/auth/login',signup:'/v1/accounts',logout:'/v1/auth/logout',bootstrap:'/v1/auth/local-session',
  preferences:'/v1/chat/preferences',channels:'/v1/chat/channels',messages:'/v1/chat/messages',read:'/v1/chat/read-markers',create:'/v1/chat/channels',invite:'/v1/chat/invitations',join:'/v1/chat/memberships',memberships:'/v1/chat/memberships',members:'/v1/members',people:'/v1/chat/participants',approvals:'/v1/access-requests',sources:'/v1/workspaces','connect/status':'/v1/workspace-connections'
 };
 export async function api<T>(path: string, body?: unknown, method?:string): Promise<T> {
   const [name,query] = path.split('?');
-  const endpoint=name.startsWith('members/')?'/v1/members/'+name.slice(8):name.startsWith('connections/') ? '/v1/workspace-connections/'+name.slice(12) : name==='sources'&&body!==undefined ? '/v1/workspace-connections' : name==='approvals'&&body!==undefined&&method!=='PATCH' ? '/v1/access-approvals' : routes[name];
+  const endpoint=name.startsWith('people/')?'/v1/chat/participants/'+name.slice(7):name.startsWith('members/')?'/v1/members/'+name.slice(8):name.startsWith('connections/') ? '/v1/workspace-connections/'+name.slice(12) : name==='sources'&&body!==undefined ? '/v1/workspace-connections' : name==='approvals'&&body!==undefined&&method!=='PATCH' ? '/v1/access-approvals' : routes[name];
   const response = await fetch(endpoint + (query ? '?' + query : ''), { credentials: 'same-origin',method:method||(body===undefined?'GET':'POST'), ...(body !== undefined ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}) });
   const data = await response.json();
   if (!response.ok) throw new ApiError(response.status, data.error || 'Something went wrong. Try again.');
