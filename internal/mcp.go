@@ -74,7 +74,7 @@ func ServeMCP(name, version string, b Bootstrap, options ...MCPOptions) error {
 	if len(options) > 0 {
 		config = options[0]
 	}
-	opts := []server.ServerOption{server.WithInstructions(MCPInstructions)}
+	opts := []server.ServerOption{server.WithInstructions(MCPInstructions + " Identify remote conversations to peers by server URL plus native channel, such as #dealflow on https://chat.example.com. Local #source/channel aliases can differ between machines. Use remotes and l to map the server/channel to this machine's target; preserve the server context and do not create a local channel to compensate for an alias difference.")}
 	hooks := &server.Hooks{}
 	if config.ClaudeChannel {
 		opts = append(opts, server.WithExperimental(map[string]any{"claude/channel": map[string]any{}}), server.WithHooks(hooks))
@@ -261,7 +261,7 @@ func ServeMCP(name, version string, b Bootstrap, options ...MCPOptions) error {
 			// message must be able to reach it. Fail open — the send is
 			// already committed.
 			_, _ = AutoFollow(db, st, statePath(), m.Target)
-			return mcp.NewToolResultText(notice(db, st, FormatSendAck(m, replayed))), nil
+			return mcp.NewToolResultText(notice(db, st, FormatSendAck(m, replayed, db))), nil
 		})
 
 	s.AddTool(tool("q", "Asks a question and returns a correlation ID. Same idempotency_key behaviour as s.",
@@ -283,11 +283,7 @@ func ServeMCP(name, version string, b Bootstrap, options ...MCPOptions) error {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			_, _ = AutoFollow(db, st, statePath(), m.Target)
-			ack := m.ID
-			if m.Pending {
-				ack += " queued"
-			}
-			return mcp.NewToolResultText(notice(db, st, ack)), nil
+			return mcp.NewToolResultText(notice(db, st, FormatAskAck(m, db))), nil
 		})
 
 	s.AddTool(tool("g", "Greps message history with a regex pattern",

@@ -14,7 +14,7 @@ export function WorkspaceMenu({local,workspace,sources,account,admin,canInvite,r
  const source=sources.find(s=>s.name===workspace);
  const remote=!local||!!workspace;
  const label=remote?new URL(source?.url||location.origin).host:'Local chat';
- const subtitle=remote?'Remote workspace':'On this computer';
+ const subtitle=remote?(source?'Alias: '+source.name:'Remote workspace'):'On this computer';
  const items=()=>Array.from(menu.current?.querySelectorAll<HTMLButtonElement>('[role^="menuitem"]:not(:disabled)')||[]);
  function close(restore=false){setOpen(false);if(restore)trigger.current?.focus();}
  function action(name:string){close(true);onAction(name);}
@@ -50,7 +50,7 @@ export function WorkspaceMenu({local,workspace,sources,account,admin,canInvite,r
      <div className="menu-label">Workspaces</div>
      <div className="workspace-choices">
       {[{name:'',url:''},...sources].map(s=>{const name=s.name?new URL(s.url).host:'Local chat';return <button key={s.name} role="menuitemradio" tabIndex={-1} aria-label={name} aria-checked={workspace===s.name} onClick={()=>{close(true);onSelect(s.name);}}>
-       {s.name?<Globe size={17}/>:<Laptop size={17}/>}<span className="menu-workspace-name">{name}<small>{s.name?s.url:'On this computer'}</small></span>{!!requestCounts[s.name]&&<b className="request-badge">{requestCounts[s.name]}</b>}{workspace===s.name&&<Check size={16}/>}
+       {s.name?<Globe size={17}/>:<Laptop size={17}/>}<span className="menu-workspace-name">{name}<small>{s.name?s.name+' · '+s.url:'On this computer'}</small></span>{!!requestCounts[s.name]&&<b className="request-badge">{requestCounts[s.name]}</b>}{workspace===s.name&&<Check size={16}/>}
       </button>;})}
      </div>
      <button role="menuitem" tabIndex={-1} onClick={()=>action('connect')}><Plus size={17}/><span>Add workspace…</span></button>

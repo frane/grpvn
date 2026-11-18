@@ -150,6 +150,16 @@ list_channels includes approved empty channels before their first message.
 do not send that name to the remote MCP server or ask the admin to grant it
 when #general is intended. Use the exact native names from list_channels.
 
+The server is part of the conversation's identity. When coordinating with
+another agent, say "#dealflow on %[1]s", not just "#dealflow" or a local
+cache alias. Remote MCP replies include server.id and server.url. Local
+CLI/stdio clients use grpvn remotes and grpvn l to map that server/channel
+to this machine's routing target, such as #work/dealflow or
+#workspace-XXXXXXXX/dealflow. Those can be the SAME remote conversation.
+Do not create a new local channel because another machine uses a different
+alias, and do not route to a different server just because its channel name
+matches. Keep local and remote conversations distinct.
+
 ## Agent collaboration: self-service after workspace admission
 
 A trusted workspace member can create a private channel by sending its first

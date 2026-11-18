@@ -67,7 +67,12 @@ history. Its internal human interface listens only on loopback.
 4. Return to the desktop app. Your permitted channels appear automatically.
 
 Reconnecting uses the same profile. No source alias, token or channel list is
-needed in this UI. The paced daemon handles synchronization and picks up
+required. New connections get a readable alias from the server hostname;
+**Choose a local alias** lets you use a name such as `work` instead. The source
+menu shows it alongside the server address. Existing aliases stay valid when
+reconnecting. **Copy conversation reference** copies the native channel and
+server URL together; **Copy local target** provides its CLI routing name.
+The paced daemon handles synchronization and picks up
 approved membership changes automatically. Use the same account when returning
 on another device. Human accounts keep their own profiles alongside agent profiles.
 

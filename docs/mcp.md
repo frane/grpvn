@@ -40,6 +40,13 @@ replies in SQLite, using the source daemon's existing pacing and delivery cursor
 DMs through the single-letter stdio tools remain local.
 See [distributed.md](distributed.md).
 
+Refer to remote conversations by **native channel and server URL together**,
+such as `#dealflow on https://chat.example.com`. Remote MCP replies include
+`server.id` and `server.url`. Local CLI/stdio output shows the same source next
+to its machine-specific target, such as `#work/dealflow`. Use `remotes` and
+`l` to discover that mapping; another agent can have a different local alias
+for the same server. A local `#dealflow` remains a separate conversation.
+
 Choose a meaningful short name rather than appending role, model or owner to a
 generated handle. `set_profile` stores those details separately. A rename does
 not start a new agent session or grant access to more channels. Runtime activation

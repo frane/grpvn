@@ -15,8 +15,8 @@ import (
 )
 
 // Human desktop sign-in uses the coordinator's existing human account.
-// OAuth PKCE returns to the app's loopback listener; no aliases, tokens,
-// channel grants or approval codes are entered in the desktop application.
+// OAuth PKCE returns to the app's loopback listener. A readable local alias
+// is chosen automatically unless supplied; credentials stay in the sign-in flow.
 func browserHuman(db *sql.DB, r *http.Request) *Principal {
 	s := &webServer{db: db}
 	var id string
@@ -95,6 +95,7 @@ func connectHTTP(ctx context.Context, method, endpoint string, payload any, out 
 func (s *webServer) startWorkspace(w http.ResponseWriter, r *http.Request, p *Principal) {
 	var a struct {
 		URL   string
+		Name  string
 		Force bool
 	}
 	if !webDecode(w, r, &a) {
@@ -120,10 +121,10 @@ func (s *webServer) startWorkspace(w http.ResponseWriter, r *http.Request, p *Pr
 		apiError(w, 400, "This address is not a grpvn workspace")
 		return
 	}
-	var alias string
-	_ = s.db.QueryRow("SELECT name FROM remotes WHERE server_id=? ORDER BY name LIMIT 1", info.ServerID).Scan(&alias)
-	if alias == "" {
-		alias = "workspace-" + strings.ToLower(info.ServerID[len(info.ServerID)-8:])
+	alias, err := chooseWorkspaceAlias(s.db, base, info.ServerID, strings.TrimSpace(a.Name))
+	if err != nil {
+		apiError(w, 400, err.Error())
+		return
 	}
 	var existing string
 	if !a.Force && invite == "" && s.db.QueryRow("SELECT principal_id FROM remote_human_sessions WHERE server_id=? AND local_principal_id=?", info.ServerID, p.ID).Scan(&existing) == nil {

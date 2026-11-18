@@ -76,7 +76,7 @@ func TestDesktopWorkspaceSignInReusesHumanProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	call("POST", local.URL+"/v1/auth/local-session", local.URL, map[string]string{"Ticket": ticket})
-	flow := call("POST", local.URL+"/v1/workspace-connections", local.URL, map[string]string{"URL": remoteBase})
+	flow := call("POST", local.URL+"/v1/workspace-connections", local.URL, map[string]string{"URL": remoteBase, "Name": "work"})
 	authorize := flow["url"].(string)
 	status, _, headers := request("GET", authorize, "", nil)
 	if status != 303 {
@@ -122,7 +122,7 @@ func TestDesktopWorkspaceSignInReusesHumanProfile(t *testing.T) {
 		t.Fatalf("profile changed %s %s %v", registeredID, name, err)
 	}
 	target := state["target"].(string)
-	if !strings.HasSuffix(target, "/general") {
+	if target != "#work/general" {
 		t.Fatal("accessible channels were not discovered", state)
 	}
 	status, file := uploadTestFile(t, browser, local.URL, target, "", "desktop.go", []byte("package main\nfunc main() {}\n"))

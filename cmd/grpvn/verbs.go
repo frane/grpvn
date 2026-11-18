@@ -142,6 +142,7 @@ var sendCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		fmt.Println(internal.FormatSendAck(m, replayed))
+		internal.WriteConversationSource(cmd.ErrOrStderr(), db, m.Target)
 		autoFollow(db, st, m.Target)
 		unreadNotice(db, st)
 	},
@@ -171,11 +172,8 @@ var askCmd = &cobra.Command{
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
-		if m.Pending {
-			fmt.Println(m.ID + " queued")
-		} else {
-			fmt.Println(m.ID)
-		}
+		fmt.Println(internal.FormatAskAck(m))
+		internal.WriteConversationSource(cmd.ErrOrStderr(), db, m.Target)
 		autoFollow(db, st, m.Target)
 		unreadNotice(db, st)
 	},

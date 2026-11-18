@@ -147,6 +147,7 @@ func RenderBatch(w io.Writer, db *sql.DB, msgs []*Message, selfName, defaultChan
 		for _, m := range msgs {
 			RenderHuman(w, m, selfName, ShouldColor(color))
 		}
+		renderConversationSources(w, db, msgs)
 		return
 	}
 	plen := UniquePrefixLen(msgs)
@@ -155,6 +156,19 @@ func RenderBatch(w io.Writer, db *sql.DB, msgs []*Message, selfName, defaultChan
 	}
 	for _, m := range msgs {
 		RenderAI(w, m, selfName, defaultChannel, ts, full, plen)
+	}
+	renderConversationSources(w, db, msgs)
+}
+
+// Leave the first field as the message ID for existing CLI scripts. Source
+// context appears once per conversation after the batch, including in MCP.
+func renderConversationSources(w io.Writer, db *sql.DB, messages []*Message) {
+	seen := map[string]bool{}
+	for _, message := range messages {
+		if !seen[message.Target] {
+			seen[message.Target] = true
+			WriteConversationSource(w, db, message.Target)
+		}
 	}
 }
 

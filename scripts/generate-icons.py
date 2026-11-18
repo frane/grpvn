@@ -24,10 +24,10 @@ def main():
     shutil.copyfile(SOURCE, ROOT / "ui/public/favicon.svg")
     mark = ET.fromstring(source)
     mark.remove(mark.find(f"{{{SVG}}}rect"))
-    mark.find(f"{{{SVG}}}path").set("stroke", "#173A32")
-    mark.find(f"{{{SVG}}}circle").set("fill", "#379C65")
+    mark.find(f"{{{SVG}}}path").set("stroke", "#252932")
+    mark.find(f"{{{SVG}}}circle").set("fill", "#5677D8")
     ET.ElementTree(mark).write(ROOT / "brand/mark.svg", encoding="unicode")
-    for name, color in (("logo.svg", "#173A32"), ("logo-dark.svg", "#F5FBF4")):
+    for name, color in (("logo.svg", "#252932"), ("logo-dark.svg", "#FFFFFF")):
         logo = ET.fromstring(source)
         logo.set("viewBox", "0 0 440 128")
         text = ET.SubElement(logo, f"{{{SVG}}}text", {

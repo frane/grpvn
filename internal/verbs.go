@@ -400,15 +400,34 @@ func sendOnce(db dbtx, sender string, targetArg string, bodyArg string, defaultC
 // FormatSendAck is the stdout/MCP body for a successful send: the id a
 // caller can retry against, and the target it landed on. "replayed" means
 // the idempotency key hit an existing row — the store did not grow.
-func FormatSendAck(m *Message, replayed bool) string {
+func FormatSendAck(m *Message, replayed bool, databases ...dbtx) string {
 	suffix := ""
 	if m.Pending {
 		suffix = " queued"
 	}
+	status := ""
 	if replayed {
-		return fmt.Sprintf("%s %s replayed%s", m.ID, m.Target, suffix)
+		status = " replayed"
 	}
-	return fmt.Sprintf("%s %s%s", m.ID, m.Target, suffix)
+	ack := fmt.Sprintf("%s %s%s%s", m.ID, m.Target, status, suffix)
+	return withConversationSource(ack, m.Target, databases...)
+}
+
+func FormatAskAck(m *Message, databases ...dbtx) string {
+	ack := m.ID
+	if m.Pending {
+		ack += " queued"
+	}
+	return withConversationSource(ack, m.Target, databases...)
+}
+
+func withConversationSource(ack, target string, databases ...dbtx) string {
+	if len(databases) > 0 {
+		if source := conversationSource(databases[0], target); source != nil {
+			ack += "\n[" + source.label() + "; local target " + source.Target + "]"
+		}
+	}
+	return ack
 }
 
 // Gc prunes messages (and their marks) older than the cutoff. Retention is
@@ -568,6 +587,12 @@ func Channels(w io.Writer, db *sql.DB, follow []string) error {
 	for _, f := range follow {
 		followed[f] = true
 	}
+	type item struct {
+		target string
+		count  int
+		last   int64
+	}
+	items := []item{}
 	seen := map[string]bool{}
 	for rows.Next() {
 		var target string
@@ -577,14 +602,47 @@ func Channels(w io.Writer, db *sql.DB, follow []string) error {
 			return err
 		}
 		seen[target] = true
-		suffix := ""
-		if followed[target] {
-			suffix = " following"
-		}
-		fmt.Fprintf(w, "%s %d %s%s\n", target, count, RelativeTime(last), suffix)
+		items = append(items, item{target, count, last})
 	}
 	if err := rows.Err(); err != nil {
 		return err
+	}
+	rows.Close()
+	// Joined remote channels also exist before their first message. Read and
+	// close this result before looking up source metadata on SQLite.
+	remoteRows, err := db.Query("SELECT target FROM remote_channels ORDER BY target")
+	if err != nil {
+		return err
+	}
+	for remoteRows.Next() {
+		var target string
+		if err := remoteRows.Scan(&target); err != nil {
+			remoteRows.Close()
+			return err
+		}
+		if !seen[target] {
+			seen[target] = true
+			items = append(items, item{target: target})
+		}
+	}
+	err = remoteRows.Err()
+	remoteRows.Close()
+	if err != nil {
+		return err
+	}
+	for _, channel := range items {
+		suffix := ""
+		if followed[channel.target] {
+			suffix = " following"
+		}
+		if source := conversationSource(db, channel.target); source != nil {
+			suffix += " | " + source.label()
+		}
+		age := "-"
+		if channel.last != 0 {
+			age = RelativeTime(channel.last)
+		}
+		fmt.Fprintf(w, "%s %d %s%s\n", channel.target, channel.count, age, suffix)
 	}
 	// A followed channel with no messages yet still exists as far as this
 	// agent is concerned; leaving it out would make the list disagree with
