@@ -215,7 +215,7 @@ func ambiguousPrefixError(prefix string, matches []*Message) error {
 }
 
 func findMessageByID(db dbtx, id string) (*Message, error) {
-	return scanOneMessage(db.QueryRow("SELECT id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at FROM messages WHERE id = ?", id))
+	return scanOneMessage(db.QueryRow("SELECT seq, id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at FROM messages WHERE id = ?", id))
 }
 
 // rowScanner is *sql.Row or *sql.Rows.
@@ -230,7 +230,7 @@ func scanOneMessage(row *sql.Row) (*Message, error) {
 func scanMessageRow(row rowScanner) (*Message, error) {
 	var m Message
 	var parentID, correlation sql.NullString
-	if err := row.Scan(&m.ID, &m.Sender, &m.Target, &m.Body, &m.ChainRoot, &m.ChainDepth, &parentID, &correlation, &m.CreatedAt); err != nil {
+	if err := row.Scan(&m.Seq, &m.ID, &m.Sender, &m.Target, &m.Body, &m.ChainRoot, &m.ChainDepth, &parentID, &correlation, &m.CreatedAt); err != nil {
 		return nil, err
 	}
 	if parentID.Valid {

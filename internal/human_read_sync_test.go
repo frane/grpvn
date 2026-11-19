@@ -61,11 +61,13 @@ func TestHumanReadStateFollowsAccountAcrossCachesAndBrowsers(t *testing.T) {
 		handler http.Handler
 		owner   *Principal
 		alias   string
+		token   string
 		remote  Remote
 	}
 	newDevice := func(alias, localName string) device {
 		db := newTestDB(t)
-		seedTestAgent(t, db, "local-token", localName, []string{"*", "@*"})
+		token := "local-token-" + alias
+		seedTestAgent(t, db, token, localName, []string{"*", "@*"})
 		_, _ = db.Exec("UPDATE principals SET kind='human' WHERE name=?", localName)
 		owner, e := participantByAddress(db, localName)
 		if e != nil {
@@ -84,9 +86,12 @@ func TestHumanReadStateFollowsAccountAcrossCachesAndBrowsers(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		return device{db: db, handler: handler, owner: owner, alias: alias, remote: Remote{DB: db, Name: alias, URL: server.URL, ServerID: serverID, Token: "person-token"}}
+		return device{db: db, handler: handler, owner: owner, alias: alias, token: token, remote: Remote{DB: db, Name: alias, URL: server.URL, ServerID: serverID, Token: "person-token"}}
 	}
 	a, b := newDevice("work", "laptop-user"), newDevice("desk", "phone-cache")
+	if a.owner.ID == b.owner.ID {
+		t.Fatal("test devices must have different local profiles")
+	}
 	ids := []string{}
 	for i := 0; i < 5; i++ {
 		sent, failed := remoteTool(t, serverHandler, "agent-token", "send", map[string]any{"target": "#general", "body": "An unread update"})
@@ -107,10 +112,13 @@ func TestHumanReadStateFollowsAccountAcrossCachesAndBrowsers(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
+		if m.Seq <= 0 {
+			t.Fatal("loaded message lost commit position", m.ID)
+		}
 		return m
 	}
 	firstA := localMessage(a, ids[1])
-	readStateCall(t, a.handler, "local-token", "POST", "/v1/chat/read-markers", map[string]any{"Target": "#work/general", "Position": firstA.Seq})
+	readStateCall(t, a.handler, a.token, "POST", "/v1/chat/read-markers", map[string]any{"Target": "#work/general", "Position": firstA.Seq})
 	if err = syncHumanReads(context.Background(), a.db, a.remote, false); err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +153,7 @@ func TestHumanReadStateFollowsAccountAcrossCachesAndBrowsers(t *testing.T) {
 	if err = syncHumanReads(context.Background(), a.db, a.remote, false); err != nil {
 		t.Fatal(err)
 	}
-	readStateCall(t, a.handler, "local-token", "POST", "/v1/chat/read-markers", map[string]any{"Target": "#work/general", "Position": localMessage(a, ids[4]).Seq})
+	readStateCall(t, a.handler, a.token, "POST", "/v1/chat/read-markers", map[string]any{"Target": "#work/general", "Position": localMessage(a, ids[4]).Seq})
 	if err = syncHumanReads(context.Background(), a.db, a.remote, false); err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +169,7 @@ func TestHumanReadStateFollowsAccountAcrossCachesAndBrowsers(t *testing.T) {
 	// Offline reads stay queued and merge on reconnection without new profiles.
 	mustSync(t, a.db, a.alias)
 	offline.Store(true)
-	readStateCall(t, a.handler, "local-token", "POST", "/v1/chat/read-markers", map[string]any{"Target": "#work/general", "Position": firstA.Seq, "Unread": true})
+	readStateCall(t, a.handler, a.token, "POST", "/v1/chat/read-markers", map[string]any{"Target": "#work/general", "Position": firstA.Seq, "Unread": true})
 	if err = syncHumanReads(context.Background(), a.db, a.remote, false); err == nil {
 		t.Fatal("offline read-state push pretended to succeed")
 	}
@@ -192,7 +200,7 @@ func TestHumanReadStateFollowsAccountAcrossCachesAndBrowsers(t *testing.T) {
 	if badges["@agent"].(map[string]any)["unread"] != float64(1) {
 		t.Fatal("lightweight DM state lost the unread badge", badges)
 	}
-	readStateCall(t, a.handler, "local-token", "POST", "/v1/chat/read-markers", map[string]any{"Target": dmA.Target, "Position": dmA.Seq})
+	readStateCall(t, a.handler, a.token, "POST", "/v1/chat/read-markers", map[string]any{"Target": dmA.Target, "Position": dmA.Seq})
 	if err = syncHumanReads(context.Background(), a.db, a.remote, false); err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +212,11 @@ func TestHumanReadStateFollowsAccountAcrossCachesAndBrowsers(t *testing.T) {
 	}
 	badges = readStateCall(t, serverHandler, "person-token", "GET", "/v1/chat/direct-conversations", nil)["read_states"].(map[string]any)
 	if state, exists := badges["@agent"]; exists && state.(map[string]any)["unread"] != float64(0) {
-		t.Fatal("lightweight DM badge did not follow the account read", badges)
+		nativeDM, _ := findMessageByID(serverDB, dm["id"].(string))
+		position, held := conversationReadPosition(serverDB, person.ID, "@agent")
+		var pendingPayload string
+		_ = a.db.QueryRow("SELECT payload FROM human_read_outbox WHERE target=?", dmA.Target).Scan(&pendingPayload)
+		t.Fatal("lightweight DM badge did not follow the account read", badges, "cursor", position, "held", held, "DM", nativeDM.Seq, nativeDM.Sender, nativeDM.Target, "pending", pendingPayload)
 	}
 	reply, failed := remoteTool(t, serverHandler, "agent-token", "send", map[string]any{"target": ids[0], "body": "A thread read on another device"})
 	if failed {
@@ -216,7 +228,7 @@ func TestHumanReadStateFollowsAccountAcrossCachesAndBrowsers(t *testing.T) {
 	rootB := localMessage(b, ids[0])
 	replyA := localMessage(a, reply["id"].(string))
 	replyB := localMessage(b, reply["id"].(string))
-	readStateCall(t, a.handler, "local-token", "PATCH", "/v1/chat/threads", map[string]any{"RootID": rootA.ID, "Following": true, "Position": replyA.Seq})
+	readStateCall(t, a.handler, a.token, "PATCH", "/v1/chat/threads", map[string]any{"RootID": rootA.ID, "Following": true, "Position": replyA.Seq})
 	if err = syncHumanReads(context.Background(), a.db, a.remote, false); err != nil {
 		t.Fatal(err)
 	}
@@ -236,15 +248,15 @@ func TestHumanReadStateFollowsAccountAcrossCachesAndBrowsers(t *testing.T) {
 	mustSync(t, b.db, b.alias)
 	mentionA := localMessage(a, mention["id"].(string))
 	mentionB := localMessage(b, mention["id"].(string))
-	readStateCall(t, a.handler, "local-token", "GET", "/v1/chat/activity", nil)
-	readStateCall(t, a.handler, "local-token", "PATCH", "/v1/chat/activity", map[string]any{"IDs": []string{mentionA.ID}})
+	readStateCall(t, a.handler, a.token, "GET", "/v1/chat/activity", nil)
+	readStateCall(t, a.handler, a.token, "PATCH", "/v1/chat/activity", map[string]any{"IDs": []string{mentionA.ID}})
 	if err = syncHumanReads(context.Background(), a.db, a.remote, false); err != nil {
 		t.Fatal(err)
 	}
 	if err = syncHumanReads(context.Background(), b.db, b.remote, false); err != nil {
 		t.Fatal(err)
 	}
-	readStateCall(t, b.handler, "local-token", "GET", "/v1/chat/activity", nil)
+	readStateCall(t, b.handler, b.token, "GET", "/v1/chat/activity", nil)
 	var readAt int64
 	if err = b.db.QueryRow("SELECT read_at FROM human_inbox WHERE principal_id=? AND message_id=?", b.owner.ID, mentionB.ID).Scan(&readAt); err != nil || readAt == 0 {
 		t.Fatal("an inbox read was lost before the other device materialized it", readAt, err)
@@ -261,7 +273,7 @@ func TestHumanReadStateFollowsAccountAcrossCachesAndBrowsers(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	page := readStateCall(t, restored, "local-token", "GET", "/v1/chat/messages?target="+url.QueryEscape("#work/general"), nil)
+	page := readStateCall(t, restored, a.token, "GET", "/v1/chat/messages?target="+url.QueryEscape("#work/general"), nil)
 	if page["read_held"] != true {
 		t.Fatal("reconnect lost unread state", page)
 	}
