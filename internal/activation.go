@@ -427,7 +427,7 @@ func FinishActivation(db *sql.DB, id, status, detail, providerID, conversationUR
 	return tx.Commit()
 }
 
-func markActivationsConsumed(db *sql.DB, agent, target string, position int64) error {
+func markActivationsConsumed(db dbtx, agent, target string, position int64) error {
 	_, err := db.Exec(`UPDATE activation_events SET consumed_at=?,status='consumed' WHERE message_seq<=? AND target=? AND session_id IN (SELECT id FROM agent_sessions WHERE agent_name=?) AND consumed_at IS NULL`, time.Now().UnixMilli(), position, target, agent)
 	return err
 }

@@ -78,7 +78,7 @@ func TestHumanInboxUsesExplicitSignalsAndRetainsUnreadThreads(t *testing.T) {
 		t.Fatal(code, inbox)
 	}
 	items := inbox["items"].([]any)
-	if len(items) != 3 || inbox["unread"] != float64(3) {
+	if len(items) != 3 || inbox["unread"] != float64(2) {
 		t.Fatal("inbox included chatter or hid an addressed item", inbox)
 	}
 	found := map[string]map[string]any{}
@@ -89,7 +89,10 @@ func TestHumanInboxUsesExplicitSignalsAndRetainsUnreadThreads(t *testing.T) {
 	if found[reply.ID]["reason"] != "reply" || found[mention.ID]["reason"] != "mention" || found[dm.ID]["question"] != true {
 		t.Fatal(inbox)
 	}
-	for _, entry := range found {
+	if found[mention.ID]["unread"] != false {
+		t.Fatal("reading a visible mention left stale attention", found[mention.ID])
+	}
+	for _, entry := range []map[string]any{found[reply.ID], found[dm.ID]} {
 		if entry["unread"] != true {
 			t.Fatal("channel read cleared hidden attention", entry)
 		}
@@ -110,7 +113,7 @@ func TestHumanInboxUsesExplicitSignalsAndRetainsUnreadThreads(t *testing.T) {
 		t.Fatal(code, result)
 	}
 	_, inbox = call("GET", "/v1/chat/activity", nil)
-	if inbox["unread"] != float64(2) {
+	if inbox["unread"] != float64(1) {
 		t.Fatal("reading the actual thread failed to clear its inbox item", inbox)
 	}
 	if code, _ := call("PATCH", "/v1/chat/preferences", map[string]any{"Target": "#dev", "Muted": true}); code != 200 {
@@ -126,6 +129,30 @@ func TestHumanInboxUsesExplicitSignalsAndRetainsUnreadThreads(t *testing.T) {
 		t.Fatal(inbox)
 	}
 }
+func TestReadingChannelKeepsHiddenThreadMentionUnread(t *testing.T) {
+	s, _, call := inboxFixture(t)
+	_, posted := call("POST", "/v1/chat/messages", map[string]any{"Target": "#dev", "Body": "A discussion"})
+	root := posted["id"].(string)
+	reply, err := Send(s.db, "reef", root, "@frane, a question in the thread", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	later, err := Send(s.db, "reef", "#dev", "A visible later update", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call("POST", "/v1/chat/read-markers", map[string]any{"Target": "#dev", "Position": later.Seq})
+	_, inbox := call("GET", "/v1/chat/activity", nil)
+	if inbox["unread"] != float64(1) {
+		t.Fatal("channel read consumed hidden thread mention", inbox)
+	}
+	call("PATCH", "/v1/chat/threads", map[string]any{"RootID": root, "Position": reply.Seq})
+	_, inbox = call("GET", "/v1/chat/activity", nil)
+	if inbox["unread"] != float64(0) {
+		t.Fatal("opening the thread did not clear its mention", inbox)
+	}
+}
+
 func TestHumanThreadHistoryIncludesOriginalAndPaginatesReplies(t *testing.T) {
 	s, _, call := inboxFixture(t)
 	_, posted := call("POST", "/v1/chat/messages", map[string]any{"Target": "#dev", "Body": "Original context beyond the recent page"})

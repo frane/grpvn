@@ -104,6 +104,12 @@ type dbtx interface {
 var ulidPrefixRegex = regexp.MustCompile("^[0-9A-HJKMNP-TV-Z]{6,26}$")
 
 func ResolveTarget(db dbtx, input string, defaultChannel string) (target string, parent *Message, err error) {
+	if strings.Contains(input, "://") {
+		input, err = messageReference(db, input)
+		if err != nil {
+			return "", nil, err
+		}
+	}
 	if input == "" {
 		if defaultChannel == "" {
 			return "", nil, errors.New("no target and no default")
@@ -161,14 +167,14 @@ func FindMessageByPrefix(db dbtx, prefix string) (*Message, error) {
 // findMessagesByPrefix returns every message whose ID starts with prefix,
 // oldest first, capped so a 1-character prefix cannot load the store.
 func findMessagesByPrefix(db dbtx, prefix string) ([]*Message, error) {
-	rows, err := db.Query("SELECT id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at FROM messages WHERE id LIKE ? ORDER BY id ASC LIMIT ?", prefix+"%", maxPrefixMatches)
+	rows, err := db.Query("SELECT seq,id, sender, target, body, chain_root, chain_depth, parent_id, correlation, created_at FROM messages WHERE id LIKE ? ORDER BY id ASC LIMIT ?", prefix+"%", maxPrefixMatches)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []*Message
 	for rows.Next() {
-		m, err := scanMessageRow(rows)
+		m, err := scanMessage(rows, true)
 		if err != nil {
 			return nil, err
 		}

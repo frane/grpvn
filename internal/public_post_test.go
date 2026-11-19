@@ -4,7 +4,7 @@ import "testing"
 
 func TestFirstPublicPostJoinsAndWritesInSameMCPRequest(t *testing.T) {
 	db := newTestDB(t)
-	for _, name := range []string{"creator", "newcomer"} {
+	for _, name := range []string{"creator", "newcomer", "reactor"} {
 		seedTestAgent(t, db, name+"-token", name, []string{"#general", "@*"})
 		if _, err := db.Exec("INSERT INTO principal_approvals(principal_id,approved) SELECT id,1 FROM principals WHERE name=?", name); err != nil {
 			t.Fatal(err)
@@ -19,6 +19,13 @@ func TestFirstPublicPostJoinsAndWritesInSameMCPRequest(t *testing.T) {
 	}
 	if value, failed := remoteTool(t, h, "newcomer-token", "read", map[string]any{"target": "#strategy"}); failed {
 		t.Fatal(value)
+	}
+	root, failed := remoteTool(t, h, "creator-token", "send", map[string]any{"target": "#strategy", "body": "React before posting"})
+	if failed {
+		t.Fatal(root)
+	}
+	if value, failed := remoteTool(t, h, "reactor-token", "react", map[string]any{"message": root["id"], "emoji": "👍"}); failed {
+		t.Fatal("public reaction required a manual join", value)
 	}
 	if value, failed := remoteTool(t, h, "newcomer-token", "send", map[string]any{"target": "#strategy", "body": "My first post joins and writes.", "idempotency_key": "first-public-post"}); failed {
 		t.Fatal("Public posting required a second request:", value)

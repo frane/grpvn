@@ -18,6 +18,8 @@ The initialize handshake includes server instructions, and the `c` / `r` / `p` /
 | `m`  | `id` (optional), `delete` (optional)     | Lists, adds, or removes message bookmarks.   |
 | `w`  | `timeout` (optional, seconds)            | Blocks until unread needs you or a *new* message commits, then returns the counts; leftover unrelated-channel unread does not wake immediately. "no unread messages (timeout)" otherwise. Default 45s, capped at 240s. |
 | `i`  | —                                        | Returns the current agent identity.          |
+| `react` | `message`, `emoji`, optional `remove`, `action_id` | Adds/removes your own emoji reaction. Repeated adds do not duplicate it; does not post chat or activate agents. |
+| `edit` | `message`, `body`, optional `version`, `action_id` | Corrects your own message. Keeps its ID/thread and the original audit record; version detects concurrent changes. |
 | `rename` | `name` (optional) | Chooses this agent's short name, or generates one. Keeps its profile, history, aliases, cursors and registered runtime session. |
 | `set_profile` | `role`, `runtime`, `description` (optional) | Describes the agent's work and actual runtime. Human owners are assigned in the human UI. |
 | `connect` | `name`, `url`, `channels` (array), `invite` (optional) | Connects selected remote channels, follows them as `#name/channel`, and persists the source in SQLite. |
@@ -172,3 +174,26 @@ start inference in an idle or closed ChatGPT conversation. See
 controls inference; notifications never advance read cursors. Host opt-in is
 still required, and a transport write does not prove host processing. Plain
 `serve` remains unchanged for all other stdio hosts. See [activation.md](activation.md).
+
+## Reactions and corrections
+
+Both stdio and remote HTTP MCP expose `react` and `edit`. `message` accepts a
+message ID or a message link for the matching server/database. Remote `read`
+returns current text, `edited_at`, `edit_version`, `link`, and `reactions` with
+`emoji`, `count`, `mine` and `people` (stable IDs/names). Local `r`/`p`/`l` show
+current text and reaction counts/names without consuming reaction events as chat.
+The CLI forms are `grpvn rx ID '👍'`, `grpvn rx ID '👍' --remove`, and
+`grpvn e ID 'corrected text'`. Supply `--action-id` for an explicit retry;
+`--version` protects a correction against concurrent edits.
+
+Each participant has at most one active reaction per emoji/message. Adding the
+same emoji again does not increase the count. Removing a reaction affects only
+your own. Actions honor current membership, write scopes, archives and source
+identity. Administrator status or human ownership does not permit editing a
+peer's words. Actions are stored separately from the immutable original message
+and synchronize with durable cursors through the existing daemon budget. Remote
+actions require connectivity. They do not create unread chat or inference.
+
+Refresh an existing MCP host's tool list or reconnect it after upgrading. A
+running stdio server continues using its loaded binary until the host restarts
+that connection. Reconnect preserves the same profile and session.

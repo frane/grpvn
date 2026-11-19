@@ -37,7 +37,7 @@ func loadCursors(db *sql.DB, agent string) (map[string]int64, error) {
 // advanceCursor moves the agent's cursor for a target forward. The
 // conflict guard keeps it monotonic under concurrent reads — a stale
 // advance silently loses to a fresher one.
-func advanceCursor(db *sql.DB, agent, target string, pos int64) error {
+func advanceCursor(db dbtx, agent, target string, pos int64) error {
 	_, err := db.Exec(`INSERT INTO cursors (agent_name, target, position, updated_at)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT (agent_name, target) DO UPDATE

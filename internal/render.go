@@ -142,6 +142,28 @@ func RenderBatch(w io.Writer, db *sql.DB, msgs []*Message, selfName, defaultChan
 	if len(msgs) == 0 {
 		return
 	}
+	if db != nil {
+		display := make([]*Message, 0, len(msgs))
+		for _, original := range msgs {
+			message := *original
+			if view, err := messageView(db, original, ""); err == nil {
+				body := view.Body
+				if view.EditedAt > 0 {
+					body += " [edited]"
+				}
+				for _, reaction := range view.Reactions {
+					names := []string{}
+					for _, person := range reaction.People {
+						names = append(names, person.Name)
+					}
+					body += fmt.Sprintf(" [%s %d: %s]", reaction.Emoji, reaction.Count, strings.Join(names, ", "))
+				}
+				message.Body = []byte(body)
+			}
+			display = append(display, &message)
+		}
+		msgs = display
+	}
 	if human {
 		HumanHeader(w, ShouldColor(color))
 		for _, m := range msgs {

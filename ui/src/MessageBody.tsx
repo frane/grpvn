@@ -37,23 +37,23 @@ function FileLink({href,name}:{href:string;name:string}){
  const fence='`'.repeat((text.match(/`+/g)||[]).reduce((length,run)=>Math.max(length,run.length+1),3));
  return <><span className="file-attachment"><FileText size={26}/><span><strong>{name}</strong><span>{extension.toUpperCase()||'File'}{previewable?' · Preview available':''}</span></span>{previewable&&<button className="button secondary" onClick={preview}>Preview</button>}<a className="icon" href={href+'&download=1'} aria-label={'Download '+name}><Download size={18}/></a></span>{open&&createPortal(<div className="modal-backdrop" onClick={()=>setOpen(false)}><section className="file-preview modal" role="dialog" aria-label={'Preview '+name} onClick={e=>e.stopPropagation()}><header><strong>{name}</strong><a className="icon" href={href+'&download=1'} aria-label="Download file"><Download size={18}/></a><button className="icon" aria-label="Close preview" onClick={()=>setOpen(false)}><X size={20}/></button></header>{loading?<p>Loading preview…</p>:error?<p role="alert">{error}</p>:<Markdown rehypePlugins={[[rehypeHighlight,highlightOptions]]} components={{pre:CodeBlock}}>{fence+language+'\n'+text+'\n'+fence}</Markdown>}</section></div>,document.body)}</>;
 }
-const MemberContext=React.createContext<{currentName:string;onMention?:(name:string)=>void}>({currentName:''});
+const MemberContext=React.createContext<{currentName:string;onMention?:(name:string)=>void;onMessageLink?:(href:string)=>boolean}>({currentName:''});
 function MessageLink({href,children}:{href?:string;children?:React.ReactNode}){
- const {currentName,onMention}=React.useContext(MemberContext);
+ const {currentName,onMention,onMessageLink}=React.useContext(MemberContext);
  if(href?.startsWith('grpvn-mention:')){const group=mentionGroup(decodeURIComponent(href.slice(14)));if(group)return <span className="mention mention-group" title={group.description}>{children}</span>;}
- return href?.startsWith('grpvn-mention:')?<button type="button" className={'mention '+(decodeURIComponent(href.slice(14))===currentName?'mention-me':'')} title={'View @'+decodeURIComponent(href.slice(14))} onClick={()=>onMention?.(decodeURIComponent(href.slice(14)))}>{children}</button>:href?.startsWith('/v1/files/')?<FileLink href={href} name={String(children)}/>:<a href={href} target="_blank" rel="noreferrer noopener">{children}</a>;
+ return href?.startsWith('grpvn-mention:')?<button type="button" className={'mention '+(decodeURIComponent(href.slice(14))===currentName?'mention-me':'')} title={'View @'+decodeURIComponent(href.slice(14))} onClick={()=>onMention?.(decodeURIComponent(href.slice(14)))}>{children}</button>:href?.startsWith('/v1/files/')?<FileLink href={href} name={String(children)}/>:<a href={href} onClick={event=>{if(href&&onMessageLink?.(href))event.preventDefault();}} target="_blank" rel="noreferrer noopener">{children}</a>;
 }
 function MessageImage({src,alt}:{src?:string|Blob;alt?:string}){
  return typeof src==='string'&&src.startsWith('/v1/files/')?<Image src={src} alt={alt||'Image'}/>:<span className="external-image">{alt||'External image'}</span>;
 }
 const markdownComponents={pre:CodeBlock,a:MessageLink,img:MessageImage};
-type MessageBodyProps={body:string;target:string;people?:Person[];currentName?:string;onMention?:(name:string)=>void};
-export const MessageBody=React.memo(function MessageBody({body,target,people=[],currentName='',onMention}:MessageBodyProps){
+type MessageBodyProps={body:string;target:string;people?:Person[];currentName?:string;onMention?:(name:string)=>void;onMessageLink?:(href:string)=>boolean};
+export const MessageBody=React.memo(function MessageBody({body,target,people=[],currentName='',onMention,onMessageLink}:MessageBodyProps){
  const nameKey=[...people.flatMap(p=>[p.name,...p.aliases||[]]),currentName].filter(Boolean).sort().join('\0');
  const names=useMemo(()=>nameKey.split('\0').filter(Boolean),[nameKey]);
  const aliases=useMemo(()=>Array.from(mentionNames(names)),[names]);
  const plugins=useMemo(()=>[remarkGfm,[mentions,{aliases}]] as NonNullable<React.ComponentProps<typeof Markdown>['remarkPlugins']>,[aliases]);
- return <MemberContext.Provider value={{currentName,onMention}}><div className="message-body markdown"><Markdown skipHtml remarkPlugins={plugins} rehypePlugins={[[rehypeHighlight,highlightOptions]]}
-  urlTransform={url=>{if(/^grpvn-file:[0-9A-HJKMNP-TV-Z]{26}$/.test(url))return fileURL(url.slice(11),target);if(url.startsWith('grpvn-mention:')){try{const name=decodeURIComponent(url.slice(14));return names.includes(name)||mentionGroup(name)?'grpvn-mention:'+encodeURIComponent(name):'';}catch{return '';}}return defaultUrlTransform(url);}}
+ return <MemberContext.Provider value={{currentName,onMention,onMessageLink}}><div className="message-body markdown"><Markdown skipHtml remarkPlugins={plugins} rehypePlugins={[[rehypeHighlight,highlightOptions]]}
+  urlTransform={url=>{if(/^grpvn:\/\/local\/[0-9A-HJKMNP-TV-Z]{26}\/m\/[0-9A-HJKMNP-TV-Z]{26}$/.test(url))return url;if(/^grpvn-file:[0-9A-HJKMNP-TV-Z]{26}$/.test(url))return fileURL(url.slice(11),target);if(url.startsWith('grpvn-mention:')){try{const name=decodeURIComponent(url.slice(14));return names.includes(name)||mentionGroup(name)?'grpvn-mention:'+encodeURIComponent(name):'';}catch{return '';}}return defaultUrlTransform(url);}}
   components={markdownComponents}>{body}</Markdown></div></MemberContext.Provider>;
-},(before,after)=>before.body===after.body&&before.target===after.target&&before.currentName===after.currentName&&before.onMention===after.onMention&&(before.people||[]).map(p=>p.name).join('\0')===(after.people||[]).map(p=>p.name).join('\0'));
+},(before,after)=>before.body===after.body&&before.target===after.target&&before.currentName===after.currentName&&before.onMention===after.onMention&&before.onMessageLink===after.onMessageLink&&(before.people||[]).map(p=>p.name).join('\0')===(after.people||[]).map(p=>p.name).join('\0'));

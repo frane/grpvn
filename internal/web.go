@@ -167,6 +167,11 @@ func mountWeb(mux *http.ServeMux, db *sql.DB, access *channelAccess, base string
 		s.cookieName = webSessionCookie + "_" + credentialHash(serverID)[:12]
 	}
 	mux.Handle("GET /{$}", webassets.Handler())
+	mux.Handle("GET /m/{id}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		copy := r.Clone(r.Context())
+		copy.URL.Path = "/"
+		webassets.Handler().ServeHTTP(w, copy)
+	}))
 	mux.Handle("GET /assets/", webassets.Handler())
 	mux.Handle("GET /favicon.svg", webassets.Handler())
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -209,7 +214,7 @@ func mountWeb(mux *http.ServeMux, db *sql.DB, access *channelAccess, base string
 					writeJSON(w, 200, map[string]any{"authenticated": false, "local": local})
 					return
 				}
-				writeJSON(w, 200, map[string]any{"authenticated": true, "profile": map[string]any{"id": p.ID, "name": principalAddress(p), "kind": p.Kind, "admin": principalPermission(db, p, "*", true)}, "local": local})
+				writeJSON(w, 200, map[string]any{"authenticated": true, "workspace_name": coordinatorName(db, s.base), "profile": map[string]any{"id": p.ID, "name": principalAddress(p), "kind": p.Kind, "admin": principalPermission(db, p, "*", true)}, "local": local})
 				return
 			}
 		case "/v1/auth/login":
@@ -465,6 +470,9 @@ func (s *webServer) handle(w http.ResponseWriter, r *http.Request, p *Principal)
 		return
 	}
 	switch r.URL.Path {
+	case "/v1/chat/appearance":
+		s.appearance(w, r, p)
+		return
 	case "/v1/chat/channels":
 		if r.Method == "GET" {
 			s.channels(w, r, p)
@@ -513,6 +521,14 @@ func (s *webServer) handle(w http.ResponseWriter, r *http.Request, p *Principal)
 			s.send(w, r, p)
 			return
 		}
+	case "/v1/chat/message-actions":
+		s.messageActions(w, r, p)
+		return
+	case "/v1/chat/message":
+		if r.Method == "GET" {
+			s.messageContext(w, r, p)
+			return
+		}
 	case "/v1/chat/events":
 		if r.Method == "GET" {
 			s.events(w, r, p)
@@ -531,6 +547,10 @@ func (s *webServer) handle(w http.ResponseWriter, r *http.Request, p *Principal)
 		s.preferences(w, r, p)
 		return
 	case "/v1/chat/read-markers":
+		if r.Method == "GET" {
+			s.readMarkerChanges(w, r, p)
+			return
+		}
 		if r.Method == "POST" {
 			s.readMarker(w, r, p)
 			return
@@ -613,12 +633,46 @@ func (s *webServer) handle(w http.ResponseWriter, r *http.Request, p *Principal)
 			return
 		}
 	case "/v1/workspaces":
-		if !s.local || !principalPermission(s.db, p, "*", true) {
+		if !principalPermission(s.db, p, "*", true) {
 			apiError(w, 403, "Source management is available in your local app")
+			return
+		}
+		if r.Method == "PATCH" {
+			var args struct{ Source, Name string }
+			if !webDecode(w, r, &args) {
+				return
+			}
+			args.Name = strings.TrimSpace(args.Name)
+			if err := validateWorkspaceName(args.Name); err != nil {
+				apiError(w, 400, err.Error())
+				return
+			}
+			if s.local {
+				remote, err := getRemote(s.db, args.Source)
+				if err != nil {
+					apiError(w, 404, "Workspace not found")
+					return
+				}
+				if err = saveWorkspaceName(s.db, p.ID, remote.ServerID, args.Name); err != nil {
+					apiError(w, 500, "Could not save workspace name")
+					return
+				}
+			} else {
+				if _, err := s.db.Exec("INSERT INTO server_meta(key,value) VALUES('name',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", args.Name); err != nil {
+					apiError(w, 500, "Could not save workspace name")
+					return
+				}
+				_ = TouchChatMetadata(s.db)
+			}
+			writeJSON(w, 200, map[string]string{"name": args.Name})
 			return
 		}
 
 		if r.Method == "GET" {
+			if !s.local {
+				apiError(w, 403, "Source management is available in your local app")
+				return
+			}
 			remotes, err := ListRemotes(s.db)
 			if err != nil {
 				apiError(w, 500, "Could not list sources")
@@ -627,7 +681,7 @@ func (s *webServer) handle(w http.ResponseWriter, r *http.Request, p *Principal)
 			out := []map[string]any{}
 			for _, remote := range remotes {
 				reg, _ := RemoteRegistration(s.db, remote.Name)
-				out = append(out, map[string]any{"name": remote.Name, "url": remote.URL, "status": reg.Status, "error": remote.LastError, "last_sync": remote.LastSync})
+				out = append(out, map[string]any{"name": remote.Name, "display_name": workspaceDisplayName(s.db, p.ID, remote), "url": remote.URL, "status": reg.Status, "error": remote.LastError, "last_sync": remote.LastSync})
 			}
 			writeJSON(w, 200, map[string]any{"sources": out})
 			return
@@ -728,7 +782,7 @@ func (s *webServer) channels(w http.ResponseWriter, r *http.Request, p *Principa
 		if account != "" {
 			self = account
 		}
-		_ = s.db.QueryRow("SELECT COUNT(*),COALESCE(MAX(seq),0) FROM messages m WHERE target=? AND seq>? AND (sender<>? OR ?=1)", n, position, self, held).Scan(&unread, &latest)
+		_ = s.db.QueryRow("SELECT COUNT(*),COALESCE(MAX(seq),0) FROM messages m WHERE target=? AND seq>? AND (sender<>? OR ?=1) AND NOT EXISTS(SELECT 1 FROM human_threads t WHERE t.principal_id=? AND t.root_id=m.chain_root AND m.parent_id IS NOT NULL AND t.position>=m.seq)", n, position, self, held, p.ID).Scan(&unread, &latest)
 		out = append(out, map[string]any{"muted": settings.Muted, "read_position": position, "read_held": held, "name": n, "label": native, "source": source, "source_id": sourceID, "account_name": account, "unread": unread, "latest": latest, "write": s.can(p, n, true), "open": open, "joined": joined, "archived": archived, "manage": manage})
 	}
 	writeJSON(w, 200, map[string]any{"channels": out})
@@ -792,6 +846,28 @@ func (s *webServer) messages(w http.ResponseWriter, r *http.Request, p *Principa
 	}
 	rootPredicate := predicate
 	rootArgs := append([]any(nil), args...)
+	if p.Kind == "human" && r.URL.Query().Get("initial") == "1" && before == 0 && !r.URL.Query().Has("after") && !r.URL.Query().Has("ids") && !r.URL.Query().Has("thread") {
+		if s.unreadEntry(w, r, p, target, predicate, args) {
+			return
+		}
+	}
+	if ids := r.URL.Query().Get("ids"); ids != "" {
+		parts := strings.Split(ids, ",")
+		if len(parts) > 100 {
+			apiError(w, 400, "Choose at most 100 messages")
+			return
+		}
+		for _, id := range parts {
+			if !validMessageID(id) {
+				apiError(w, 400, "Invalid message ID")
+				return
+			}
+		}
+		predicate += " AND m.id IN (" + strings.TrimRight(strings.Repeat("?,", len(parts)), ",") + ")"
+		for _, id := range parts {
+			args = append(args, id)
+		}
+	}
 	if before > 0 {
 		predicate += " AND m.seq<?"
 		args = append(args, before)
@@ -832,7 +908,7 @@ func (s *webServer) messages(w http.ResponseWriter, r *http.Request, p *Principa
 	}
 
 	position, held := conversationReadPosition(s.db, p.ID, target)
-	response := map[string]any{"messages": out, "more": more, "read_position": position, "read_held": held}
+	response := map[string]any{"messages": out, "more": more, "read_position": position, "read_held": held, "read_version": conversationReadSnapshot(s.db, p.ID, target, "").Version}
 	if threadRoot != "" {
 		roots, err := s.messagePage(r.Context(), p, rootPredicate+" AND m.id=?", append(rootArgs, threadRoot), "ASC", 1)
 		if err == nil && len(roots) > 0 {
@@ -893,6 +969,9 @@ func (s *webServer) messagePage(ctx context.Context, p *Principal, predicate str
 	if err != nil {
 		return nil, err
 	}
+	if err = s.decorateMessages(p, list); err != nil {
+		return nil, err
+	}
 	return list, nil
 }
 
@@ -931,8 +1010,6 @@ func (s *webServer) send(w http.ResponseWriter, r *http.Request, p *Principal) {
 				apiError(w, 400, err.Error())
 				return
 			}
-			alias, _, _ := splitRemoteDMTarget(target)
-			_ = wakeRemote(s.db, alias)
 			writeJSON(w, 201, map[string]any{"id": m.ID, "replayed": replay, "pending": m.Pending})
 			return
 		}
@@ -1045,6 +1122,24 @@ func (s *webServer) people(w http.ResponseWriter, r *http.Request, viewer *Princ
 		}
 		people = selected
 	}
+	states := s.directReadStates(viewer)
+	for _, person := range people {
+		state := states["@"+person["name"].(string)]
+		person["muted"] = state.Muted
+		person["unread"] = state.Unread
+	}
+	for _, person := range people {
+		enrichParticipant(s.db, person, viewer)
+	}
+	writeJSON(w, 200, map[string]any{"people": people})
+}
+
+type directReadState struct {
+	Unread int64 `json:"unread"`
+	Muted  bool  `json:"muted"`
+}
+
+func (s *webServer) directReadStates(viewer *Principal) map[string]directReadState {
 	muted := map[string]bool{}
 	if rows, err := s.db.Query("SELECT target,muted FROM conversation_preferences WHERE principal_id=? AND target LIKE '@%'", viewer.ID); err == nil {
 		for rows.Next() {
@@ -1057,7 +1152,7 @@ func (s *webServer) people(w http.ResponseWriter, r *http.Request, viewer *Princ
 		rows.Close()
 	}
 	counts := map[string]int64{}
-	if rows, err := s.db.Query(`SELECT q.peer,COUNT(*) FROM (SELECT CASE WHEN sender=? THEN target ELSE '@'||sender END AS peer,seq,sender FROM messages WHERE target LIKE '@%' AND (sender=? OR target=?)) q LEFT JOIN cursors c ON c.agent_name=? AND c.target=q.peer LEFT JOIN conversation_preferences f ON f.principal_id=? AND f.target=q.peer WHERE q.seq>COALESCE(f.held_position,c.position,0) AND (q.sender<>? OR f.held_position IS NOT NULL) GROUP BY q.peer`, principalAddress(viewer), principalAddress(viewer), "@"+principalAddress(viewer), viewer.ID, viewer.ID, principalAddress(viewer)); err == nil {
+	if rows, err := s.db.Query(`SELECT q.peer,COUNT(*) FROM (SELECT CASE WHEN sender=? THEN target ELSE '@'||sender END AS peer,seq,sender,chain_root,parent_id FROM messages WHERE target LIKE '@%' AND (sender=? OR target=?)) q LEFT JOIN cursors c ON c.agent_name=? AND c.target=q.peer LEFT JOIN conversation_preferences f ON f.principal_id=? AND f.target=q.peer WHERE q.seq>COALESCE(f.held_position,c.position,0) AND (q.sender<>? OR f.held_position IS NOT NULL) AND NOT EXISTS(SELECT 1 FROM human_threads t WHERE t.principal_id=? AND t.root_id=q.chain_root AND q.parent_id IS NOT NULL AND t.position>=q.seq) GROUP BY q.peer`, principalAddress(viewer), principalAddress(viewer), "@"+principalAddress(viewer), viewer.ID, viewer.ID, principalAddress(viewer), viewer.ID); err == nil {
 		for rows.Next() {
 			var peer string
 			var count int64
@@ -1067,15 +1162,16 @@ func (s *webServer) people(w http.ResponseWriter, r *http.Request, viewer *Princ
 		}
 		rows.Close()
 	}
-	for _, person := range people {
-		target := "@" + person["name"].(string)
-		person["muted"] = muted[target]
-		person["unread"] = counts[target]
+	states := map[string]directReadState{}
+	for target, count := range counts {
+		states[target] = directReadState{Unread: count, Muted: muted[target]}
 	}
-	for _, person := range people {
-		enrichParticipant(s.db, person, viewer)
+	for target, mute := range muted {
+		state := states[target]
+		state.Muted = mute
+		states[target] = state
 	}
-	writeJSON(w, 200, map[string]any{"people": people})
+	return states
 }
 
 // changedTargets contains only conversations this authenticated viewer may
@@ -1204,15 +1300,22 @@ func (s *webServer) events(w http.ResponseWriter, r *http.Request, p *Principal)
 				return
 			}
 			metadata := revision.Metadata != last.Metadata
+			changedIDs, actionTargets, err := s.changedMessageActions(r, p, last.Actions, revision.Actions)
+			if err != nil {
+				return
+			}
+			if r.URL.Path == "/v1/events" {
+				targets = append(targets, actionTargets...)
+			}
 			var nextPersonal int64
 			_ = s.db.QueryRow("SELECT value FROM chat_metadata WHERE key=?", "personal:"+p.ID).Scan(&nextPersonal)
 			personalChanged := nextPersonal != personal
 			personal = nextPersonal
 			last = revision
-			if len(targets) == 0 && !metadata && !personalChanged {
+			if len(targets) == 0 && len(changedIDs) == 0 && !metadata && !personalChanged {
 				continue
 			}
-			data, _ := json.Marshal(map[string]any{"targets": targets, "metadata": metadata, "personal": personalChanged})
+			data, _ := json.Marshal(map[string]any{"targets": targets, "message_ids": changedIDs, "metadata": metadata || len(changedIDs) >= 500, "personal": personalChanged})
 			if !push("event: changed\ndata: " + string(data) + "\n\n") {
 				return
 			}

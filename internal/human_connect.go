@@ -94,9 +94,10 @@ func connectHTTP(ctx context.Context, method, endpoint string, payload any, out 
 
 func (s *webServer) startWorkspace(w http.ResponseWriter, r *http.Request, p *Principal) {
 	var a struct {
-		URL   string
-		Name  string
-		Force bool
+		URL         string
+		Name        string
+		DisplayName string
+		Force       bool
 	}
 	if !webDecode(w, r, &a) {
 		return
@@ -125,6 +126,12 @@ func (s *webServer) startWorkspace(w http.ResponseWriter, r *http.Request, p *Pr
 	if err != nil {
 		apiError(w, 400, err.Error())
 		return
+	}
+	if strings.TrimSpace(a.DisplayName) != "" {
+		if err = saveWorkspaceName(s.db, p.ID, info.ServerID, a.DisplayName); err != nil {
+			apiError(w, 400, err.Error())
+			return
+		}
 	}
 	var existing string
 	if !a.Force && invite == "" && s.db.QueryRow("SELECT principal_id FROM remote_human_sessions WHERE server_id=? AND local_principal_id=?", info.ServerID, p.ID).Scan(&existing) == nil {

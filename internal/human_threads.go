@@ -88,6 +88,10 @@ func (s *webServer) threads(w http.ResponseWriter, r *http.Request, p *Principal
 			return
 		}
 		defer tx.Rollback()
+		if err = lockHumanRead(s.db, tx, p.ID); err != nil {
+			apiError(w, 500, "Could not update thread")
+			return
+		}
 		following := false
 		position := int64(0)
 		_ = tx.QueryRow("SELECT following,position FROM human_threads WHERE principal_id=? AND root_id=?", p.ID, root.ChainRoot).Scan(&following, &position)
@@ -102,12 +106,19 @@ func (s *webServer) threads(w http.ResponseWriter, r *http.Request, p *Principal
 			position = *a.Position
 		}
 		if following == oldFollowing && position == oldPosition {
-			writeJSON(w, 200, map[string]any{"following": following, "position": position, "latest": latest})
+			writeJSON(w, 200, map[string]any{"following": following, "position": position, "latest": latest, "read_state": humanReadChange{Kind: "thread", Target: target, RootID: root.ChainRoot, Position: position, Following: following}})
 			return
 		}
 		_, err = tx.Exec("INSERT INTO human_threads(principal_id,root_id,target,following,position) VALUES(?,?,?,?,?) ON CONFLICT(principal_id,root_id) DO UPDATE SET following=excluded.following,position=MAX(human_threads.position,excluded.position)", p.ID, root.ChainRoot, target, following, position)
 		if err == nil && a.Position != nil {
 			_, err = tx.Exec("UPDATE human_inbox SET read_at=? WHERE principal_id=? AND root_id=? AND message_id IN(SELECT id FROM messages WHERE seq<=?) AND read_at=0", nowMS(), p.ID, root.ChainRoot, position)
+		}
+		if err == nil {
+			mutation := "read"
+			if a.Following != nil {
+				mutation = "follow"
+			}
+			err = s.recordHumanRead(tx, p, humanReadChange{Kind: "thread", Target: target, RootID: root.ChainRoot, Position: position, Following: following, Mutation: mutation})
 		}
 		if err == nil {
 			err = touchPersonalMetadata(tx, p.ID)
@@ -116,7 +127,7 @@ func (s *webServer) threads(w http.ResponseWriter, r *http.Request, p *Principal
 			apiError(w, 500, "Could not update thread")
 			return
 		}
-		writeJSON(w, 200, map[string]any{"following": following, "position": position, "latest": latest})
+		writeJSON(w, 200, map[string]any{"following": following, "position": position, "latest": latest, "read_state": humanReadChange{Kind: "thread", Target: target, RootID: root.ChainRoot, Position: position, Following: following}})
 		return
 	}
 	if r.Method != "GET" {

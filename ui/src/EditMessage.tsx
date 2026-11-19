@@ -1,0 +1,8 @@
+import React,{useRef,useState} from 'react';
+import {X} from 'lucide-react';
+import {api,Message} from './api';
+export function EditMessage({message,onSaved,onClose}:{message:Message;onSaved:()=>Promise<void>;onClose:()=>void}){
+ const[body,setBody]=useState(message.body);const[busy,setBusy]=useState(false);const[error,setError]=useState('');const key=useRef(crypto.randomUUID());
+ async function save(){if(busy||!body.trim())return;setBusy(true);setError('');try{await api('message-actions',{message_id:message.id,kind:'edit',body,version:message.edit_version||'',id:key.current,added:true});await onSaved();onClose();}catch(error){setError((error as Error).message);}finally{setBusy(false);}}
+ return <div className="modal-backdrop"><section className="modal edit-message" role="dialog" aria-modal="true" aria-label="Edit message"><button className="icon close" aria-label="Close editor" disabled={busy} onClick={onClose}><X size={18}/></button><h2>Edit message</h2><textarea autoFocus aria-label="Edit message text" value={body} maxLength={65536} onChange={e=>{setBody(e.target.value);key.current=crypto.randomUUID();}} onKeyDown={e=>{if(e.nativeEvent.isComposing)return;if(e.key==='Escape'){e.preventDefault();onClose();}else if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void save();}}}/>{error&&<p className="form-error" role="alert">{error}</p>}<div className="edit-actions"><button className="button secondary" disabled={busy} onClick={onClose}>Cancel</button><button className="button primary" disabled={busy||!body.trim()} onClick={()=>void save()}>{busy?'Saving…':'Save changes'}</button></div></section></div>;
+}

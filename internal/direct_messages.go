@@ -392,6 +392,9 @@ func queueDirectMessage(db *sql.DB, p *Principal, target, body, key string, pare
 	if err = followHumanMessage(tx, p, message); err != nil {
 		return nil, false, err
 	}
+	if err = wakeRemote(tx, remote); err != nil {
+		return nil, false, err
+	}
 	return message, false, tx.Commit()
 }
 
@@ -400,7 +403,7 @@ func (s *webServer) directConversations(w http.ResponseWriter, r *http.Request, 
 		return false
 	}
 	if !s.local {
-		writeJSON(w, 200, map[string]any{"conversations": []any{}})
+		writeJSON(w, 200, map[string]any{"conversations": []any{}, "read_states": s.directReadStates(p)})
 		return true
 	}
 	if r.Method == "POST" {
@@ -467,9 +470,9 @@ func (s *webServer) directConversations(w http.ResponseWriter, r *http.Request, 
 		item["muted"] = conversationSettings(s.db, p.ID, target).Muted
 		position, _ := conversationReadPosition(s.db, p.ID, target)
 		var count int
-		_ = s.db.QueryRow(`SELECT COUNT(*) FROM messages m WHERE m.target=? AND m.seq>? AND NOT EXISTS(SELECT 1 FROM message_principals mp WHERE mp.message_id=m.id AND mp.principal_id=?) AND NOT EXISTS(SELECT 1 FROM remote_attributions a JOIN remotes r ON r.name=? JOIN remote_human_sessions h ON h.server_id=r.server_id WHERE a.local_id=m.id AND a.principal_id=h.principal_id)`, target, position, p.ID, item["source_id"]).Scan(&count)
+		_ = s.db.QueryRow(`SELECT COUNT(*) FROM messages m WHERE m.target=? AND m.seq>? AND NOT EXISTS(SELECT 1 FROM message_principals mp WHERE mp.message_id=m.id AND mp.principal_id=?) AND NOT EXISTS(SELECT 1 FROM remote_attributions a JOIN remotes r ON r.name=? JOIN remote_human_sessions h ON h.server_id=r.server_id WHERE a.local_id=m.id AND a.principal_id=h.principal_id) AND NOT EXISTS(SELECT 1 FROM human_threads t WHERE t.principal_id=? AND t.root_id=m.chain_root AND m.parent_id IS NOT NULL AND t.position>=m.seq)`, target, position, p.ID, item["source_id"], p.ID).Scan(&count)
 		item["unread"] = count
 	}
-	writeJSON(w, 200, map[string]any{"conversations": list})
+	writeJSON(w, 200, map[string]any{"conversations": list, "read_states": s.directReadStates(p)})
 	return true
 }

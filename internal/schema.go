@@ -40,6 +40,26 @@ CREATE INDEX IF NOT EXISTS idx_messages_parent      ON messages(parent_id);
 CREATE INDEX IF NOT EXISTS idx_messages_target_seq  ON messages(target,seq);
 CREATE INDEX IF NOT EXISTS idx_messages_thread_seq  ON messages(chain_root,seq);
 
+-- Corrections and reactions are independent immutable events. The original
+-- message payload stays intact for retry comparison and older sync clients.
+CREATE TABLE IF NOT EXISTS message_actions (
+ seq INTEGER PRIMARY KEY AUTOINCREMENT,
+ source TEXT NOT NULL DEFAULT '',
+ id TEXT NOT NULL,
+ message_id TEXT NOT NULL,
+ actor_id TEXT NOT NULL,
+ actor_name TEXT NOT NULL,
+ kind TEXT NOT NULL,
+ body TEXT NOT NULL DEFAULT '',
+ emoji TEXT NOT NULL DEFAULT '',
+ added INTEGER NOT NULL DEFAULT 1,
+ created_at INTEGER NOT NULL,
+ origin_seq INTEGER,
+ UNIQUE(source,id)
+);
+CREATE INDEX IF NOT EXISTS idx_actions_message ON message_actions(message_id,kind,origin_seq,seq);
+CREATE INDEX IF NOT EXISTS idx_actions_reaction ON message_actions(message_id,actor_id,emoji,origin_seq,seq);
+
 CREATE TABLE IF NOT EXISTS marks (
     agent_name   TEXT NOT NULL,
     message_id   TEXT NOT NULL,
@@ -90,6 +110,12 @@ CREATE TABLE IF NOT EXISTS remote_channels (
     target       TEXT NOT NULL UNIQUE,
     position     INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (remote_name, channel)
+);
+CREATE TABLE IF NOT EXISTS remote_action_positions (
+ remote_name TEXT NOT NULL REFERENCES remotes(name),
+ target TEXT NOT NULL,
+ position INTEGER NOT NULL DEFAULT 0,
+ PRIMARY KEY(remote_name,target)
 );
 CREATE TABLE IF NOT EXISTS remote_messages (
     remote_name  TEXT NOT NULL REFERENCES remotes(name),
@@ -337,6 +363,10 @@ CREATE TABLE IF NOT EXISTS remote_file_queue (
  PRIMARY KEY(remote_name,file_id,target)
 );
 CREATE TABLE IF NOT EXISTS chat_metadata (key TEXT PRIMARY KEY,value INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS human_preferences (
+ principal_id TEXT NOT NULL REFERENCES principals(id),name TEXT NOT NULL,value TEXT NOT NULL,
+ PRIMARY KEY(principal_id,name)
+);
 CREATE TABLE IF NOT EXISTS remote_channel_details (
  remote_name TEXT NOT NULL, channel TEXT NOT NULL, can_read INTEGER NOT NULL,
  can_write INTEGER NOT NULL, is_open INTEGER NOT NULL, can_manage INTEGER NOT NULL,
@@ -370,6 +400,34 @@ CREATE TABLE IF NOT EXISTS human_threads (
  principal_id TEXT NOT NULL REFERENCES principals(id),root_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
  target TEXT NOT NULL,following INTEGER NOT NULL DEFAULT 1,position INTEGER NOT NULL DEFAULT 0,
  PRIMARY KEY(principal_id,root_id)
+);
+-- Human read state follows the account. Agents retain independent cursors.
+CREATE TABLE IF NOT EXISTS human_read_events (
+ seq INTEGER PRIMARY KEY AUTOINCREMENT,
+ principal_id TEXT NOT NULL REFERENCES principals(id),
+ payload TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS human_read_versions (
+ principal_id TEXT NOT NULL REFERENCES principals(id),target TEXT NOT NULL,version TEXT NOT NULL,
+ PRIMARY KEY(principal_id,target)
+);
+CREATE INDEX IF NOT EXISTS idx_human_read_events ON human_read_events(principal_id,seq);
+CREATE TABLE IF NOT EXISTS human_read_outbox (
+ id TEXT PRIMARY KEY,remote_name TEXT NOT NULL REFERENCES remotes(name),
+ principal_id TEXT NOT NULL REFERENCES principals(id),kind TEXT NOT NULL,
+ target TEXT NOT NULL,root_id TEXT NOT NULL DEFAULT '',payload TEXT NOT NULL,
+ UNIQUE(remote_name,principal_id,kind,target,root_id)
+);
+CREATE TABLE IF NOT EXISTS remote_read_positions (
+ remote_name TEXT PRIMARY KEY REFERENCES remotes(name),position INTEGER NOT NULL DEFAULT 0,bootstrapped INTEGER NOT NULL DEFAULT 0,mapping TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS remote_read_states (
+ remote_name TEXT NOT NULL REFERENCES remotes(name),kind TEXT NOT NULL,state_key TEXT NOT NULL,payload TEXT NOT NULL,
+ PRIMARY KEY(remote_name,kind,state_key)
+);
+CREATE TABLE IF NOT EXISTS human_message_reads (
+ principal_id TEXT NOT NULL REFERENCES principals(id),message_id TEXT NOT NULL,read_at INTEGER NOT NULL,
+ PRIMARY KEY(principal_id,message_id)
 );
 CREATE TABLE IF NOT EXISTS human_notifications (
  principal_id TEXT PRIMARY KEY REFERENCES principals(id),level TEXT NOT NULL DEFAULT 'important',

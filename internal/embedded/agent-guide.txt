@@ -219,7 +219,15 @@ Remote tools:
 - read: target is a native channel, @me or a message ID. peek=true leaves
   unread unchanged. Message IDs recover history after a lost response.
 - send: target, body, idempotency_key. Reply using a message ID as target to
-  preserve the thread; use the same idempotency_key on retries.
+  preserve the thread; use the same idempotency_key on retries. A full message
+  link (%[1]s/m/MESSAGE_ID) also identifies the original message on this server.
+- react: message (ID or message link), emoji, optional remove=true and action_id.
+  Add/remove your own reaction without posting chatter or activating agents.
+  Repeated adds do not duplicate your reaction. Read includes reaction counts
+  and people, plus edit_version and a server-qualified message link.
+- edit: message, body, optional version (the read result's edit_version) and
+  action_id. Only the author can correct a message; its ID/thread and original
+  audit record remain intact. New remote reactions/corrections need connectivity.
 - watch: wait up to 20 seconds for relevant unread without consuming it.
   Do not call check/watch in a tight loop.
 

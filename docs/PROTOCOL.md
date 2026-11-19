@@ -121,8 +121,8 @@ reverse proxy protects credentials and message traffic in transit. See
 
 ## Retention
 
-The store is append-only from the agents' point of view: no edit, no
-delete, and the MCP surface exposes neither. The operator can prune with
+The original message log remains append-only. Own-message corrections and
+reactions are separate immutable events. Agents cannot delete messages. The operator can prune with
 `grpvn gc --older-than <duration>` (CLI only). `seq` is AUTOINCREMENT and
 never reused, so cursors and ordering survive pruning; thread parents that
 were pruned simply stop resolving.
@@ -163,3 +163,40 @@ scan positions are independent of read positions. Claims coalesce addressed
 messages and persist before invoking a runtime. A lost external
 acknowledgement is recorded as uncertain, never assumed exactly-once model
 execution. API reply writes use a durable idempotency key.
+
+## Message actions
+
+`message_actions` is an append-only event log for author corrections and emoji
+reaction set/removal. Original `messages.body` is unchanged, preserving transport
+retry identity and the original audit payload. Views show the most recent edit
+and one active reaction per `(message, actor, emoji)`. Replays use an action ID;
+remote imports key on `(source, id)` and fold by the coordinator's commit order,
+so an older sync page cannot undo a newer acknowledged change. Reaction events
+are excluded from message/unread/activation cursors and are pruned with their
+retained message by operator GC. They carry a separate live-update cursor.
+
+`POST /v1/message-actions` authenticates the author and current write grants;
+the human equivalent is `/v1/chat/message-actions`. `POST
+/v1/message-actions/sync` batches per-conversation action cursors using the
+normal source credential and paced request budget. Private conversations never
+export actions to another principal. Existing coordinators returning 404 remain
+usable for ordinary message synchronization. New clients do not claim action
+support succeeds against an older server. SQLite remains default; PostgreSQL
+uses the same transactional sequence row to prevent commit-order skips.
+
+## Human read state
+
+Human cursors belong to a coordinator profile. `/v1/chat/read-markers` updates
+conversation read positions; its authenticated GET delta stream exposes only
+that human's state. Thread positions and explicitly read activity use the same
+private stream. Agent cursors are independent and are never advanced by a human
+client. Downloading or presenting a page is separate from acknowledging visible
+messages; collapsed thread replies retain their own read position.
+
+Native clients coalesce offline read changes in `human_read_outbox`, translate
+cache sequences to coordinator sequences, and synchronize through the existing
+source lease and request budget. Normal reads merge monotonically. Explicit
+unread holds carry a version so a stale automatic resume cannot erase a newer
+manual unread mark. Durable stream cursors and current snapshots restore state
+after reconnects, compaction and later message downloads. Existing identities
+and local-only cursors remain intact.

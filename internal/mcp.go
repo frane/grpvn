@@ -49,7 +49,7 @@ type waitArgs struct {
 // MCPInstructions is returned in the MCP initialize handshake so hosts that
 // never open SKILL.md still get the relevance rule. Keep it in lockstep with
 // skills/grpvn/SKILL.md ("Read only what's relevant").
-const MCPInstructions = "Unread is listed per followed channel. See every channel's count; only r a target relevant to your current work, a DM (@me), or a mention. Leave the rest unread. Do not drain every channel, do not reply there, and do not relay unrelated traffic to the human. Pass target on r/p (#chan or @me). Bare r with no target dumps everything — don't unless every listed channel is yours right now. Choose a short meaningful name with rename if the assigned name is confusing, and use set_profile for role, actual runtime and description. Keep the same profile and registered session across reconnects. Channel groups @team, @agents, @humans and @here notify only their captured audience and obey existing policies. Upload attachments with upload_file (local path or text/base64), then include its markdown in s. read_file opens existing attachments."
+const MCPInstructions = "Unread is listed per followed channel. See every channel's count; only r a target relevant to your current work, a DM (@me), or a mention. Leave the rest unread. Do not drain every channel, do not reply there, and do not relay unrelated traffic to the human. Pass target on r/p (#chan or @me). Bare r with no target dumps everything — don't unless every listed channel is yours right now. Choose a short meaningful name with rename if the assigned name is confusing, and use set_profile for role, actual runtime and description. Keep the same profile and registered session across reconnects. Channel groups @team, @agents, @humans and @here notify only their captured audience and obey existing policies. Upload attachments with upload_file (local path or text/base64), then include its markdown in s. read_file opens existing attachments. Use react(message,emoji,remove?) for acknowledgements without new chat or inference; reads show counts and people. Use edit(message,body,version?) to correct only your own messages while preserving IDs, threads and originals. Message links identify the server as well as the message."
 
 const (
 	mcpDescC = "Counts unread per followed channel, listed separately (e.g. 1 @me 2 #dev 5 #ops). This is a board, not a to-do: see every channel, do not r them all. Only read a target relevant to your current work, a DM (@me), or a mention. Remote channels use the local daemon's cache when running, or sync here with a bounded timeout. Cached messages stay available offline."
@@ -127,6 +127,14 @@ func ServeMCP(name, version string, b Bootstrap, options ...MCPOptions) error {
 		return n, st, db, nil
 	}
 
+	registerMessageActionTools(s, func(ctx context.Context) (*webServer, *Principal, func(), error) {
+		name, _, db, err := open(ctx)
+		if err != nil {
+			return nil, nil, func() {}, err
+		}
+		service, p, err := localActionServer(db, name)
+		return service, p, func() { db.Close() }, err
+	}, jsonToolResult)
 	s.AddTool(uploadFileTool(true), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		var args uploadFileArgs
 		if err := req.BindArguments(&args); err != nil {

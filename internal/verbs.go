@@ -457,6 +457,9 @@ func Gc(w io.Writer, db *sql.DB, olderThan time.Duration, vacuum bool) error {
 	if err != nil {
 		return fmt.Errorf("prune marks: %w", err)
 	}
+	if _, err = tx.Exec("DELETE FROM message_actions WHERE message_id IN ("+eligible+")", cutoff); err != nil {
+		return fmt.Errorf("prune message changes: %w", err)
+	}
 	resMsgs, err := tx.Exec("DELETE FROM messages WHERE id IN ("+eligible+")", cutoff)
 	if err != nil {
 		return fmt.Errorf("prune messages: %w", err)

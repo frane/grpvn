@@ -126,6 +126,21 @@ func TestHumanChatsShareAgentPermissionsAndThreads(t *testing.T) {
 	if again["profile"].(map[string]any)["id"] != id {
 		t.Fatal("login created a new profile")
 	}
+	if code, result := call(human, "GET", "/v1/chat/appearance", nil, ""); code != 200 || result["mode"] != "system" {
+		t.Fatal(code, result)
+	}
+	if code, _ := call(human, "PATCH", "/v1/chat/appearance", map[string]any{"Mode": "dark"}, "https://foreign.invalid"); code != 403 {
+		t.Fatal("cross-site preference change accepted")
+	}
+	if code, _ := call(human, "PATCH", "/v1/chat/appearance", map[string]any{"Mode": "invalid"}, server.URL); code != 400 {
+		t.Fatal("invalid appearance accepted")
+	}
+	if code, result := call(human, "PATCH", "/v1/chat/appearance", map[string]any{"Mode": "dark"}, server.URL); code != 200 || result["mode"] != "dark" {
+		t.Fatal(code, result)
+	}
+	if code, result := call(second, "GET", "/v1/chat/appearance", nil, ""); code != 200 || result["mode"] != "dark" {
+		t.Fatal("appearance did not survive a new session", code, result)
+	}
 	if code, _ := call(human, "POST", "/v1/auth/logout", map[string]any{}, "https://foreign.invalid"); code != 403 {
 		t.Fatal("cross-site logout accepted")
 	}

@@ -292,7 +292,13 @@ func syncRemote(ctx context.Context, db *sql.DB, remote Remote) (SyncStats, erro
 	if err != nil {
 		failures = append(failures, err)
 	}
+	if err := syncMessageActions(ctx, db, remote, channels); err != nil {
+		failures = append(failures, err)
+	}
 	if err := syncRemoteFiles(ctx, db, remote); err != nil {
+		failures = append(failures, err)
+	}
+	if err := syncHumanReads(ctx, db, remote, stats.Pulled > 0); err != nil {
 		failures = append(failures, err)
 	}
 	return stats, errors.Join(failures...)

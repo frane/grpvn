@@ -4,6 +4,13 @@ import { Archive,Inbox as InboxIcon,BellOff,Mail,MailOpen,ArrowDown, ArrowLeft, 
 import { api, ApiError, Approval, Channel,DirectConversation, color,mergeMessagePage, initials, Message, Person, Session, shortName } from './api';
 import './style.css';
 import './layout.css';
+import './theme.css';
+import {AppearanceSettings,useAppearance} from './Appearance';
+import {WorkspaceName} from './WorkspaceName';
+import {Reactions} from './Reactions';
+import {EditMessage} from './EditMessage';
+import {DeliveryStatus} from './DeliveryStatus';
+import {ConversationEntry,useConversationViewport} from './useConversationViewport';
 import {initializeDesktopBridge,openExternal,setUnreadBadge,syncTrayState} from './platform';
 initializeDesktopBridge();
 import {AccessRequestToast,useAccessRequests,PendingAccess} from './AccessRequests';
@@ -17,13 +24,18 @@ import {ProfileCard} from './ProfileCard';
 import {ParticipantLabels} from './ParticipantLabels';
 import {ContextAction,ContextMenu} from './ContextMenu';
 import {AttentionInbox,AttentionToast,NotificationPreferences,OpenAttention,useNeedsYou} from './Inbox';
-const Presentation=React.createContext<{people:Person[];name:string;onMention:(name:string)=>void;onContext:(e:React.MouseEvent,m:Message)=>void}>({people:[],name:'',onMention:()=>{},onContext:()=>{}});
+type MessageLocation={target:string;message_id:string;root_id:string;reply:boolean;messages:Message[];replies:Message[];more:boolean};
+const Presentation=React.createContext<{people:Person[];name:string;onMention:(name:string)=>void;onContext:(e:React.MouseEvent,m:Message)=>void;onReact:(m:Message,emoji:string,remove:boolean)=>Promise<void>;writable:boolean;onMessageLink:(href:string)=>boolean;highlight:string}>({people:[],name:'',onMention:()=>{},onContext:()=>{},onReact:async()=>{},writable:false,onMessageLink:()=>false,highlight:''});
 
 function Avatar({ name, human = false, small = false }: { name: string; human?: boolean; small?: boolean }) {
   return <span className={`avatar ${human?'human':'agent'} ${color(name)} ${small ? 'small' : ''}`} aria-hidden="true">{human ? initials(name) : <Bot size={small ? 14 : 19} strokeWidth={1.7} />}</span>;
 }
 function App() {
   const [session, setSession] = useState<Session | null>(null);
+  const currentIdentity=useRef('');currentIdentity.current=session?.profile?.id||'';
+  const appearance=useAppearance(!!session?.authenticated);
+  const [appearanceOpen,setAppearanceOpen]=useState(false);
+  const closeAppearance=useCallback(()=>setAppearanceOpen(false),[]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [directs,setDirects]=useState<DirectConversation[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
@@ -31,18 +43,32 @@ function App() {
   const [workspace,setWorkspace]=useState<string|null>(null);
   const workspaceSelection=useRef<string|null>(null);workspaceSelection.current=workspace;
   const [connections,setConnections]=useState<WorkspaceSource[]>([]);
+  const [renameWorkspace,setRenameWorkspace]=useState(false);
+  const closeRenameWorkspace=useCallback(()=>setRenameWorkspace(false),[]);
+  const [sourceRevision,setSourceRevision]=useState(0);
   const [workspaceSession,setWorkspaceSession]=useState<Session|null>(null);
   const [agentSetup,setAgentSetup]=useState(false);
   const [context,setContext]=useState<{x:number;y:number;target:string;channel?:Channel;person?:Person;message?:Message;selection?:string}|null>(null);
   const closeContext=useCallback(()=>setContext(null),[]);
-  const [readState,setReadState]=useState({position:0,held:false});
+  const [readState,setReadState]=useState({position:0,held:false,version:''});
+  const entryViewport=useRef<ConversationEntry|null>(null);
+  const [entryUnread,setEntryUnread]=useState('');
+  const [newer,setNewer]=useState(false);const newerRef=useRef(false);newerRef.current=newer;
+  const fetchingNewer=useRef(false);
+  const [selectionVersion,setSelectionVersion]=useState(0);
+  const historyGeneration=useRef(0);const initialLoading=useRef(false);const refreshAfterInitial=useRef(false);
   const readPaused=useRef('');
   const [profileName,setProfileName]=useState<string|null>(null);
   const closeProfile=useCallback(()=>setProfileName(null),[]);
   const [detailsChannel,setDetailsChannel]=useState<Channel|undefined>();
   const [management,setManagement]=useState<'members'|'channel'|'channels'|'invite'|null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const messageCursor=useRef({target:'',seq:0});const messageSnapshot=useRef(messages);messageSnapshot.current=messages;
+  const bootReference=useRef(/^\/m\/[0-9A-HJKMNP-TV-Z]{26}$/.test(location.pathname)?location.origin+location.pathname:'');
+  const pendingJump=useRef<MessageLocation|null>(null);
+  const [highlight,setHighlight]=useState('');
+  const [editing,setEditing]=useState<Message|null>(null);
+  const closeEditor=useCallback(()=>setEditing(null),[]);
+  const messageCursor=useRef({target:'',seq:0,owner:''});const messageSnapshot=useRef(messages);messageSnapshot.current=messages;
   const [historyChannel,setHistoryChannel]=useState<Channel|null>(null);
   const historySelection=useRef<Channel|null>(null);
   const [target, setTarget] = useState(new URLSearchParams(location.search).get('target')||localStorage.getItem('grpvn.target')||'#general');
@@ -88,7 +114,7 @@ function App() {
   const access=useAccessRequests(session||undefined,connections,needs.settings);
   const requestCounts=useMemo(()=>access.items.reduce<Record<string,number>>((counts,item)=>{counts[item.workspace]=(counts[item.workspace]||0)+1;return counts;},{}),[access.items]);
   useEffect(()=>setUnreadBadge(needs.unread+access.items.length),[needs.unread,access.items.length]);
-  const traySources=JSON.stringify(session?.local?[{id:'',label:'Local chat'},...connections.map(source=>({id:source.name,label:new URL(source.url).host+' ('+source.name+')'}))]:[{id:'',label:location.host}]);
+  const traySources=JSON.stringify(session?.local?[{id:'',label:'Local chat'},...connections.map(source=>({id:source.name,label:source.display_name||source.name}))]:[{id:'',label:session?.workspace_name||location.host}]);
   useEffect(()=>syncTrayState({ready:!!session?.authenticated,count:needs.unread+access.items.length,paused:needs.settings.level==='none',workspace:activeWorkspace,workspaces:session?.authenticated?JSON.parse(traySources):[]}),[session?.authenticated,needs.unread,access.items.length,needs.settings.level,activeWorkspace,traySources]);
   const refreshSession = useCallback(async () => { try { const state=await api<Session>('session');setSession(state);const next=new URLSearchParams(location.search).get('next');if(state.authenticated&&next){const where=new URL(next,location.origin);if(where.origin===location.origin&&where.pathname==='/oauth/authorize'&&where.searchParams.get('actor')==='human'){location.replace(where.pathname+where.search);}} } catch (e) { fail(e); } }, [fail]);
   useEffect(() => {
@@ -96,10 +122,10 @@ function App() {
     if (ticket) { history.replaceState(null, '', '/'); api('bootstrap', { Ticket: ticket }).then(refreshSession).catch(e => { fail(e); refreshSession(); }); }
     else refreshSession();
   }, [refreshSession, fail]);
-  const refreshLists = useCallback(async (includePeople=true) => {
-    if(includePeople)void access.refresh();
-    const [c, p,d] = await Promise.all([api<{ channels: Channel[] }>('channels'), includePeople?api<{ people: Person[] }>('people'):Promise.resolve(null),api<{conversations:DirectConversation[]}>('direct-conversations')]);
-    setChannels(c.channels);setDirects(d.conversations);if(p)setPeople(p.people);if(c.channels.length||d.conversations.length)setLocalChat(true);
+  const refreshLists = useCallback(async (includePeople=true,includeAccess=includePeople) => {
+    if(includeAccess)void access.refresh();
+    const [c, p,d] = await Promise.all([api<{ channels: Channel[] }>('channels'), includePeople?api<{ people: Person[] }>('people'):Promise.resolve(null),api<{conversations:DirectConversation[];read_states?:Record<string,{unread:number;muted:boolean}>}>('direct-conversations')]);
+    setChannels(c.channels);setDirects(d.conversations);if(p)setPeople(p.people);else if(d.read_states)setPeople(previous=>previous.map(person=>({...person,unread:d.read_states?.['@'+person.name]?.unread||0,muted:d.read_states?.['@'+person.name]?.muted||false})));if(c.channels.length||d.conversations.length)setLocalChat(true);
     const source=workspaceSelection.current??c.channels.find(x=>x.name===currentTarget.current)?.source_id;
     if(p){if(source){try{const remote=await api<{people:Person[]}>('people?workspace='+encodeURIComponent(source));if(workspaceSelection.current===source)setParticipants(remote.people);}catch{if(workspaceSelection.current===source)setParticipants(p.people);}}else setParticipants(p.people);}
     if(historySelection.current&&c.channels.some(c=>c.name===historySelection.current?.name)){historySelection.current=null;setHistoryChannel(null);}
@@ -130,73 +156,103 @@ function App() {
   const showThread=useCallback((message:Message)=>{void openThreadID(currentTarget.current,message.chain_root).catch(fail);},[openThreadID,fail]);
   async function toggleThreadFollow(){if(!thread)return;const following=!threadFollowing;await api('threads',{RootID:thread.chain_root,Following:following},'PATCH');setThreadFollowing(following);setMessages(previous=>previous.map(message=>message.id===thread.chain_root?{...message,reply_following:following,reply_unread:0}:message));await needs.refresh(true);}
   function closeThread(){threadRef.current=null;setThread(null);threadContent.current=[];setThreadMessages([]);}
-  const refreshMessages = useCallback(async (where:string,fresh=false,incremental=false) => {
-    if(!where){setMessages([]);setMore(false);messageCursor.current={target:'',seq:0};return;}
+  const readVisible=useCallback(async(where:string,position:number,resume:boolean,version:string)=>{if(currentTarget.current!==where||messageCursor.current.target!==where||messageCursor.current.owner!==currentIdentity.current||readPaused.current===where)return;try{const result=await api<{position:number;held:boolean;read_version:string}>('read',{Target:where,Position:position,...(resume?{Resume:true,ExpectedVersion:version}:{})});if(currentTarget.current===where)setReadState({position:result.position,held:result.held,version:result.read_version||''});await refreshLists(false);await needs.refresh(true);}catch{}},[refreshLists,needs.refresh]);
+  const view=useConversationViewport({target,active:!!session?.authenticated&&tab==='chats'&&messageCursor.current.target===target&&messageCursor.current.owner===currentIdentity.current&&!initialLoading.current,loading,messages,viewport:scroll,bottom,entry:entryViewport,readPosition:readState.position,onVisible:readVisible,hasNewer:newer,onNewer:()=>void loadNewer()});
+  const refreshMessages = useCallback(async (where:string,fresh=false,incremental=false,initial=false) => {
+    if(!initial&&initialLoading.current)return;const generation=historyGeneration.current;const owner=currentIdentity.current;
+    if(!where){setMessages([]);setMore(false);messageCursor.current={target:'',seq:0,owner};return;}
     const delta=incremental&&messageCursor.current.target===where;
     let after=delta?messageCursor.current.seq:0;
     for(;;){
-      const page=await api<{messages:Message[];more:boolean;read_position:number;read_held:boolean}>('messages?target='+encodeURIComponent(where)+(fresh?'&refresh=1':'')+(delta?'&after='+after:''));
-      if(currentTarget.current!==where)return;
-      const merge=messageCursor.current.target===where;
+      const page=await api<{messages:Message[];more:boolean;newer?:boolean;first_unread_id?:string;first_unread_root?:string;read_position:number;read_held:boolean;read_version?:string}>('messages?target='+encodeURIComponent(where)+(fresh?'&refresh=1':'')+(initial?'&initial=1':'')+(delta?'&after='+after:''));
+      if(currentTarget.current!==where||historyGeneration.current!==generation||currentIdentity.current!==owner)return;
+      if(initial){entryViewport.current={target:where,anchor:page.first_unread_id||'',root:page.first_unread_root,held:page.read_held,version:page.read_version||''};setEntryUnread(page.first_unread_root||page.first_unread_id||'');bottom.current=!page.first_unread_id;newerRef.current=!!page.newer;setNewer(!!page.newer);}
+      if(initial)messageSnapshot.current=page.messages;
+      const merge=!initial&&messageCursor.current.target===where;
       const latest=Math.max(after,...page.messages.map(m=>m.seq),0);
-      messageCursor.current={target:where,seq:Math.max(merge?messageCursor.current.seq:0,latest)};
+      messageCursor.current={target:where,seq:Math.max(merge?messageCursor.current.seq:0,latest),owner};
       setMessages(previous=>{if(!merge)return page.messages;return mergeMessagePage(previous,page.messages,delta,document.hasFocus()?threadRef.current?.chain_root:undefined);});
       if(!delta)setMore(page.more);
-      setReadState({position:page.read_position||0,held:!!page.read_held});
-      if(!page.read_held&&readPaused.current!==where&&page.messages.length&&document.visibilityState==='visible'&&document.hasFocus()&&activeTab.current==='chats')void api<{held:boolean}>('read',{Target:where,Position:latest}).then(result=>{if(!result.held&&readPaused.current!==where){setChannels(previous=>previous.map(c=>c.name===where?{...c,unread:0}:c));setPeople(previous=>previous.map(p=>'@'+p.name===where?{...p,unread:0}:p));}}).catch(()=>{});
+      setReadState({position:page.read_position||0,held:!!page.read_held,version:page.read_version||''});
+      if(delta)setNewer(page.more);
       if(!delta||!page.more||latest<=after)return;
       after=latest;
     }
   },[]);
+  const refreshChanged=useCallback(async(ids:string[])=>{
+    if(initialLoading.current){refreshAfterInitial.current=true;return;}
+    const generation=historyGeneration.current;const where=currentTarget.current;
+    for(let start=0;start<ids.length;start+=100){const page=await api<{messages:Message[];read_position:number;read_held:boolean;read_version?:string}>('messages?target='+encodeURIComponent(where)+'&ids='+ids.slice(start,start+100).join(','));if(currentTarget.current!==where||generation!==historyGeneration.current)return;
+      setReadState({position:page.read_position,held:page.read_held,version:page.read_version||''});
+      setMessages(previous=>{const known=new Set(previous.map(message=>message.id));return mergeMessagePage(previous,page.messages.filter(message=>known.has(message.id)),false);});
+      const updates=new Map(page.messages.map(message=>[message.id,message]));threadContent.current=threadContent.current.map(message=>updates.get(message.id)||message);setThreadMessages(threadContent.current);
+      const root=threadRef.current;if(root&&updates.has(root.id)){threadRef.current=updates.get(root.id)!;setThread(threadRef.current);}
+    }
+  },[]);
+  const reactToMessage=useCallback(async(message:Message,emoji:string,remove:boolean)=>{await api('message-actions',{id:crypto.randomUUID(),message_id:message.id,kind:'reaction',emoji,added:!remove});await refreshChanged([message.id]);},[refreshChanged]);
   useEffect(()=>{
     if(!session?.authenticated)return;
-    let stopped=false;let busy=false;let pending=false;let metadata=false;let personal=false;const targets=new Set<string>();let timer:ReturnType<typeof setTimeout>|undefined;
+    let stopped=false;let busy=false;let pending=false;let metadata=false;let personal=false;const targets=new Set<string>();const changedIDs=new Set<string>();let timer:ReturnType<typeof setTimeout>|undefined;
     const drain=async()=>{
       timer=undefined;if(busy||stopped)return;
       busy=true;
       try{while(pending&&!stopped){
-        const full=metadata;const own=personal;const changed=new Set(targets);pending=false;metadata=false;personal=false;targets.clear();
-        const where=currentTarget.current;
+        const full=metadata;const own=personal;const changed=new Set(targets);const ids=Array.from(changedIDs);changedIDs.clear();pending=false;metadata=false;personal=false;targets.clear();
+        const where=currentTarget.current;if(initialLoading.current)refreshAfterInitial.current=true;
         await needs.refresh(full||own);
+        if(own){await appearance.refresh();setSourceRevision(value=>value+1);}
+        if(full&&!session.local)await refreshSession();
+        if(full||own||changed.size)await refreshLists(full||Array.from(changed).some(target=>target.startsWith('@')),full);
         if(document.visibilityState==='visible'){
-          await Promise.all([...(full||changed.size?[refreshLists(full||Array.from(changed).some(target=>target.startsWith('@')))]:[]),...((full||changed.has(where))&&activeTab.current==='chats'?[refreshMessages(where,false,!full)]:[])]);
+          if((full||own||changed.has(where))&&activeTab.current==='chats'&&!newerRef.current)await refreshMessages(where,false,true);
+          if((ids.length||full||own)&&activeTab.current==='chats'){const personalIDs=own?messageSnapshot.current.filter(message=>!message.parent_id&&(message.reply_count||0)>0).map(message=>message.id):[];if(own&&newerRef.current&&messageSnapshot.current.length)personalIDs.push(messageSnapshot.current[0].id);const refreshIDs=[...new Set([...ids,...(full?messageSnapshot.current.map(message=>message.id):personalIDs)])];if(refreshIDs.length)await refreshChanged(refreshIDs);}
           const thread=threadRef.current;if(thread&&activeTab.current==='chats'&&(full||changed.has(where)))await refreshThread(thread.chain_root,where,true);
         }
       }}catch(error){if(!stopped)fail(error);}finally{busy=false;}
     };
-    const enqueue=(full:boolean,changed:string[]=[],own=false)=>{pending=true;metadata=metadata||full;personal=personal||own;for(const target of changed)targets.add(target);if(!busy&&!timer)timer=setTimeout(()=>void drain(),25);};
+    const enqueue=(full:boolean,changed:string[]=[],own=false,ids:string[]=[])=>{for(const id of ids)changedIDs.add(id);pending=true;metadata=metadata||full;personal=personal||own;for(const target of changed)targets.add(target);if(!busy&&!timer)timer=setTimeout(()=>void drain(),25);};
     const focused=()=>{if(document.visibilityState==='visible')enqueue(true);};
     const events=new EventSource('/v1/chat/events');
     events.addEventListener('connected',()=>{setConnected(true);enqueue(true);});
-    events.addEventListener('changed',event=>{try{const update=JSON.parse((event as MessageEvent).data);enqueue(!!update.metadata||!Array.isArray(update.targets),update.targets||[],!!update.personal);}catch{enqueue(true);}});
+    events.addEventListener('changed',event=>{try{const update=JSON.parse((event as MessageEvent).data);enqueue(!!update.metadata||!Array.isArray(update.targets),update.targets||[],!!update.personal,update.message_ids||[]);}catch{enqueue(true);}});
     events.addEventListener('signed-out',()=>{events.close();refreshSession();});
     events.onerror=()=>setConnected(false);
     window.addEventListener('focus',focused);document.addEventListener('visibilitychange',focused);
     return()=>{stopped=true;events.close();if(timer)clearTimeout(timer);window.removeEventListener('focus',focused);document.removeEventListener('visibilitychange',focused);};
-  },[session?.authenticated,refreshLists,refreshMessages,refreshSession,refreshThread,needs.refresh,fail]);
+  },[session?.authenticated,session?.profile?.id,refreshLists,refreshMessages,refreshSession,refreshThread,needs.refresh,appearance.refresh,refreshChanged,fail]);
   useEffect(() => {
     if (!session?.authenticated) return;
-    setThread(null); setError(''); setMessages([]); setLoading(true); bottom.current = true;
+    const generation=++historyGeneration.current;initialLoading.current=true;refreshAfterInitial.current=false;
+    setThread(null); setError(''); setMessages([]); setLoading(true); bottom.current = true;entryViewport.current=null;setEntryUnread('');setNewer(false);
     localStorage.setItem('grpvn.target', target);
-    refreshLists().catch(fail);refreshMessages(target).then(()=>{const pending=pendingThread.current;if(pending?.target===target&&pending.root){pendingThread.current=null;return openThreadID(target,pending.root);}}).catch(fail).finally(() => setLoading(false));
-  }, [target, activeWorkspace, session?.authenticated, refreshLists, refreshMessages, fail]);
+    refreshLists().catch(fail);refreshMessages(target,false,false,true).then(async()=>{if(generation!==historyGeneration.current)return;const jump=pendingJump.current;if(jump?.target===target){pendingJump.current=null;await applyMessageLocation(jump);return;}const pending=pendingThread.current;if(pending?.target===target&&pending.root){pendingThread.current=null;return openThreadID(target,pending.root);}}).catch(fail).finally(() => {if(generation!==historyGeneration.current)return;initialLoading.current=false;setLoading(false);if(refreshAfterInitial.current){refreshAfterInitial.current=false;void refreshChanged(messageSnapshot.current.map(message=>message.id)).catch(fail);if(!newerRef.current)void refreshMessages(target,false,true).catch(fail);}});
+  }, [target, activeWorkspace,selectionVersion, session?.authenticated,session?.profile?.id, refreshLists, refreshMessages, fail]);
   const sourceKey=[...new Set(channels.map(c=>c.source_id||''))].sort().join(',');
-  useEffect(()=>{if(!session?.authenticated||!session.local)return;api<{sources:WorkspaceSource[]}>('sources').then(result=>setConnections(result.sources)).catch(()=>{});},[session?.authenticated,session?.local,modal,sourceKey]);
+  useEffect(()=>{if(!session?.authenticated||!session.local)return;api<{sources:WorkspaceSource[]}>('sources').then(result=>setConnections(result.sources)).catch(()=>{});},[session?.authenticated,session?.local,modal,sourceKey,sourceRevision]);
   useEffect(()=>{if(workspace===null&&selected)setWorkspace(selected.source_id||'');},[workspace,target,selected?.source_id]);
   useEffect(()=>{setWorkspaceSession(null);if(!activeWorkspace)return;let alive=true;api<Session>('session?workspace='+encodeURIComponent(activeWorkspace)).then(value=>{if(alive)setWorkspaceSession(value);}).catch(()=>{});return()=>{alive=false;};},[activeWorkspace]);
-  useEffect(() => { if (bottom.current) scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: 'instant' }); }, [messages]);
   async function send(body: string, reply?: Message, key?: string) {
-    const result = await api<{ pending: boolean }>('messages', { Target: reply?.id || target, Body: body, IdempotencyKey: key || crypto.randomUUID() });
-    await refreshMessages(target,false,true);if(reply)await refreshThread(reply.chain_root,target,true);await needs.refresh(); await refreshLists(false); setError(''); bottom.current = true;
-    if (result.pending) setToast('Saved locally. Delivery will resume when the source is available.');
+    await api<{ pending: boolean }>('messages', { Target: reply?.id || target, Body: body, IdempotencyKey: key || crypto.randomUUID() });
+    if(!reply){view.releaseAnchor();bottom.current=true;setNewer(false);}
+    await refreshMessages(target,false,!!reply);if(reply)await refreshThread(reply.chain_root,target,true);await needs.refresh(); await refreshLists(false); setError('');
   }
   async function older() {
-    if (!messages.length) return;
+    if (!messages.length) return;view.preparePrepend();
     try { const page = await api<{ messages: Message[]; more: boolean }>(`messages?target=${encodeURIComponent(target)}&before=${messages[0].seq}`); setMessages(prev => [...page.messages, ...prev]); setMore(page.more); } catch (e) { fail(e); }
   }
-  function select(where: string, history?:Channel) { readPaused.current='';if(where)void api('read',{Target:where,Resume:true}).then(()=>refreshLists(false)).catch(fail);const match=channels.find(c=>c.name===where)||directs.find(c=>c.name===where)||history;const scope=match?(match.source_id||''):null;workspaceSelection.current=scope;setWorkspace(scope);currentTarget.current=where;setLocalChat(true);historySelection.current=history||null;setHistoryChannel(history||null);setTarget(where);setTab('chats');setSidebar(false); }
+  async function loadNewer(){if(fetchingNewer.current||!newerRef.current)return;fetchingNewer.current=true;const where=currentTarget.current;try{const page=await api<{messages:Message[];more:boolean}>('messages?target='+encodeURIComponent(where)+'&after='+messageCursor.current.seq);if(currentTarget.current!==where)return;messageCursor.current.seq=Math.max(messageCursor.current.seq,...page.messages.map(message=>message.seq));setMessages(previous=>mergeMessagePage(previous,page.messages,true));setNewer(page.more);}catch(error){fail(error);}finally{fetchingNewer.current=false;}}
+  function select(where: string, history?:Channel) {initialLoading.current=true;historyGeneration.current++;setSelectionVersion(value=>value+1); readPaused.current='';bottom.current=true;entryViewport.current=null;setEntryUnread('');const match=channels.find(c=>c.name===where)||directs.find(c=>c.name===where)||history;const scope=match?(match.source_id||''):null;workspaceSelection.current=scope;setWorkspace(scope);currentTarget.current=where;setLocalChat(true);historySelection.current=history||null;setHistoryChannel(history||null);setTarget(where);setTab('chats');setSidebar(false); }
+  async function applyMessageLocation(context:MessageLocation){
+    if(currentTarget.current!==context.target)return;view.releaseAnchor();bottom.current=false;setSearch('');setMessages(context.messages);setMore(context.more);messageCursor.current={target:context.target,seq:Math.max(0,...context.messages.map(message=>message.seq)),owner:currentIdentity.current};
+    if(context.reply){await openThreadID(context.target,context.root_id);if(currentTarget.current!==context.target)return;threadContent.current=mergeMessagePage(threadContent.current,context.replies.filter(message=>message.id!==context.root_id),false);setThreadMessages(threadContent.current);}
+    else closeThread();setHighlight(context.message_id);requestAnimationFrame(()=>requestAnimationFrame(()=>{const selector='[data-message-id="'+context.message_id+'"]';const element=document.querySelector(context.reply?'.thread '+selector:selector);element?.scrollIntoView({block:'center',behavior:'instant'});}));
+  }
+  async function navigateReference(reference:string){const context=await api<MessageLocation>('message-context?reference='+encodeURIComponent(reference));if(currentTarget.current!==context.target||initialLoading.current){pendingJump.current=context;if(currentTarget.current!==context.target)select(context.target);}else{setTab('chats');await applyMessageLocation(context);}}
+  const linkNavigation=useRef(navigateReference);linkNavigation.current=navigateReference;
+  useEffect(()=>{if(!session?.authenticated||!bootReference.current)return;const reference=bootReference.current;bootReference.current='';void linkNavigation.current(reference).catch(fail);},[session?.authenticated,fail]);
+  const openMessageLink=useCallback((href:string)=>{try{const link=new URL(href,location.origin);const known=link.protocol==='grpvn:'||link.origin===location.origin||connections.some(source=>new URL(source.url).origin===link.origin);if(!known||!/^\/m\/[0-9A-HJKMNP-TV-Z]{26}$/.test(link.pathname)&&link.protocol!=='grpvn:')return false;void linkNavigation.current(href).catch(fail);return true;}catch{return false;}},[connections,fail]);
   function selectWorkspace(name:string){const where=channels.find(c=>(c.source_id||'')===name)?.name||'';select(where);workspaceSelection.current=name;setWorkspace(name);}
-  function workspaceAction(action:string){if(action==='agent')setAgentSetup(true);else if(action==='members'||action==='channels')setManagement(action);else if(action==='create')createChannel(activeWorkspace||undefined);else if(action==='invite')setManagement('invite');else if(action==='notifications')setNotificationSettings(true);else if(action==='browser')void openExternal(sourceURL);else if(action==='connect'||action==='approvals')setModal(action);}
+  function workspaceAction(action:string){if(action==='rename-workspace')setRenameWorkspace(true);else if(action==='appearance')setAppearanceOpen(true);else if(action==='agent')setAgentSetup(true);else if(action==='members'||action==='channels')setManagement(action);else if(action==='create')createChannel(activeWorkspace||undefined);else if(action==='invite')setManagement('invite');else if(action==='notifications')setNotificationSettings(true);else if(action==='browser')void openExternal(sourceURL);else if(action==='connect'||action==='approvals')setModal(action);}
   const pauseBusy=useRef(false);
   async function pauseNotifications(paused:boolean){
     if(pauseBusy.current||paused===(needs.settings.level==='none'))return;
@@ -214,13 +270,13 @@ function App() {
       const detail=(event as CustomEvent<string|{action:string;workspace?:string;paused?:boolean}>).detail;
       const action=typeof detail==='string'?detail:detail?.action;
       if(typeof action!=='string')return;
-      if(action!=='pause-notifications'){setModal(null);setManagement(null);setAgentSetup(false);setNotificationSettings(false);setProfileName(null);setContext(null);setDetailsChannel(undefined);}
+      if(action!=='pause-notifications'){setModal(null);setManagement(null);setAgentSetup(false);setNotificationSettings(false);setAppearanceOpen(false);setProfileName(null);setContext(null);setDetailsChannel(undefined);}
       if(action==='search'){setSidebar(true);requestAnimationFrame(()=>document.querySelector<HTMLInputElement>('.side-search input')?.focus());}
       else if(action==='chats'||action==='people'||action==='attention')setTab(action);
       else if(action==='notifications')setNotificationSettings(true);
       else if(action==='workspace'&&typeof detail==='object'&&session.local&&(detail.workspace===''||connections.some(source=>source.name===detail.workspace)))selectWorkspace(detail.workspace!);
       else if(action==='pause-notifications'&&typeof detail==='object'&&typeof detail.paused==='boolean')void pauseNotifications(detail.paused);
-      else if(['agent','create','channels','connect'].includes(action))workspaceAction(action);
+      else if(['agent','create','channels','connect','appearance'].includes(action))workspaceAction(action);
       else if(action==='invite'&&scopeChannels.some(c=>c.write))workspaceAction(action);
     };
     window.addEventListener('grpvn:action',handle);
@@ -251,7 +307,7 @@ function App() {
   function channelReference(channel:Channel){const server=channel.source_id?connections.find(source=>source.name===channel.source_id)?.url:session?.local?'':location.origin;return server?channel.label+' on '+server.replace(/\/$/,''):channel.name;}
   async function copyValue(value:string,label:string){await navigator.clipboard.writeText(value);setToast(label+' copied.');}
   const contextItems:ContextAction[]=[];
-  if(context){const c=context.channel;const muted=!!(c?.muted||context.person?.muted||directs.find(conversation=>conversation.name===context.target)?.muted);if(context.message){const m=context.message;contextItems.push({label:'Reply in thread',icon:<MessageSquare size={16}/>,onSelect:()=>showThread(m)},{label:'Mark unread from here',icon:<Mail size={16}/>,onSelect:()=>markUnread(context.target,Math.max(0,m.seq-1))},{label:'View profile',icon:<Users size={16}/>,onSelect:()=>setProfileName(m.sender)},{label:'Copy message',icon:<Copy size={16}/>,divider:true,onSelect:()=>copyValue(m.body,'Message')},{label:'Copy message ID',icon:<Link size={16}/>,onSelect:()=>copyValue(m.id,'Message ID')});if(context.selection)contextItems.push({label:'Copy selected text',icon:<Copy size={16}/>,onSelect:()=>copyValue(context.selection||'','Selected text')});}else{if(context.target!==target||tab!=='chats')contextItems.push({label:'Open conversation',icon:<MessageCircle size={16}/>,onSelect:()=>select(context.target)});contextItems.push({label:'Mark as unread',icon:<Mail size={16}/>,onSelect:()=>markUnread(context.target)},{label:'Mark as read',icon:<MailOpen size={16}/>,onSelect:()=>markRead(context.target)},{label:muted?'Unmute conversation':'Mute conversation',icon:muted?<Bell size={16}/>:<BellOff size={16}/>,onSelect:()=>muteConversation(context.target,!muted)});if(c){contextItems.push({label:'Channel details',icon:<Settings2 size={16}/>,divider:true,onSelect:()=>{setDetailsChannel(c);setManagement('channel');}},{label:'Copy conversation reference',icon:<Copy size={16}/>,onSelect:()=>copyValue(channelReference(c),'Conversation reference')},...(c.source_id?[{label:'Copy local target',icon:<Copy size={16}/>,onSelect:()=>copyValue(c.name,'Local target')}]:[]),{label:'Leave channel',icon:<LogOut size={16}/>,divider:true,onSelect:()=>channelAction(c)});if(c.manage)contextItems.push({label:'Archive channel',icon:<Archive size={16}/>,danger:true,onSelect:()=>channelAction(c,true)});}else if(context.person)contextItems.push({label:'View profile',icon:<Users size={16}/>,divider:true,onSelect:()=>setProfileName(context.person!.name)});}}
+  if(context){const c=context.channel;const muted=!!(c?.muted||context.person?.muted||directs.find(conversation=>conversation.name===context.target)?.muted);if(context.message){const m=context.message;contextItems.push({label:'Reply in thread',icon:<MessageSquare size={16}/>,onSelect:()=>showThread(m)},{label:'Mark unread from here',icon:<Mail size={16}/>,onSelect:()=>markUnread(context.target,Math.max(0,m.seq-1))},{label:'View profile',icon:<Users size={16}/>,onSelect:()=>setProfileName(m.sender)},...(m.mine&&!m.pending?[{label:'Edit message',icon:<MoreHorizontal size={16}/>,onSelect:()=>setEditing(m)}]:[]),{label:'Copy message',icon:<Copy size={16}/>,divider:true,onSelect:()=>copyValue(m.body,'Message')},{label:'Copy message link',icon:<Link size={16}/>,onSelect:()=>copyValue(m.link||m.id,'Message link')},{label:'Copy message ID',icon:<Link size={16}/>,onSelect:()=>copyValue(m.id,'Message ID')});if(context.selection)contextItems.push({label:'Copy selected text',icon:<Copy size={16}/>,onSelect:()=>copyValue(context.selection||'','Selected text')});}else{if(context.target!==target||tab!=='chats')contextItems.push({label:'Open conversation',icon:<MessageCircle size={16}/>,onSelect:()=>select(context.target)});contextItems.push({label:'Mark as unread',icon:<Mail size={16}/>,onSelect:()=>markUnread(context.target)},{label:'Mark as read',icon:<MailOpen size={16}/>,onSelect:()=>markRead(context.target)},{label:muted?'Unmute conversation':'Mute conversation',icon:muted?<Bell size={16}/>:<BellOff size={16}/>,onSelect:()=>muteConversation(context.target,!muted)});if(c){contextItems.push({label:'Channel details',icon:<Settings2 size={16}/>,divider:true,onSelect:()=>{setDetailsChannel(c);setManagement('channel');}},{label:'Copy conversation reference',icon:<Copy size={16}/>,onSelect:()=>copyValue(channelReference(c),'Conversation reference')},...(c.source_id?[{label:'Copy local target',icon:<Copy size={16}/>,onSelect:()=>copyValue(c.name,'Local target')}]:[]),{label:'Leave channel',icon:<LogOut size={16}/>,divider:true,onSelect:()=>channelAction(c)});if(c.manage)contextItems.push({label:'Archive channel',icon:<Archive size={16}/>,danger:true,onSelect:()=>channelAction(c,true)});}else if(context.person)contextItems.push({label:'View profile',icon:<Users size={16}/>,divider:true,onSelect:()=>setProfileName(context.person!.name)});}}
   const filtered = messages.filter(m => !search || `${m.body} ${m.sender}`.toLowerCase().includes(search.toLowerCase()));
   const messageIDs=useMemo(()=>new Set(messages.map(m=>m.id)),[messages]);
   const threadReplies=useMemo(()=>{const groups=new Map<string,Message[]>();for(const message of messages){if(message.parent_id){const group=groups.get(message.chain_root)||[];group.push(message);groups.set(message.chain_root,group);}}return groups;},[messages]);
@@ -259,27 +315,23 @@ function App() {
   const replies=thread?threadMessages:[];
   const presentationPeople=useMemo(()=>{const known=new Set(participants.map(p=>p.name));const authors:Person[]=[];for(const message of messages){if(!known.has(message.sender)){known.add(message.sender);authors.push({id:message.sender,name:message.sender,kind:message.kind==='human'?'human':'agent',status:'active'});}}return authors.length?[...participants,...authors]:participants;},[participants,messages]);
   const messageContext=useCallback((event:React.MouseEvent,message:Message)=>openContext(event,target,undefined,undefined,message),[target]);
-  const presentation=useMemo(()=>({people:presentationPeople,name:activeName,onMention:setProfileName,onContext:messageContext}),[presentationPeople,activeName,messageContext]);
+  const presentation=useMemo(()=>({people:presentationPeople,name:activeName,onMention:setProfileName,onContext:messageContext,onReact:reactToMessage,writable:!!selected?.write,onMessageLink:openMessageLink,highlight}),[presentationPeople,activeName,messageContext,reactToMessage,selected?.write,openMessageLink,highlight]);
   const sources = [...new Set(scopeChannels.map(c => c.source))];
   if (!session) return <div className="startup"><Logo /><span>Opening your conversations…</span>{error && <p role="alert">{error}</p>}</div>;
   if (!session.authenticated) return <SignIn onDone={async(where)=>{if(where)setTarget(where);await refreshSession();}} initialError={error} />;
-  return <Presentation.Provider value={presentation}><div className="app">
-    <header className="app-header">
-      <div className="app-brand"><Logo/><span>grpvn</span></div>
-      <WorkspaceMenu local={session.local} workspace={activeWorkspace} sources={connections} account={activeName} admin={scopeAdmin} requestCounts={requestCounts} canInvite={scopeChannels.some(c=>c.write)} onSelect={selectWorkspace} onAction={workspaceAction} onSignOut={async()=>{await api('logout',{});refreshSession();}}/>
+  return <Presentation.Provider value={presentation}><div className="app" data-highlight={highlight}>
+    <div className="app-content">
+    <aside className={`sidebar ${sidebar ? 'visible' : ''}`} aria-label="Conversations in this source">
+      <div className="sidebar-head"><div className="app-brand"><Logo/></div><WorkspaceMenu local={session.local} workspace={activeWorkspace} workspaceName={session.workspace_name} sources={connections} account={activeName} admin={scopeAdmin} requestCounts={requestCounts} canInvite={scopeChannels.some(c=>c.write)} onSelect={selectWorkspace} onAction={workspaceAction} onSignOut={async()=>{await api('logout',{});refreshSession();}}/></div>
       <nav className="main-nav" aria-label="Main navigation">
-        <button className={tab==='chats'?'active':''} aria-current={tab==='chats'?'page':undefined} title="Conversations" onClick={()=>{setTab('chats');setSidebar(false);}}><MessageSquare size={17}/><span className="nav-label">Conversations</span></button>
+        <button className={tab==='chats'?'active':''} aria-current={tab==='chats'?'page':undefined} title="Conversations" onClick={()=>select(target)}><MessageSquare size={17}/><span className="nav-label">Conversations</span></button>
         <button className={tab==='attention'?'active':''} aria-current={tab==='attention'?'page':undefined} title="Needs you" onClick={()=>{setTab('attention');setSidebar(false);void needs.refresh(true).catch(fail);}}><InboxIcon size={17}/><span className="nav-label">Needs you</span>{needs.unread+access.items.length>0&&<b>{needs.unread+access.items.length}</b>}</button>
         <button className={tab==='people'?'active':''} aria-current={tab==='people'?'page':undefined} title="People & agents" onClick={()=>{setTab('people');setSidebar(false);}}><Users size={17}/><span className="nav-label">People & agents</span></button>
       </nav>
-      <button className="connect-agent" aria-label="Connect an agent…" title="Connect an agent" onClick={()=>setAgentSetup(true)}><Bot size={17}/><span>Connect an agent</span><Plus size={14}/></button>
-    </header>
-    <div className="app-content">
-    <aside className={`sidebar ${sidebar ? 'visible' : ''}`} aria-label="Conversations in this source">
-      <div className="index-heading"><h2>Conversations</h2><span>{scopeChannels.length}</span><button className="icon" aria-label="Create channel" title="Create channel" onClick={()=>createChannel(activeWorkspace||undefined)}><Plus size={17}/></button></div>
+      <div className="index-heading"><h2>Channels</h2><button className="icon" aria-label="Create channel" title="Create channel" onClick={()=>createChannel(activeWorkspace||undefined)}><Plus size={17}/></button></div>
       <div className="side-search"><Search size={15} /><input aria-label="Find a conversation" placeholder="Find a conversation" value={search} onChange={e => setSearch(e.target.value)} /></div>
       <div className="channel-scroll">
-        {sources.map(source => <section key={source} className="channel-section"><div className="section-head"><span>{source === 'workspace' ? 'Channels' : source === 'local' ? 'Local channels' : source}</span></div>{scopeChannels.filter(c => c.source === source && (!search || c.name.toLowerCase().includes(search.toLowerCase()))).map(c => <div className="channel-row" key={c.name} onContextMenu={e=>openContext(e,c.name,c)}><button className={`channel ${target === c.name && tab === 'chats' ? 'selected' : ''} ${c.unread&&!c.muted ? 'unread' : ''} ${c.muted?'muted':''}`} onClick={() => select(c.name)}>{c.open ? <Hash size={17} /> : <LockKeyhole size={15} />}<span>{c.label.replace(/^#/, '')}</span>{c.muted&&<BellOff className="muted-icon" size={13}/>} {c.unread > 0&&!c.muted && <b>{c.unread > 99 ? '99+' : c.unread}</b>}</button><button className="icon channel-options" aria-label={'Actions for '+c.label} onClick={e=>openContext(e,c.name,c)}><MoreHorizontal size={15}/></button></div>)}</section>)}
+        {sources.map(source => <section key={source} className="channel-section">{scopeChannels.filter(c => c.source === source && (!search || c.name.toLowerCase().includes(search.toLowerCase()))).map(c => <div className="channel-row" key={c.name} onContextMenu={e=>openContext(e,c.name,c)}><button className={`channel ${target === c.name && tab === 'chats' ? 'selected' : ''} ${c.unread&&!c.muted ? 'unread' : ''} ${c.muted?'muted':''}`} onClick={() => select(c.name)}>{c.open ? <Hash size={17} /> : <LockKeyhole size={15} />}<span>{c.label.replace(/^#/, '')}</span>{c.muted&&<BellOff className="muted-icon" size={13}/>} {c.unread > 0&&!c.muted && <b>{c.unread > 99 ? '99+' : c.unread}</b>}</button><button className="icon channel-options" aria-label={'Actions for '+c.label} onClick={e=>openContext(e,c.name,c)}><MoreHorizontal size={15}/></button></div>)}</section>)}
         {!scopeChannels.length && <section className="channel-section"><div className="section-head"><span>Channels</span></div><button className="channel add" onClick={() => createChannel(activeWorkspace||undefined)}><Plus size={16} />Create channel</button></section>}
         {!activeWorkspace&&<section className="channel-section"><div className="section-head"><span>Direct messages</span><button className="icon subtle" aria-label="Find someone to message" onClick={() => setTab('people')}><Plus size={15} /></button></div>{people.filter(p => p.status === 'active' && p.id !== profile?.id).slice(0, 12).map(p => <div className="channel-row" key={p.id} onContextMenu={e=>openContext(e,'@'+p.name,undefined,p)}><button className={`channel person-channel ${target === '@' + p.name ? 'selected' : ''} ${p.muted?'muted':p.unread?'unread':''}`} onClick={() => select('@'+p.name)}><Avatar name={p.name} human={p.kind === 'human'} small /><span>{shortName(p.name)}</span>{p.muted?<BellOff className="muted-icon" size={13}/>:!!p.unread&&<b>{p.unread>99?'99+':p.unread}</b>}</button><button className="icon channel-options" aria-label={'Actions for @'+p.name} onClick={e=>openContext(e,'@'+p.name,undefined,p)}><MoreHorizontal size={15}/></button></div>)}</section>}
         {activeWorkspace&&<section className="channel-section"><div className="section-head"><span>Direct messages</span><button className="icon subtle" aria-label="Find someone to message" onClick={()=>setTab('people')}><Plus size={15}/></button></div>{directs.filter(conversation=>conversation.source_id===activeWorkspace&&(!search||conversation.label.toLowerCase().includes(search.toLowerCase()))).map(conversation=><div className="channel-row" key={conversation.name} onContextMenu={event=>openContext(event,conversation.name)}><button className={'channel person-channel '+(target===conversation.name?'selected':'')+(conversation.muted?' muted':conversation.unread?' unread':'')} onClick={()=>select(conversation.name)}><Avatar name={conversation.label} human={conversation.kind==='human'} small/><span>{shortName(conversation.label)}</span>{conversation.muted?<BellOff className="muted-icon" size={13}/>:conversation.unread>0&&<b>{conversation.unread>99?'99+':conversation.unread}</b>}</button><button className="icon channel-options" aria-label={'Actions for @'+conversation.label} onClick={event=>openContext(event,conversation.name)}><MoreHorizontal size={15}/></button></div>)}</section>}
@@ -292,13 +344,13 @@ function App() {
       {!connected && <div className="connection-banner"><WifiOff size={15} />Reconnecting. Your conversations are saved; live updates will resume automatically.</div>}
       {error && <div className="error-banner" role="alert">{error}<button className="icon" aria-label="Dismiss error" onClick={() => setError('')}><X size={15} /></button></div>}
       {readState.held&&<div className="unread-banner"><Mail size={15}/><span>Marked unread</span><button onClick={()=>void markRead(target).catch(fail)}>Resume reading</button></div>}
-      <div className="chat-layout"><section className="conversation"><div className="messages" ref={scroll} onScroll={e => { const el = e.currentTarget; bottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; }}>
+      <div className="chat-layout"><section className="conversation"><div className="messages" ref={scroll} {...view.events}><div className="message-list" ref={view.content}>
         {!loading && !messages.length && !error && <div className="channel-intro"><div className="channel-symbol">{dm ? <MessageCircle size={27} /> : <Hash size={28} strokeWidth={1.6} />}</div><h2>No messages yet</h2><p>{dm ? `Send a message to ${shortName(label)}.` : `Send the first message in #${label}.`}</p></div>}
         {more && <button className="load-older" onClick={older}>Load earlier messages</button>}
         {loading && <div className="loading-line">Loading conversation…</div>}
-        {roots.map((m, i) => <React.Fragment key={m.id}>{(i === 0 || new Date(m.created_at).toDateString() !== new Date(roots[i - 1].created_at).toDateString()) && <div className="date-divider"><span>{day(m.created_at)}</span></div>}{readState.held&&m.seq>readState.position&&(i===0||roots[i-1].seq<=readState.position)&&<div className="unread-divider"><span>Unread from here</span></div>}<MessageRow message={m} onReply={showThread} replyCount={Math.max(m.reply_count||0,threadReplies.get(m.id)?.length||0)} /></React.Fragment>)}
-      </div><div className="composer-wrap"><Composer key={target} target={target} people={participants} placeholder={dm ? `Message ${shortName(label)}` : `Message #${label}`} disabled={!!selected && !selected.write} onSend={(body, key) => send(body, undefined, key)} /><div className="composer-footnote"><span><strong>↵</strong> to send · <strong>⇧ ↵</strong> for a new line</span><span>Shared with {dm ? 'this participant' : 'channel members'}</span></div></div></section>
-      {thread && <section className="thread"><header><div><MessageSquare size={17} /><strong>Thread</strong><span>{dm?shortName(label):'#'+label}</span></div><button className="thread-follow" aria-label={threadFollowing?'Unfollow thread':'Follow thread'} title={threadFollowing?'Unfollow thread':'Follow thread'} onClick={()=>void toggleThreadFollow().catch(fail)}>{threadFollowing?<Bell size={14}/>:<Plus size={14}/>} {threadFollowing?'Following':'Follow thread'}</button><button className="icon" aria-label="Close thread" onClick={closeThread}><PanelRightClose size={18} /></button></header><div className="thread-messages">{threadLoading?<p className="attention-empty">Loading thread…</p>:thread.seq?<MessageRow message={thread}/>:<p className="attention-empty">The original message is no longer available.</p>}{threadMore&&<button className="load-older" onClick={()=>{const first=threadContent.current[0]?.seq;if(first)void refreshThread(thread.chain_root,target,false,first).catch(fail);}}>Load earlier replies</button>}<div className="thread-divider">{replies.length} {replies.length === 1 ? 'reply' : 'replies'}</div>{replies.map(m => <MessageRow key={m.id} message={m} />)}</div><div className="thread-compose"><Composer key={thread.id} target={target} people={participants} placeholder="Reply in thread…" disabled={!thread.seq||!!selected&&!selected.write} onSend={(body, key) => send(body, thread, key)} /></div></section>}
+        {roots.map((m, i) => <React.Fragment key={m.id}>{(i === 0 || new Date(m.created_at).toDateString() !== new Date(roots[i - 1].created_at).toDateString()) && <div className="date-divider"><span>{day(m.created_at)}</span></div>}{(entryUnread===m.id||readState.held&&m.seq>readState.position&&(i===0||roots[i-1].seq<=readState.position))&&<div className="unread-divider"><span>{readState.held?'Marked unread':'New messages'}</span></div>}<MessageRow message={m} onReply={showThread} replyCount={Math.max(m.reply_count||0,threadReplies.get(m.id)?.length||0)} /></React.Fragment>)}
+      {newer&&<button className="load-older load-newer" onClick={()=>void loadNewer()}>Continue to newer messages</button>}</div></div><div className="composer-wrap"><Composer key={target} target={target} people={participants} placeholder={dm ? `Message ${shortName(label)}` : `Message #${label}`} disabled={!!selected && !selected.write} onEditLast={()=>{const last=messageSnapshot.current.slice().reverse().find(message=>message.mine&&!message.pending&&!message.parent_id);if(last)setEditing(last);}} onSend={(body, key) => send(body, undefined, key)} /><div className="composer-footnote"><span><strong>↵</strong> to send · <strong>⇧ ↵</strong> for a new line</span><span>Shared with {dm ? 'this participant' : 'channel members'}</span></div></div></section>
+      {thread && <section className="thread"><header><div><MessageSquare size={17} /><strong>Thread</strong><span>{dm?shortName(label):'#'+label}</span></div><button className="thread-follow" aria-label={threadFollowing?'Unfollow thread':'Follow thread'} title={threadFollowing?'Unfollow thread':'Follow thread'} onClick={()=>void toggleThreadFollow().catch(fail)}>{threadFollowing?<Bell size={14}/>:<Plus size={14}/>} {threadFollowing?'Following':'Follow thread'}</button><button className="icon" aria-label="Close thread" onClick={closeThread}><PanelRightClose size={18} /></button></header><div className="thread-messages">{threadLoading?<p className="attention-empty">Loading thread…</p>:thread.seq?<MessageRow message={thread}/>:<p className="attention-empty">The original message is no longer available.</p>}{threadMore&&<button className="load-older" onClick={()=>{const first=threadContent.current[0]?.seq;if(first)void refreshThread(thread.chain_root,target,false,first).catch(fail);}}>Load earlier replies</button>}<div className="thread-divider">{replies.length} {replies.length === 1 ? 'reply' : 'replies'}</div>{replies.map(m => <MessageRow key={m.id} message={m} />)}</div><div className="thread-compose"><Composer key={thread.id} target={target} people={participants} placeholder="Reply in thread…" disabled={!thread.seq||!!selected&&!selected.write} onEditLast={()=>{const last=[thread,...threadContent.current].reverse().find(message=>message.mine&&!message.pending);if(last)setEditing(last);}} onSend={(body, key) => send(body, thread, key)} /></div></section>}
       </div></>}
     </main>
     </div>
@@ -309,22 +361,26 @@ function App() {
     {agentSetup&&<ConnectAgent local={session.local&&!activeWorkspace} base={sourceURL} workspace={activeWorkspace} channel={dm?'':selected?.label||''} writable={!dm&&!!selected?.write} onClose={()=>setAgentSetup(false)} onNotice={setToast}/>}
     {profileName&&<ProfileCard name={profileName} workspace={activeWorkspace} channel={selected?.label||target} source={sourceLabel} known={presentationPeople.find(p=>p.name===profileName||p.aliases?.includes(profileName))} onClose={closeProfile} onMessage={name=>messagePerson(name||profileName)}/>}
     {context&&<ContextMenu x={context.x} y={context.y} label={context.message?'Message actions':'Conversation actions'} items={contextItems} onClose={closeContext} onError={fail}/>}
+    {renameWorkspace&&<WorkspaceName source={activeWorkspace} name={connections.find(source=>source.name===activeWorkspace)?.display_name||connections.find(source=>source.name===activeWorkspace)?.name||session.workspace_name||''} local={session.local} onClose={closeRenameWorkspace} onSaved={async()=>{if(session.local){const result=await api<{sources:WorkspaceSource[]}>('sources');setConnections(result.sources);}else await refreshSession();}}/>}
+    {editing&&<EditMessage key={editing.id} message={editing} onClose={closeEditor} onSaved={()=>refreshChanged([editing.id])}/>}
+    {appearanceOpen&&<AppearanceSettings mode={appearance.mode} onChange={appearance.save} onClose={closeAppearance}/>}
     {toast && <div className="toast" role="status"><CheckCheck size={17} />{toast}</div>}
     {sidebar && <button className="sidebar-scrim" aria-label="Close sidebar" onClick={() => setSidebar(false)} />}
   </div></Presentation.Provider>;
 }
 function day(time: number) { const d = new Date(time); const today = new Date(); return d.toDateString() === today.toDateString() ? 'Today' : new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(d); }
 const MessageRow=React.memo(function MessageRow({ message: m, onReply, replyCount = 0 }: { message: Message; onReply?: (message:Message) => void; replyCount?: number }) {
-  const {people,name,onMention,onContext}=React.useContext(Presentation);
+  const {people,name,onMention,onContext,onReact,writable,onMessageLink,highlight}=React.useContext(Presentation);
   const person=people.find(person=>m.profile_id?person.id===m.profile_id:person.name===m.sender||person.aliases?.includes(m.sender));
   const sender=person?.name||m.sender;const human=person?.kind==='human'||m.kind==='human';
-  return <article className={`message ${m.pending ? 'pending' : ''}`} data-message-id={m.id} onContextMenu={e=>onContext(e,m)}>
+  return <article className={`message ${m.pending ? 'pending' : ''} ${highlight===m.id?'linked-message':''}`} data-message-id={m.id} onContextMenu={e=>onContext(e,m)}>
     <Avatar name={sender} human={human}/><div className="message-content">
-      <div className="message-byline"><button className="sender-name" title={person?.description||sender} onClick={()=>onMention(sender)}>{shortName(sender)}</button>{!human&&!person?.runtime&&<span className="bot-badge">agent</span>}<ParticipantLabels person={person}/>{m.mine&&<span className="you-label">you</span>}<time dateTime={new Date(m.created_at).toISOString()} title={new Date(m.created_at).toLocaleString()}>{new Intl.DateTimeFormat(undefined,{hour:'numeric',minute:'2-digit'}).format(m.created_at)}</time>{m.pending&&<span className="queued">Waiting to sync</span>}</div>
-      <React.Suspense fallback={<div className="message-body">{m.body}</div>}><MessageBody body={m.body} target={m.target} people={people} currentName={name} onMention={onMention}/></React.Suspense>
+      <div className="message-byline"><button className="sender-name" title={person?.description||sender} onClick={()=>onMention(sender)}>{shortName(sender)}</button>{!human&&!person?.runtime&&<span className="bot-badge">agent</span>}<ParticipantLabels person={person}/>{m.mine&&<span className="you-label">you</span>}<time dateTime={new Date(m.created_at).toISOString()} title={new Date(m.created_at).toLocaleString()}>{new Intl.DateTimeFormat(undefined,{hour:'numeric',minute:'2-digit'}).format(m.created_at)}</time>{m.edited_at?<span className="edited-label" title={new Date(m.edited_at).toLocaleString()}>edited</span>:null}<DeliveryStatus pending={m.pending} createdAt={m.created_at}/></div>
+      <React.Suspense fallback={<div className="message-body">{m.body}</div>}><MessageBody body={m.body} target={m.target} people={people} currentName={name} onMention={onMention} onMessageLink={onMessageLink}/></React.Suspense>
+      <Reactions message={m} onReact={onReact} disabled={!writable||m.pending}/>
       {m.parent_id&&onReply&&<button className="thread-context-link" onClick={()=>onReply(m)}>Reply in thread <ChevronRight size={12}/></button>}
       {replyCount>0&&<button className={'replies '+(m.reply_unread?'has-unread':'')} onClick={()=>onReply?.(m)}><MessageCircle size={14}/>{replyCount} {replyCount===1?'reply':'replies'}{m.reply_unread?<b>{m.reply_unread} new</b>:null}<ChevronRight size={13}/></button>}
-    </div>{onReply&&<div className="message-tools"><button className="icon" aria-label={'Reply to '+m.sender} title="Reply in thread" onClick={()=>onReply(m)}><MessageSquare size={16}/></button><button className="icon" aria-label={'Message actions for '+m.sender} title="Message actions" onClick={e=>onContext(e,m)}><MoreHorizontal size={17}/></button></div>}
+    </div><div className="message-tools">{onReply&&<button className="icon" aria-label={'Reply to '+m.sender} title="Reply in thread" onClick={()=>onReply(m)}><MessageSquare size={16}/></button>}<button className="icon" aria-label={'Message actions for '+m.sender} title="Message actions" onClick={e=>onContext(e,m)}><MoreHorizontal size={17}/></button></div>
   </article>;
 });
 function SignIn({ onDone, initialError }: { onDone: (where?:string) => void; initialError: string }) {
@@ -334,13 +390,13 @@ function SignIn({ onDone, initialError }: { onDone: (where?:string) => void; ini
   return <div className="auth"><div className="auth-brand"><Logo /><strong>grpvn</strong><span>Chat for people and agents</span></div><div className="auth-card"><span className="page-eyebrow">{signup ? 'You’re invited' : 'grpvn'}</span><h1>{signup ? 'Create account' : 'Sign in'}</h1><p>{signup ? 'Choose your name and password.' : 'Sign in to this workspace.'}</p><form onSubmit={submit}><label>Your handle<input name="username" autoComplete="username" autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder="Your name" /></label><label>Password<input name="password" type="password" autoComplete={signup ? 'new-password' : 'current-password'} minLength={signup ? 12 : undefined} required value={password} onChange={e => setPassword(e.target.value)} placeholder={signup ? 'At least 12 characters' : 'Your password'} /></label>{signup && !new URLSearchParams(location.search).has('invited') && <label>Invitation link<input name="invitation" required value={invitation} onChange={e => setInvitation(e.target.value)} placeholder="Paste the invitation you received" /></label>}{error && <div className="form-error" role="alert">{error}</div>}<button className="button primary wide" disabled={busy}>{busy ? 'One moment…' : signup ? 'Join the workspace' : 'Sign in'}<ChevronRight size={16} /></button></form><div className="auth-switch">{signup ? 'Already have a profile?' : 'Have an invitation?'}<button onClick={() => { setSignup(!signup); setError(''); }}>{signup ? 'Sign in' : 'Join the workspace'}</button></div></div><a className="agent-guide" href="/llm.txt"><Bot size={16} />Connecting an agent? Read the guide<ChevronRight size={14} /></a><div className="auth-footer"></div></div>;
 }
 function WorkspaceConnect({onDone,onPending}:{onDone:(target?:string)=>Promise<void>;onPending?:()=>void}){
-  const[address,setAddress]=useState('');const[alias,setAlias]=useState('');const[busy,setBusy]=useState(false);const[error,setError]=useState('');
+  const[address,setAddress]=useState('');const[workspaceName,setWorkspaceName]=useState('');const[busy,setBusy]=useState(false);const[error,setError]=useState('');
   const[attempt,setAttempt]=useState('');const[signInURL,setSignInURL]=useState('');const[workspace,setWorkspace]=useState('');
   const finish=useRef(onDone);finish.current=onDone;
   useEffect(()=>{if(!attempt)return;let stopped=false;const timer=setInterval(async()=>{try{const result=await api<{status:string;detail:string;target:string}>('connections/'+encodeURIComponent(attempt));if(stopped)return;if(result.status==='connected'){clearInterval(timer);await finish.current(result.target||undefined);}else if(result.status==='failed'){clearInterval(timer);setAttempt('');setError(result.detail||'Sign-in failed. Try again.');}}catch(e){if(!stopped){clearInterval(timer);setAttempt('');setError((e as Error).message);}}},1500);return()=>{stopped=true;clearInterval(timer);};},[attempt]);
   function openBrowser(address:string){openExternal(address);}
-  async function submit(e:React.FormEvent){e.preventDefault();setBusy(true);setError('');try{const result=await api<{status:string;url:string;attempt:string;workspace:string;target?:string;opened?:boolean}>('sources',{URL:address,Name:alias});if(result.status==='connected'){await onDone(result.target||undefined);return;}onPending?.();setAttempt(result.attempt);setSignInURL(result.url);setWorkspace(result.workspace);openExternal(result.url);}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
-  return <><div className="modal-symbol"><Globe size={24}/></div><h2>{attempt?'Finish signing in':'Add workspace'}</h2>{attempt?<><p className="connect-description">Sign in to <strong>{new URL(workspace).host}</strong> in your browser. This window will update automatically.</p><button className="button primary wide" onClick={()=>openBrowser(signInURL)}>Open sign-in page</button><button className="text-button" onClick={()=>{setAttempt('');setError('');}}>Use a different address</button></>:<form onSubmit={submit}><p className="connect-description">Enter a workspace address or an invitation link.</p><label>Workspace address or invitation<input autoFocus required value={address} onChange={e=>setAddress(e.target.value)} placeholder="chat.example.com" autoComplete="url"/></label><details className="connection-options"><summary>Choose a local alias</summary><label>Workspace alias<input value={alias} maxLength={64} pattern="[a-zA-Z0-9][a-zA-Z0-9_-]*" onChange={e=>setAlias(e.target.value)} placeholder="Automatic from server address"/></label><p>Optional, for example work. Reconnecting keeps the existing alias.</p></details>{error&&<p className="form-error" role="alert">{error}</p>}<button className="button primary wide" disabled={busy}>{busy?'Connecting…':'Continue'}<ChevronRight size={16}/></button></form>}{attempt&&error&&<p className="form-error" role="alert">{error}</p>}</>;
+  async function submit(e:React.FormEvent){e.preventDefault();setBusy(true);setError('');try{const result=await api<{status:string;url:string;attempt:string;workspace:string;target?:string;opened?:boolean}>('sources',{URL:address,DisplayName:workspaceName});if(result.status==='connected'){await onDone(result.target||undefined);return;}onPending?.();setAttempt(result.attempt);setSignInURL(result.url);setWorkspace(result.workspace);openExternal(result.url);}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
+  return <><div className="modal-symbol"><Globe size={24}/></div><h2>{attempt?'Finish signing in':'Add workspace'}</h2>{attempt?<><p className="connect-description">Sign in to <strong>{new URL(workspace).host}</strong> in your browser. This window will update automatically.</p><button className="button primary wide" onClick={()=>openBrowser(signInURL)}>Open sign-in page</button><button className="text-button" onClick={()=>{setAttempt('');setError('');}}>Use a different address</button></>:<form onSubmit={submit}><p className="connect-description">Enter a workspace address or an invitation link.</p><label>Workspace address or invitation<input autoFocus required value={address} onChange={e=>setAddress(e.target.value)} placeholder="chat.example.com" autoComplete="url"/></label><label>Workspace name<input value={workspaceName} maxLength={80} onChange={e=>setWorkspaceName(e.target.value)} placeholder="Optional, for example Design team"/></label>{error&&<p className="form-error" role="alert">{error}</p>}<button className="button primary wide" disabled={busy}>{busy?'Connecting…':'Continue'}<ChevronRight size={16}/></button></form>}{attempt&&error&&<p className="form-error" role="alert">{error}</p>}</>;
 }
 function Modal({mode,remote,workspace='',onClose,onDone,toast,pendingRequests,onRequestsChanged}:{local?:boolean;remote?:string;workspace?:string;mode:string;target:string;channels:Channel[];pendingRequests:PendingAccess[];onRequestsChanged:()=>Promise<void>;onClose:()=>void;onDone:(where?:string)=>Promise<void>;toast:(message:string)=>void}){
  const[channel,setChannel]=useState('');const[open,setOpen]=useState(false);const[link,setLink]=useState('');const[busy,setBusy]=useState(false);const[error,setError]=useState('');const[requests,setRequests]=useState<Approval[]>([]);

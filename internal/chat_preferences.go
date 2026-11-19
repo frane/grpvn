@@ -82,9 +82,10 @@ func (s *webServer) preferences(w http.ResponseWriter, r *http.Request, p *Princ
 
 func (s *webServer) readMarker(w http.ResponseWriter, r *http.Request, p *Principal) {
 	var a struct {
-		Target         string
-		Position       *int64
-		Unread, Resume bool
+		Target          string
+		Position        *int64
+		Unread, Resume  bool
+		ExpectedVersion *string
 	}
 	if !webDecode(w, r, &a) {
 		return
@@ -111,30 +112,59 @@ func (s *webServer) readMarker(w http.ResponseWriter, r *http.Request, p *Princi
 		apiError(w, 400, "Invalid read position")
 		return
 	}
+	tx, err := beginWrite(s.db)
+	if err != nil {
+		apiError(w, 500, "Could not update read state")
+		return
+	}
+	defer tx.Rollback()
+	if err = lockHumanRead(s.db, tx, p.ID); err != nil {
+		apiError(w, 500, "Could not update read state")
+		return
+	}
+	before := conversationReadSnapshot(tx, p.ID, a.Target, "")
+	if a.Resume && a.ExpectedVersion != nil && *a.ExpectedVersion != before.Version {
+		a.Resume = false
+	}
+	mutation := "read"
 	if a.Unread {
-		_, err := s.db.Exec("INSERT INTO conversation_preferences(principal_id,target,held_position) VALUES(?,?,?) ON CONFLICT(principal_id,target) DO UPDATE SET held_position=excluded.held_position", p.ID, a.Target, pos)
-		if err != nil {
-			apiError(w, 500, "Could not mark unread")
-			return
-		}
-		_ = TouchChatMetadata(s.db)
+		mutation = "unread"
+		_, err = tx.Exec("INSERT INTO conversation_preferences(principal_id,target,held_position) VALUES(?,?,?) ON CONFLICT(principal_id,target) DO UPDATE SET held_position=excluded.held_position", p.ID, a.Target, pos)
 	} else {
 		if a.Resume {
-			if _, err := s.db.Exec("UPDATE conversation_preferences SET held_position=NULL WHERE principal_id=? AND target=?", p.ID, a.Target); err != nil {
-				apiError(w, 500, "Could not mark read")
-				return
-			}
+			mutation = "resume"
+			_, err = tx.Exec("UPDATE conversation_preferences SET held_position=NULL WHERE principal_id=? AND target=?", p.ID, a.Target)
 		}
-		if advanceCursor(s.db, p.ID, a.Target, pos) != nil {
-			apiError(w, 500, "Could not mark read")
-			return
+		if err == nil {
+			err = advanceCursor(tx, p.ID, a.Target, pos)
 		}
-		if a.Resume {
-			_ = TouchChatMetadata(s.db)
+		settings := conversationSettings(tx, p.ID, a.Target)
+		if err == nil && !settings.Held.Valid {
+			_, err = tx.Exec("UPDATE human_inbox SET read_at=? WHERE principal_id=? AND target=? AND read_at=0 AND message_id IN(SELECT id FROM messages WHERE parent_id IS NULL AND seq<=?)", nowMS(), p.ID, a.Target, pos)
 		}
 	}
-	effective, held := conversationReadPosition(s.db, p.ID, a.Target)
-	writeJSON(w, 200, map[string]any{"ok": true, "position": effective, "held": held})
+	if err == nil && (a.Unread || a.Resume && before.Held != nil) {
+		_, err = tx.Exec("INSERT INTO human_read_versions(principal_id,target,version) VALUES(?,?,?) ON CONFLICT(principal_id,target) DO UPDATE SET version=excluded.version", p.ID, a.Target, NewMessage("", "", nil).ID)
+	}
+	state := conversationReadSnapshot(tx, p.ID, a.Target, mutation)
+	state.ExpectedVersion = a.ExpectedVersion
+	sameHeld := before.Held == nil && state.Held == nil || before.Held != nil && state.Held != nil && *before.Held == *state.Held
+	changed := state.Position != before.Position || !sameHeld || state.Version != before.Version
+	if err == nil && changed {
+		err = s.recordHumanRead(tx, p, state)
+	}
+	if err == nil && changed {
+		err = touchPersonalMetadata(tx, p.ID)
+	}
+	if err != nil || tx.Commit() != nil {
+		apiError(w, 500, "Could not update read state")
+		return
+	}
+	effective := state.Position
+	if state.Held != nil {
+		effective = *state.Held
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "position": effective, "held": state.Held != nil, "read_version": state.Version, "read_state": state})
 }
 
 // Personal mute changes use the existing source lease, pacing and retry budget.

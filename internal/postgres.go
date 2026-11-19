@@ -203,6 +203,12 @@ CREATE TRIGGER grpvn_message_sequence BEFORE INSERT ON messages FOR EACH ROW EXE
 	if err != nil {
 		return err
 	}
+	if _, err = tx.Exec(`DROP TRIGGER IF EXISTS grpvn_action_sequence ON message_actions;CREATE TRIGGER grpvn_action_sequence BEFORE INSERT ON message_actions FOR EACH ROW EXECUTE FUNCTION grpvn_message_sequence();`); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`DROP TRIGGER IF EXISTS grpvn_read_sequence ON human_read_events;CREATE TRIGGER grpvn_read_sequence BEFORE INSERT ON human_read_events FOR EACH ROW EXECUTE FUNCTION grpvn_message_sequence();`); err != nil {
+		return err
+	}
 	if _, err = tx.Exec(`CREATE OR REPLACE FUNCTION grpvn_metadata_notify() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF NEW.key='revision' OR NEW.key LIKE 'personal:%' THEN PERFORM pg_notify('grpvn_messages','changed'); END IF;

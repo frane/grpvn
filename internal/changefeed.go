@@ -9,11 +9,11 @@ import (
 	"github.com/lib/pq"
 )
 
-type chatRevision struct{ Sequence, Metadata, Personal int64 }
+type chatRevision struct{ Sequence, Metadata, Personal, Actions int64 }
 
 func readChatRevision(ctx context.Context, db *sql.DB) (chatRevision, error) {
 	var revision chatRevision
-	err := db.QueryRowContext(ctx, "SELECT COALESCE(MAX(seq),0),COALESCE((SELECT value FROM chat_metadata WHERE key='revision'),0),COALESCE((SELECT SUM(value) FROM chat_metadata WHERE key LIKE 'personal:%'),0) FROM messages").Scan(&revision.Sequence, &revision.Metadata, &revision.Personal)
+	err := db.QueryRowContext(ctx, "SELECT COALESCE(MAX(seq),0),COALESCE((SELECT value FROM chat_metadata WHERE key='revision'),0),COALESCE((SELECT SUM(value) FROM chat_metadata WHERE key LIKE 'personal:%'),0),COALESCE((SELECT MAX(seq) FROM message_actions),0) FROM messages").Scan(&revision.Sequence, &revision.Metadata, &revision.Personal, &revision.Actions)
 	return revision, err
 }
 

@@ -19,6 +19,7 @@ const syncProtocol = 1
 const syncPageSize = 100
 
 type serverInfo struct {
+	Name           string `json:"name,omitempty"`
 	Protocol       int    `json:"protocol"`
 	ServerID       string `json:"server_id"`
 	Web            bool   `json:"web,omitempty"`
@@ -125,6 +126,11 @@ func CoordinatorHandler(db *sql.DB, options CoordinatorOptions) (http.Handler, e
 	if err := db.QueryRow("SELECT value FROM server_meta WHERE key = 'id'").Scan(&id); err != nil {
 		return nil, err
 	}
+	if options.PublicURL != "" {
+		if _, err := db.Exec("INSERT INTO server_meta(key,value) VALUES('public_url',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", strings.TrimRight(options.PublicURL, "/")); err != nil {
+			return nil, err
+		}
+	}
 	mux := http.NewServeMux()
 	mountFiles(mux, db, access, options.PublicURL, options.LocalUI)
 	mountAgentGuide(mux, options.PublicURL)
@@ -146,6 +152,15 @@ func CoordinatorHandler(db *sql.DB, options CoordinatorOptions) (http.Handler, e
 	mux.HandleFunc("POST /v1/register", enrollmentHandler(db, access, false))
 	mux.HandleFunc("POST /v1/agents", enrollmentHandler(db, access, true))
 	mux.HandleFunc("POST /v1/sync", batchHandler(db, access, id))
+	mux.HandleFunc("POST /v1/message-actions/sync", actionSyncHandler(db, access, id))
+	mux.HandleFunc("POST /v1/message-actions", func(w http.ResponseWriter, r *http.Request) {
+		p := requestPrincipal(r)
+		if p == nil || p.Status != "active" {
+			apiError(w, 403, "An active member is required")
+			return
+		}
+		(&webServer{db: db, access: access, base: options.PublicURL}).messageActions(w, r, p)
+	})
 	mux.HandleFunc("GET /v1/events", func(w http.ResponseWriter, r *http.Request) {
 		p := requestPrincipal(r)
 		if p == nil || p.Status != "active" || (p.scopes != nil && !p.scopes["grpvn.read"]) {
@@ -155,7 +170,7 @@ func CoordinatorHandler(db *sql.DB, options CoordinatorOptions) (http.Handler, e
 		(&webServer{db: db, access: access}).events(w, r, p)
 	})
 	serverMetadata := func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, serverInfo{Protocol: syncProtocol, ServerID: id, Web: options.Web, DirectMessages: options.Web || options.LocalUI})
+		writeJSON(w, http.StatusOK, serverInfo{Name: coordinatorName(db, options.PublicURL), Protocol: syncProtocol, ServerID: id, Web: options.Web, DirectMessages: options.Web || options.LocalUI})
 	}
 	mux.HandleFunc("GET /v1/server", serverMetadata)
 	// Compatibility with coordinators and clients released before v0.12.
@@ -265,7 +280,7 @@ func CoordinatorHandler(db *sql.DB, options CoordinatorOptions) (http.Handler, e
 			apiError(w, 409, "coordinator identity changed")
 			return
 		}
-		if humanAPIPath(r.URL.Path) || strings.HasPrefix(r.URL.Path, "/assets/") || r.URL.Path == "/favicon.svg" || publicGuidePath(r.URL.Path) || r.URL.Path == "/join" || r.URL.Path == "/v1/server" || r.URL.Path == "/v1/info" || r.URL.Path == "/v1/register" || r.URL.Path == "/mcp" || strings.HasPrefix(r.URL.Path, "/oauth/") || strings.HasPrefix(r.URL.Path, "/.well-known/") {
+		if strings.HasPrefix(r.URL.Path, "/m/") || humanAPIPath(r.URL.Path) || strings.HasPrefix(r.URL.Path, "/assets/") || r.URL.Path == "/favicon.svg" || publicGuidePath(r.URL.Path) || r.URL.Path == "/join" || r.URL.Path == "/v1/server" || r.URL.Path == "/v1/info" || r.URL.Path == "/v1/register" || r.URL.Path == "/mcp" || strings.HasPrefix(r.URL.Path, "/oauth/") || strings.HasPrefix(r.URL.Path, "/.well-known/") {
 			mux.ServeHTTP(w, r)
 			return
 		}

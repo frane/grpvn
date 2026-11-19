@@ -87,6 +87,11 @@ func claimSync(db *sql.DB, r Remote, force bool, now time.Time) (string, bool, e
 	if err != nil || n == 0 {
 		return "", false, err
 	}
+	// next_at=0 is a durable push hint. Acknowledge the hint when work
+	// begins; a later push can set it back to zero while this lease runs.
+	if _, err = tx.Exec("UPDATE sync_schedule SET next_at=MAX(next_at,?) WHERE remote_name=?", now.UnixMilli(), r.Name); err != nil {
+		return "", false, err
+	}
 	return owner, true, tx.Commit()
 }
 
@@ -104,8 +109,8 @@ func finishSync(db *sql.DB, r Remote, owner string, base time.Duration, stats Sy
 		return fmt.Errorf("sync lease lost")
 	}
 	var idle, failures int
-	var concurrentRetry int64
-	if err := tx.QueryRow("SELECT idle_rounds, failures, retry_at FROM sync_schedule WHERE remote_name = ?", r.Name).Scan(&idle, &failures, &concurrentRetry); err != nil {
+	var concurrentRetry, concurrentNext int64
+	if err := tx.QueryRow("SELECT idle_rounds, failures, retry_at,next_at FROM sync_schedule WHERE remote_name = ?", r.Name).Scan(&idle, &failures, &concurrentRetry, &concurrentNext); err != nil {
 		return err
 	}
 	now := time.Now()
@@ -143,6 +148,12 @@ func finishSync(db *sql.DB, r Remote, owner string, base time.Duration, stats Sy
 		delay = minRemoteInterval
 	}
 	next := now.Add(delay).UnixMilli()
+	// A notification received after the pull may describe a commit this
+	// round never saw. Keep that catch-up due instead of losing it to idle
+	// backoff. The shared request slot and failure cooldown still pace it.
+	if concurrentNext == 0 && failure == nil {
+		next = now.UnixMilli()
+	}
 	// A concurrent push reconnect may receive Retry-After while this sync is
 	// in flight. A successful pull must not erase that coordinator cooldown.
 	if concurrentRetry > now.UnixMilli() && concurrentRetry > retry {

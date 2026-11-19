@@ -304,3 +304,25 @@ func TestPushCooldownSurvivesConcurrentSyncCompletion(t *testing.T) {
 		t.Fatal("another request bypassed the shared coordinator cooldown")
 	}
 }
+
+func TestPushDuringSyncKeepsCatchupDue(t *testing.T) {
+	db := newTestDB(t)
+	remote := Remote{Name: "work", URL: "https://example.test", ServerID: "server", DB: db}
+	if _, err := db.Exec("INSERT INTO remotes(name,url,server_id) VALUES(?,?,?)", remote.Name, remote.URL, remote.ServerID); err != nil {
+		t.Fatal(err)
+	}
+	owner, claimed, err := claimSync(db, remote, true, time.Now())
+	if err != nil || !claimed {
+		t.Fatal(owner, claimed, err)
+	}
+	if err = wakeRemote(db, remote.Name); err != nil {
+		t.Fatal(err)
+	}
+	if err = finishSync(db, remote, owner, time.Second, SyncStats{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var next int64
+	if err = db.QueryRow("SELECT next_at FROM sync_schedule WHERE remote_name=?", remote.Name).Scan(&next); err != nil || next > time.Now().UnixMilli() {
+		t.Fatal("sync completion erased the in-flight push", next, err)
+	}
+}

@@ -111,7 +111,6 @@ func loadHumanThreads(db dbtx, id string) (map[string]humanThreadPreference, err
 func (s *webServer) materializeInbox(p *Principal) error {
 	var position int64
 	_ = s.db.QueryRow("SELECT position FROM human_inbox_state WHERE principal_id=?", p.ID).Scan(&position)
-	initial := position == 0
 	self := loadInboxSelf(s.db, p)
 	threads, err := loadHumanThreads(s.db, p.ID)
 	if err != nil {
@@ -148,7 +147,6 @@ func (s *webServer) materializeInbox(p *Principal) error {
 		type entry struct {
 			message        *Message
 			target, reason string
-			read           int64
 		}
 		var entries []entry
 		follows := map[string]humanThreadPreference{}
@@ -192,24 +190,35 @@ func (s *webServer) materializeInbox(p *Principal) error {
 			if reason == "" {
 				continue
 			}
-			read := int64(0)
-			if (initial && m.Seq <= cursors[target]) || (reason == "dm" && m.Seq <= cursors[target]) || (reason == "reply" && m.Seq <= thread.position) {
-				read = time.Now().UnixMilli()
-			}
-			entries = append(entries, entry{m, target, reason, read})
+			entries = append(entries, entry{m, target, reason})
 		}
 		tx, err := beginWrite(s.db)
 		if err != nil {
 			return err
 		}
 		save := func() error {
+			if err := lockHumanRead(s.db, tx, p.ID); err != nil {
+				return err
+			}
 			for root, thread := range follows {
 				if _, err := tx.Exec("INSERT OR IGNORE INTO human_threads(principal_id,root_id,target,following,position) SELECT ?,?,?,1,? WHERE EXISTS(SELECT 1 FROM messages WHERE id=?)", p.ID, root, thread.target, thread.position, root); err != nil {
 					return err
 				}
 			}
 			for _, item := range entries {
-				if _, err := tx.Exec("INSERT OR IGNORE INTO human_inbox(principal_id,message_id,target,root_id,reason,question,read_at) VALUES(?,?,?,?,?,?,?)", p.ID, item.message.ID, item.target, item.message.ChainRoot, item.reason, item.message.Correlation != nil, item.read); err != nil {
+				// Recheck under the account lock: another device may have read
+				// this message while the attention page was being prepared.
+				var read, through int64
+				_ = tx.QueryRow("SELECT read_at FROM human_message_reads WHERE principal_id=? AND message_id=?", p.ID, item.message.ID).Scan(&read)
+				if item.message.ParentID == nil {
+					_ = tx.QueryRow("SELECT position FROM cursors WHERE agent_name=? AND target=?", p.ID, item.target).Scan(&through)
+				} else {
+					_ = tx.QueryRow("SELECT position FROM human_threads WHERE principal_id=? AND root_id=?", p.ID, item.message.ChainRoot).Scan(&through)
+				}
+				if item.message.Seq <= through {
+					read = nowMS()
+				}
+				if _, err := tx.Exec("INSERT OR IGNORE INTO human_inbox(principal_id,message_id,target,root_id,reason,question,read_at) VALUES(?,?,?,?,?,?,?)", p.ID, item.message.ID, item.target, item.message.ChainRoot, item.reason, item.message.Correlation != nil, read); err != nil {
 					return err
 				}
 			}
@@ -247,12 +256,40 @@ func (s *webServer) activity(w http.ResponseWriter, r *http.Request, p *Principa
 			apiError(w, 400, "Select up to 100 items")
 			return
 		}
+		if !a.Notify {
+			if err := s.materializeInbox(p); err != nil {
+				apiError(w, 500, "Could not update inbox")
+				return
+			}
+		}
 		tx, err := beginWrite(s.db)
 		if err != nil {
 			apiError(w, 500, "Could not update inbox")
 			return
 		}
 		defer tx.Rollback()
+		if err = lockHumanRead(s.db, tx, p.ID); err != nil {
+			apiError(w, 500, "Could not update inbox")
+			return
+		}
+		readIDs := []string{}
+		if a.All {
+			rows, e := tx.Query("SELECT message_id FROM human_inbox WHERE principal_id=? AND read_at=0", p.ID)
+			if e != nil {
+				apiError(w, 500, "Could not update inbox")
+				return
+			}
+			for rows.Next() {
+				var id string
+				if rows.Scan(&id) == nil {
+					readIDs = append(readIDs, id)
+				}
+			}
+			rows.Close()
+		} else if !a.Notify {
+			readIDs = a.IDs
+		}
+
 		now := time.Now().UnixMilli()
 		claimed := []string{}
 		if a.All {
@@ -273,6 +310,13 @@ func (s *webServer) activity(w http.ResponseWriter, r *http.Request, p *Principa
 					if err != nil {
 						break
 					}
+				}
+			}
+		}
+		if err == nil && !a.Notify && len(readIDs) > 0 {
+			for start := 0; start < len(readIDs); start += 100 {
+				if err = s.recordHumanRead(tx, p, humanReadChange{Kind: "inbox", IDs: readIDs[start:min(start+100, len(readIDs))]}); err != nil {
+					break
 				}
 			}
 		}
